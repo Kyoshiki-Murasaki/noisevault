@@ -1,0 +1,5873 @@
+{
+  "errors": [
+    {
+      "error": "IBM Quantum authentication is unavailable. Set IBM_QUANTUM_TOKEN or save an IBM Quantum Platform account.",
+      "stage": "live_harvest"
+    }
+  ],
+  "experiment_a": {
+    "backend_name": "fake_manila",
+    "circuits": [
+      {
+        "name": "basis_variant_0",
+        "native": [
+          0.25122150593518766,
+          0.24996552321734342,
+          0.2498907643271371,
+          0.24892220652033178
+        ],
+        "reconstructed": [
+          0.25122089149080923,
+          0.24996554004239183,
+          0.24989137859946,
+          0.24892218986733902
+        ],
+        "tvd": 6.310973712508883e-07
+      },
+      {
+        "name": "basis_variant_1",
+        "native": [
+          0.12953989865984608,
+          0.12965909676919943,
+          0.3705196100111195,
+          0.37028139455983494
+        ],
+        "reconstructed": [
+          0.13020012471651743,
+          0.13031790728896714,
+          0.36985982093143704,
+          0.3696221470630785
+        ],
+        "tvd": 0.0013190365764389755
+      },
+      {
+        "name": "basis_variant_2",
+        "native": [
+          0.25122150593518766,
+          0.24996552321734342,
+          0.24989076432713714,
+          0.2489222065203318
+        ],
+        "reconstructed": [
+          0.2512208914908092,
+          0.2499655400423918,
+          0.24989137859946,
+          0.24892218986733897
+        ],
+        "tvd": 6.310973712786438e-07
+      },
+      {
+        "name": "basis_variant_3",
+        "native": [
+          0.30371390539555604,
+          0.3036479129589377,
+          0.19645852908629508,
+          0.19617965255921116
+        ],
+        "reconstructed": [
+          0.3034206056389925,
+          0.30335418621367777,
+          0.19675167288757694,
+          0.19647353525975278
+        ],
+        "tvd": 0.000587026501823476
+      }
+    ],
+    "max_tvd": 0.0013190365764389755,
+    "notes": [
+      "Comparison uses prefix qubits so native and reconstructed qargs align without private NoiseModel remapping.",
+      "Readout error is disabled in both models; Experiment B/D apply readout through the shared exact post-processor."
+    ],
+    "passed": true,
+    "status": "complete",
+    "threshold": 0.01
+  },
+  "experiment_b": {
+    "complete_circuit_count": 36,
+    "max_pairwise_tvd": 1.817990202823694e-15,
+    "mean_pairwise_tvd": 5.286321105783604e-16,
+    "passed": true,
+    "rows": [
+      {
+        "circuit": "ghz_n2",
+        "pairwise_tvd": {
+          "cirq-pennylane": 2.949029909160572e-17,
+          "qiskit-cirq": 5.898059818321144e-17,
+          "qiskit-pennylane": 2.949029909160572e-17
+        }
+      },
+      {
+        "circuit": "mirror_n2_d2",
+        "pairwise_tvd": {
+          "cirq-pennylane": 2.7582103268031233e-16,
+          "qiskit-cirq": 1.682681771697503e-16,
+          "qiskit-pennylane": 3.3306690738754696e-16
+        }
+      },
+      {
+        "circuit": "mirror_n2_d4",
+        "pairwise_tvd": {
+          "cirq-pennylane": 2.671474153004283e-16,
+          "qiskit-cirq": 1.4051260155412137e-16,
+          "qiskit-pennylane": 3.0357660829594124e-16
+        }
+      },
+      {
+        "circuit": "mirror_n2_d8",
+        "pairwise_tvd": {
+          "cirq-pennylane": 1.3357370765021415e-16,
+          "qiskit-cirq": 2.463307335887066e-16,
+          "qiskit-pennylane": 3.7990444123892075e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n2_d2",
+        "pairwise_tvd": {
+          "cirq-pennylane": 8.673617379884035e-19,
+          "qiskit-cirq": 1.6479873021779667e-17,
+          "qiskit-pennylane": 1.734723475976807e-17
+        }
+      },
+      {
+        "circuit": "rbstyle_n2_d4",
+        "pairwise_tvd": {
+          "cirq-pennylane": 2.3245294578089215e-16,
+          "qiskit-cirq": 1.3877787807814457e-16,
+          "qiskit-pennylane": 3.365363543395006e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n2_d8",
+        "pairwise_tvd": {
+          "cirq-pennylane": 1.3183898417423734e-16,
+          "qiskit-cirq": 3.0531133177191805e-16,
+          "qiskit-pennylane": 3.2612801348363973e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n2_d16",
+        "pairwise_tvd": {
+          "cirq-pennylane": 3.677613769070831e-16,
+          "qiskit-cirq": 5.898059818321144e-16,
+          "qiskit-pennylane": 5.828670879282072e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n2_d32",
+        "pairwise_tvd": {
+          "cirq-pennylane": 2.220446049250313e-16,
+          "qiskit-cirq": 1.5959455978986625e-15,
+          "qiskit-pennylane": 1.817990202823694e-15
+        }
+      },
+      {
+        "circuit": "ghz_n3",
+        "pairwise_tvd": {
+          "cirq-pennylane": 3.382710778154774e-17,
+          "qiskit-cirq": 6.288372600415926e-17,
+          "qiskit-pennylane": 9.150666335777657e-17
+        }
+      },
+      {
+        "circuit": "mirror_n3_d2",
+        "pairwise_tvd": {
+          "cirq-pennylane": 3.0899761915836876e-16,
+          "qiskit-cirq": 1.3791051634015616e-16,
+          "qiskit-pennylane": 3.5149834431980054e-16
+        }
+      },
+      {
+        "circuit": "mirror_n3_d4",
+        "pairwise_tvd": {
+          "cirq-pennylane": 3.7383290907300193e-16,
+          "qiskit-cirq": 5.542441505745899e-16,
+          "qiskit-pennylane": 8.638922910364499e-16
+        }
+      },
+      {
+        "circuit": "mirror_n3_d8",
+        "pairwise_tvd": {
+          "cirq-pennylane": 6.800116025829084e-16,
+          "qiskit-cirq": 7.025630077706069e-16,
+          "qiskit-pennylane": 1.0009354456386177e-15
+        }
+      },
+      {
+        "circuit": "rbstyle_n3_d2",
+        "pairwise_tvd": {
+          "cirq-pennylane": 3.4941125513776594e-16,
+          "qiskit-cirq": 1.5802246663976227e-16,
+          "qiskit-pennylane": 1.9892399359677793e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n3_d4",
+        "pairwise_tvd": {
+          "cirq-pennylane": 6.548581121812447e-16,
+          "qiskit-cirq": 2.45029690981724e-16,
+          "qiskit-pennylane": 8.062127354602211e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n3_d8",
+        "pairwise_tvd": {
+          "cirq-pennylane": 3.86843335142828e-16,
+          "qiskit-cirq": 5.100087019371813e-16,
+          "qiskit-pennylane": 7.997075224253081e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n3_d16",
+        "pairwise_tvd": {
+          "cirq-pennylane": 7.7021722333370235e-16,
+          "qiskit-cirq": 4.371503159461554e-16,
+          "qiskit-pennylane": 8.81239525796218e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n3_d32",
+        "pairwise_tvd": {
+          "cirq-pennylane": 2.636779683484747e-16,
+          "qiskit-cirq": 7.216449660063518e-16,
+          "qiskit-pennylane": 8.743006318923108e-16
+        }
+      },
+      {
+        "circuit": "ghz_n4",
+        "pairwise_tvd": {
+          "cirq-pennylane": 7.296680620827445e-17,
+          "qiskit-cirq": 2.5283594662361963e-16,
+          "qiskit-pennylane": 1.809533425878307e-16
+        }
+      },
+      {
+        "circuit": "mirror_n4_d2",
+        "pairwise_tvd": {
+          "cirq-pennylane": 2.0952206983282373e-16,
+          "qiskit-cirq": 2.587177434093535e-16,
+          "qiskit-pennylane": 7.75475603870257e-17
+        }
+      },
+      {
+        "circuit": "mirror_n4_d4",
+        "pairwise_tvd": {
+          "cirq-pennylane": 6.203804830962056e-16,
+          "qiskit-cirq": 4.360661137736699e-16,
+          "qiskit-pennylane": 1.0221858082193336e-15
+        }
+      },
+      {
+        "circuit": "mirror_n4_d8",
+        "pairwise_tvd": {
+          "cirq-pennylane": 4.978656376053436e-16,
+          "qiskit-cirq": 6.106226635438361e-16,
+          "qiskit-pennylane": 6.019490461639521e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n4_d2",
+        "pairwise_tvd": {
+          "cirq-pennylane": 6.900387786125048e-16,
+          "qiskit-cirq": 7.259949037069762e-16,
+          "qiskit-pennylane": 5.857389531358729e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n4_d4",
+        "pairwise_tvd": {
+          "cirq-pennylane": 3.6599954837679416e-16,
+          "qiskit-cirq": 2.2933586453499633e-16,
+          "qiskit-pennylane": 1.8886801844697487e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n4_d8",
+        "pairwise_tvd": {
+          "cirq-pennylane": 9.189697613987136e-16,
+          "qiskit-cirq": 8.656270145124267e-16,
+          "qiskit-pennylane": 1.068155980332719e-15
+        }
+      },
+      {
+        "circuit": "rbstyle_n4_d16",
+        "pairwise_tvd": {
+          "cirq-pennylane": 6.565928356572215e-16,
+          "qiskit-cirq": 1.2394599235854287e-15,
+          "qiskit-pennylane": 1.3773704399255848e-15
+        }
+      },
+      {
+        "circuit": "rbstyle_n4_d32",
+        "pairwise_tvd": {
+          "cirq-pennylane": 4.0245584642661925e-16,
+          "qiskit-cirq": 7.320533068622126e-16,
+          "qiskit-pennylane": 8.083811398051921e-16
+        }
+      },
+      {
+        "circuit": "ghz_n5",
+        "pairwise_tvd": {
+          "cirq-pennylane": 3.855693975901575e-17,
+          "qiskit-cirq": 1.9309640691966834e-16,
+          "qiskit-pennylane": 2.303523040717015e-16
+        }
+      },
+      {
+        "circuit": "mirror_n5_d2",
+        "pairwise_tvd": {
+          "cirq-pennylane": 8.132342150764856e-16,
+          "qiskit-cirq": 5.032620845123008e-16,
+          "qiskit-pennylane": 3.94602580456151e-16
+        }
+      },
+      {
+        "circuit": "mirror_n5_d4",
+        "pairwise_tvd": {
+          "cirq-pennylane": 4.761815941556335e-16,
+          "qiskit-cirq": 7.458226744527785e-16,
+          "qiskit-pennylane": 7.375827379418887e-16
+        }
+      },
+      {
+        "circuit": "mirror_n5_d8",
+        "pairwise_tvd": {
+          "cirq-pennylane": 6.336077496005288e-16,
+          "qiskit-cirq": 8.469787371456761e-16,
+          "qiskit-pennylane": 8.959846753420209e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n5_d2",
+        "pairwise_tvd": {
+          "cirq-pennylane": 5.447550588421817e-16,
+          "qiskit-cirq": 2.9158419009726175e-16,
+          "qiskit-pennylane": 3.6813155677481283e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n5_d4",
+        "pairwise_tvd": {
+          "cirq-pennylane": 2.5176953214302647e-16,
+          "qiskit-cirq": 3.0748735941341435e-16,
+          "qiskit-pennylane": 4.368538544146164e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n5_d8",
+        "pairwise_tvd": {
+          "cirq-pennylane": 1.4429646713609579e-15,
+          "qiskit-cirq": 1.1018746678970182e-15,
+          "qiskit-pennylane": 9.7383039132648e-16
+        }
+      },
+      {
+        "circuit": "rbstyle_n5_d16",
+        "pairwise_tvd": {
+          "cirq-pennylane": 1.072709629457158e-15,
+          "qiskit-cirq": 1.044520372972535e-15,
+          "qiskit-pennylane": 1.1548921541315593e-15
+        }
+      },
+      {
+        "circuit": "rbstyle_n5_d32",
+        "pairwise_tvd": {
+          "cirq-pennylane": 9.254749744336266e-16,
+          "qiskit-cirq": 1.4623718902484484e-15,
+          "qiskit-pennylane": 1.2394599235854287e-15
+        }
+      }
+    ],
+    "status": "complete",
+    "threshold": 0.02
+  },
+  "experiment_c": {
+    "rows": [
+      {
+        "circuit": "ghz_n2",
+        "fidelity": 0.9621208698616188,
+        "framework": "reference",
+        "num_qubits": 2
+      },
+      {
+        "circuit": "ghz_n2",
+        "fidelity": 0.9621208698616188,
+        "framework": "qiskit",
+        "num_qubits": 2
+      },
+      {
+        "circuit": "ghz_n2",
+        "fidelity": 0.9621208698616188,
+        "framework": "cirq",
+        "num_qubits": 2
+      },
+      {
+        "circuit": "ghz_n2",
+        "fidelity": 0.9621208698616188,
+        "framework": "pennylane",
+        "num_qubits": 2
+      },
+      {
+        "circuit": "ghz_n3",
+        "fidelity": 0.860179464946039,
+        "framework": "reference",
+        "num_qubits": 3
+      },
+      {
+        "circuit": "ghz_n3",
+        "fidelity": 0.860179464946039,
+        "framework": "qiskit",
+        "num_qubits": 3
+      },
+      {
+        "circuit": "ghz_n3",
+        "fidelity": 0.860179464946039,
+        "framework": "cirq",
+        "num_qubits": 3
+      },
+      {
+        "circuit": "ghz_n3",
+        "fidelity": 0.860179464946039,
+        "framework": "pennylane",
+        "num_qubits": 3
+      },
+      {
+        "circuit": "ghz_n4",
+        "fidelity": 0.8275511149091886,
+        "framework": "reference",
+        "num_qubits": 4
+      },
+      {
+        "circuit": "ghz_n4",
+        "fidelity": 0.8275511149091886,
+        "framework": "qiskit",
+        "num_qubits": 4
+      },
+      {
+        "circuit": "ghz_n4",
+        "fidelity": 0.8275511149091886,
+        "framework": "cirq",
+        "num_qubits": 4
+      },
+      {
+        "circuit": "ghz_n4",
+        "fidelity": 0.8275511149091886,
+        "framework": "pennylane",
+        "num_qubits": 4
+      },
+      {
+        "circuit": "ghz_n5",
+        "fidelity": 0.7888818275334871,
+        "framework": "reference",
+        "num_qubits": 5
+      },
+      {
+        "circuit": "ghz_n5",
+        "fidelity": 0.7888818275334872,
+        "framework": "qiskit",
+        "num_qubits": 5
+      },
+      {
+        "circuit": "ghz_n5",
+        "fidelity": 0.7888818275334871,
+        "framework": "cirq",
+        "num_qubits": 5
+      },
+      {
+        "circuit": "ghz_n5",
+        "fidelity": 0.7888818275334871,
+        "framework": "pennylane",
+        "num_qubits": 5
+      }
+    ],
+    "status": "complete"
+  },
+  "experiment_d": {
+    "backend_name": "demo_linear_5",
+    "common_qubits": [
+      0,
+      1,
+      2
+    ],
+    "data_provider_pair": [
+      "demo",
+      "demo"
+    ],
+    "newer_raw_hash": "sha256:5cc220806770ce1fb642583e02a624947a06860d3928d1075e4be2228c6a9ad9",
+    "newer_snapshot": "snapshots/demo/demo_linear_5_2026-07-14.json",
+    "newer_source_timestamp": "2026-07-14T09:00:00Z",
+    "older_raw_hash": "sha256:98d477858773707ad4dd3b1f9014dd14f9f0ed0304f4f3b16f615e8d5c9335e3",
+    "older_snapshot": "snapshots/demo/demo_linear_5_2024-01-15.json",
+    "older_source_timestamp": "2024-01-15T09:00:00Z",
+    "pair_classification": "deterministic archive-semantics demonstration",
+    "rows": [
+      {
+        "framework": "reference",
+        "tvd": 0.014153788899488639
+      },
+      {
+        "framework": "qiskit",
+        "tvd": 0.014153788899488623
+      },
+      {
+        "framework": "cirq",
+        "tvd": 0.014153788899488479
+      },
+      {
+        "framework": "pennylane",
+        "tvd": 0.014153788899488833
+      }
+    ],
+    "simulation_tvd": 0.014153788899488833,
+    "status": "complete"
+  },
+  "simulations": [
+    {
+      "circuit_name": "ghz_n2",
+      "family": "ghz",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999997,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.49010569125221065,
+        0.016895119204389672,
+        0.020899763312364875,
+        0.47209942623103485
+      ]
+    },
+    {
+      "circuit_name": "ghz_n2",
+      "family": "ghz",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999998,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.49010569125221065,
+        0.016895119204389672,
+        0.020899763312364872,
+        0.4720994262310348
+      ]
+    },
+    {
+      "circuit_name": "ghz_n2",
+      "family": "ghz",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 1.0,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.49010569125221065,
+        0.016895119204389672,
+        0.02089976331236488,
+        0.4720994262310349
+      ]
+    },
+    {
+      "circuit_name": "ghz_n2",
+      "family": "ghz",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.49010569125221065,
+        0.016895119204389672,
+        0.020899763312364875,
+        0.47209942623103485
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d2",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999991,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9543069818773765,
+        0.01870608265875046,
+        0.019092793199241946,
+        0.00789414226463116
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d2",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.999999999999999,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9543069818773766,
+        0.018706082658750366,
+        0.01909279319924162,
+        0.007894142264631346
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d2",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999989,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9543069818773767,
+        0.01870608265875044,
+        0.019092793199241672,
+        0.007894142264631246
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d2",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9543069818773765,
+        0.018706082658750445,
+        0.019092793199241908,
+        0.007894142264631159
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d4",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999991,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9440985759137667,
+        0.021693523210232213,
+        0.017327474688826578,
+        0.01688042618717457
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d4",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999991,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9440985759137669,
+        0.021693523210232137,
+        0.01732747468882643,
+        0.016880426187174617
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d4",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999988,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9440985759137668,
+        0.021693523210232147,
+        0.017327474688826484,
+        0.01688042618717472
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d4",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9440985759137667,
+        0.021693523210232265,
+        0.017327474688826578,
+        0.01688042618717451
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d8",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999969,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8952164463954271,
+        0.04313251994670047,
+        0.03686187129973406,
+        0.024789162358138415
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d8",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999981,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8952164463954272,
+        0.043132519946700545,
+        0.03686187129973428,
+        0.024789162358138023
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d8",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999967,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8952164463954272,
+        0.04313251994670051,
+        0.03686187129973406,
+        0.02478916235813826
+      ]
+    },
+    {
+      "circuit_name": "mirror_n2_d8",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8952164463954273,
+        0.043132519946700414,
+        0.03686187129973406,
+        0.024789162358138318
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d2",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999998,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9525235730835614,
+        0.02455864910761695,
+        0.015543887504439961,
+        0.0073738903043816875
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d2",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 1.0,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9525235730835614,
+        0.024558649107616917,
+        0.015543887504439961,
+        0.007373890304381689
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d2",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999998,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9525235730835614,
+        0.02455864910761695,
+        0.015543887504439961,
+        0.0073738903043816875
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d2",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.9525235730835614,
+        0.02455864910761695,
+        0.015543887504439961,
+        0.007373890304381686
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d4",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999991,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8917154192247784,
+        0.0299656551005705,
+        0.05127413293906125,
+        0.027044792735589896
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d4",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999987,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8917154192247786,
+        0.029965655100570476,
+        0.0512741329390613,
+        0.027044792735589646
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d4",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999993,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8917154192247785,
+        0.029965655100570456,
+        0.05127413293906129,
+        0.027044792735589778
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d4",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8917154192247783,
+        0.02996565510057052,
+        0.05127413293906135,
+        0.027044792735589893
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d8",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999962,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7986349714284048,
+        0.06555831701047607,
+        0.06829851656574519,
+        0.06750819499537397
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d8",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999964,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7986349714284046,
+        0.06555831701047633,
+        0.06829851656574529,
+        0.06750819499537389
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d8",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999958,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7986349714284048,
+        0.06555831701047612,
+        0.06829851656574518,
+        0.06750819499537396
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d8",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7986349714284047,
+        0.06555831701047611,
+        0.06829851656574515,
+        0.06750819499537407
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d16",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999925,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6959661520390457,
+        0.12570842172711263,
+        0.09563244230920354,
+        0.08269298392463821
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d16",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999951,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6959661520390452,
+        0.12570842172711302,
+        0.09563244230920351,
+        0.08269298392463814
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d16",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999922,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6959661520390455,
+        0.12570842172711252,
+        0.09563244230920374,
+        0.08269298392463825
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d16",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6959661520390457,
+        0.12570842172711266,
+        0.09563244230920334,
+        0.08269298392463834
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d32",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.99999999999998,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.49249690350214964,
+        0.18093938107172616,
+        0.17141083516764655,
+        0.15515288025847768
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d32",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999879,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4924969035021478,
+        0.1809393810717268,
+        0.17141083516764752,
+        0.15515288025847798
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d32",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999801,
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.49249690350214936,
+        0.1809393810717263,
+        0.17141083516764657,
+        0.15515288025847782
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n2_d32",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          3,
+          4
+        ]
+      },
+      "num_qubits": 2,
+      "physical_qubits": [
+        3,
+        4
+      ],
+      "probabilities": [
+        0.49249690350214953,
+        0.18093938107172616,
+        0.17141083516764652,
+        0.15515288025847773
+      ]
+    },
+    {
+      "circuit_name": "ghz_n3",
+      "family": "ghz",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999989,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4518016360526919,
+        0.006385425919723618,
+        0.006761506580066235,
+        0.06224402999513791,
+        0.03928124548117133,
+        0.010496954063081198,
+        0.01411675137207628,
+        0.4089124505360516
+      ]
+    },
+    {
+      "circuit_name": "ghz_n3",
+      "family": "ghz",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999996,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4518016360526918,
+        0.006385425919723615,
+        0.006761506580066233,
+        0.06224402999513791,
+        0.039281245481171324,
+        0.010496954063081196,
+        0.014116751372076278,
+        0.4089124505360516
+      ]
+    },
+    {
+      "circuit_name": "ghz_n3",
+      "family": "ghz",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999993,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4518016360526919,
+        0.006385425919723618,
+        0.006761506580066235,
+        0.06224402999513791,
+        0.03928124548117133,
+        0.010496954063081198,
+        0.01411675137207628,
+        0.4089124505360516
+      ]
+    },
+    {
+      "circuit_name": "ghz_n3",
+      "family": "ghz",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4518016360526919,
+        0.006385425919723617,
+        0.006761506580066234,
+        0.0622440299951379,
+        0.03928124548117133,
+        0.010496954063081196,
+        0.014116751372076278,
+        0.4089124505360515
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d2",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999983,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8524121833888625,
+        0.01400410640997024,
+        0.019468035380287286,
+        0.0027120820552896064,
+        0.08829093274322082,
+        0.0031069811195707027,
+        0.014884963735760318,
+        0.0051207151670386595
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d2",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999982,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8524121833888626,
+        0.014004106409970237,
+        0.019468035380287282,
+        0.002712082055289632,
+        0.0882909327432207,
+        0.003106981119570605,
+        0.014884963735760324,
+        0.0051207151670387445
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d2",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999981,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8524121833888626,
+        0.014004106409970157,
+        0.019468035380287303,
+        0.002712082055289592,
+        0.08829093274322077,
+        0.003106981119570606,
+        0.014884963735760322,
+        0.005120715167038681
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d2",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8524121833888623,
+        0.014004106409970282,
+        0.0194680353802873,
+        0.0027120820552896025,
+        0.08829093274322078,
+        0.0031069811195707105,
+        0.014884963735760325,
+        0.005120715167038657
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d4",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999969,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.782647729740552,
+        0.020679195755672033,
+        0.04000736530992517,
+        0.016103027394487164,
+        0.09021466342706537,
+        0.010867602721646904,
+        0.027713641842599578,
+        0.011766773808051877
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d4",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999953,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7826477297405525,
+        0.020679195755671845,
+        0.040007365309924776,
+        0.016103027394487015,
+        0.09021466342706522,
+        0.010867602721646892,
+        0.027713641842599758,
+        0.011766773808051833
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d4",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999967,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7826477297405522,
+        0.02067919575567197,
+        0.04000736530992488,
+        0.01610302739448712,
+        0.09021466342706543,
+        0.010867602721646915,
+        0.02771364184259969,
+        0.011766773808051892
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d4",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7826477297405517,
+        0.020679195755672064,
+        0.04000736530992514,
+        0.016103027394487122,
+        0.09021466342706538,
+        0.010867602721646899,
+        0.027713641842599588,
+        0.011766773808051866
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d8",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999936,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6770567636237877,
+        0.04109712387356941,
+        0.034549379185309995,
+        0.042959412656699926,
+        0.11525695319535033,
+        0.028230608242163273,
+        0.029261763700101712,
+        0.03158799552301764
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d8",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999938,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.677056763623788,
+        0.041097123873569626,
+        0.034549379185309634,
+        0.042959412656700294,
+        0.11525695319535013,
+        0.02823060824216348,
+        0.029261763700101556,
+        0.03158799552301741
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d8",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999944,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6770567636237875,
+        0.04109712387356944,
+        0.03454937918530983,
+        0.04295941265670034,
+        0.11525695319535036,
+        0.02823060824216338,
+        0.029261763700101646,
+        0.031587995523017526
+      ]
+    },
+    {
+      "circuit_name": "mirror_n3_d8",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6770567636237877,
+        0.04109712387356934,
+        0.03454937918531003,
+        0.04295941265669986,
+        0.11525695319535038,
+        0.02823060824216328,
+        0.029261763700101712,
+        0.03158799552301756
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d2",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999986,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8650987103483132,
+        0.014784586064676645,
+        0.03319868089067097,
+        0.004631056238290411,
+        0.07175487334319085,
+        0.001255427282567317,
+        0.008791184470853414,
+        0.0004854813614369923
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d2",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999986,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8650987103483135,
+        0.014784586064676647,
+        0.03319868089067084,
+        0.004631056238290409,
+        0.07175487334319088,
+        0.001255427282567317,
+        0.0087911844708534,
+        0.00048548136143699205
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d2",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999979,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8650987103483136,
+        0.014784586064676655,
+        0.03319868089067068,
+        0.004631056238290413,
+        0.0717548733431909,
+        0.0012554272825673176,
+        0.008791184470853397,
+        0.0004854813614369926
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d2",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8650987103483132,
+        0.014784586064676648,
+        0.03319868089067097,
+        0.004631056238290411,
+        0.07175487334319085,
+        0.001255427282567317,
+        0.008791184470853414,
+        0.0004854813614369924
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d4",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999982,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8078269650061131,
+        0.029395095809704633,
+        0.041728128282292325,
+        0.025435046672656784,
+        0.07040359772959445,
+        0.005864198910704701,
+        0.01237381746515953,
+        0.006973150123774468
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d4",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999968,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8078269650061138,
+        0.02939509580970453,
+        0.04172812828229197,
+        0.02543504667265646,
+        0.07040359772959451,
+        0.005864198910704781,
+        0.012373817465159502,
+        0.006973150123774405
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d4",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999976,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8078269650061136,
+        0.02939509580970451,
+        0.041728128282292075,
+        0.025435046672656447,
+        0.07040359772959452,
+        0.00586419891070479,
+        0.012373817465159476,
+        0.006973150123774488
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d4",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8078269650061132,
+        0.02939509580970472,
+        0.04172812828229224,
+        0.02543504667265671,
+        0.07040359772959445,
+        0.005864198910704696,
+        0.012373817465159526,
+        0.006973150123774475
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d8",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999931,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6762428217396934,
+        0.03772963974598591,
+        0.06548771994907261,
+        0.025914999181832977,
+        0.09736848056678298,
+        0.032630523780130434,
+        0.03613454691275883,
+        0.028491268123742874
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d8",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999953,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6762428217396929,
+        0.03772963974598614,
+        0.06548771994907256,
+        0.025914999181833064,
+        0.09736848056678307,
+        0.03263052378013054,
+        0.036134546912758914,
+        0.02849126812374302
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d8",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999936,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6762428217396931,
+        0.03772963974598598,
+        0.06548771994907272,
+        0.02591499918183304,
+        0.09736848056678299,
+        0.03263052378013042,
+        0.0361345469127588,
+        0.028491268123742954
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d8",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6762428217396935,
+        0.037729639745985914,
+        0.06548771994907263,
+        0.025914999181832987,
+        0.09736848056678298,
+        0.032630523780130406,
+        0.03613454691275879,
+        0.028491268123742877
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d16",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.999999999999989,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.5159263131418728,
+        0.05607951643650273,
+        0.06697352807728545,
+        0.0583470598724899,
+        0.11471958848114175,
+        0.04664644845109035,
+        0.08618861470629277,
+        0.055118930833324295
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d16",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999852,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.5159263131418738,
+        0.05607951643650272,
+        0.06697352807728539,
+        0.05834705987248965,
+        0.1147195884811418,
+        0.04664644845109041,
+        0.08618861470629237,
+        0.05511893083332405
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d16",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999867,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.5159263131418738,
+        0.05607951643650251,
+        0.0669735280772853,
+        0.05834705987248982,
+        0.11471958848114178,
+        0.04664644845109025,
+        0.08618861470629245,
+        0.05511893083332418
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d16",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.515926313141873,
+        0.05607951643650263,
+        0.0669735280772855,
+        0.05834705987248986,
+        0.11471958848114176,
+        0.046646448451090325,
+        0.0861886147062928,
+        0.05511893083332418
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d32",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.999999999999977,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.3148580889317518,
+        0.09075095813913688,
+        0.09682054554274876,
+        0.12773443411490543,
+        0.10367132989865054,
+        0.09138574725773332,
+        0.10088480063958642,
+        0.07389409547548678
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d32",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999744,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.3148580889317525,
+        0.09075095813913679,
+        0.09682054554274887,
+        0.12773443411490515,
+        0.10367132989865048,
+        0.09138574725773306,
+        0.10088480063958649,
+        0.07389409547548666
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d32",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999777,
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.314858088931752,
+        0.09075095813913689,
+        0.09682054554274878,
+        0.1277344341149054,
+        0.10367132989865056,
+        0.09138574725773337,
+        0.10088480063958641,
+        0.0738940954754867
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n3_d32",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 3,
+      "physical_qubits": [
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.3148580889317518,
+        0.09075095813913689,
+        0.09682054554274874,
+        0.12773443411490545,
+        0.1036713298986505,
+        0.0913857472577334,
+        0.10088480063958645,
+        0.07389409547548682
+      ]
+    },
+    {
+      "circuit_name": "ghz_n4",
+      "family": "ghz",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999996,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4402808088891435,
+        0.004858881893232282,
+        0.004733329069865568,
+        0.005308505843000678,
+        0.034973953281312725,
+        0.0008584723886323636,
+        0.001018983572549457,
+        0.01959891568598939,
+        0.012866862202233919,
+        0.0015367902858247945,
+        0.00203637716471777,
+        0.05676471489471894,
+        0.004403044534780354,
+        0.009609439435278587,
+        0.013057838237932617,
+        0.388093082620787
+      ]
+    },
+    {
+      "circuit_name": "ghz_n4",
+      "family": "ghz",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999999,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4402808088891438,
+        0.004858881893232284,
+        0.00473332906986557,
+        0.005308505843000679,
+        0.034973953281312746,
+        0.0008584723886323636,
+        0.001018983572549457,
+        0.019598915685989385,
+        0.012866862202233919,
+        0.0015367902858247943,
+        0.0020363771647177696,
+        0.056764714894718925,
+        0.004403044534780353,
+        0.009609439435278583,
+        0.013057838237932615,
+        0.38809308262078684
+      ]
+    },
+    {
+      "circuit_name": "ghz_n4",
+      "family": "ghz",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 1.0,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4402808088891435,
+        0.004858881893232282,
+        0.004733329069865569,
+        0.005308505843000677,
+        0.034973953281312725,
+        0.0008584723886323636,
+        0.0010189835725494573,
+        0.01959891568598939,
+        0.01286686220223392,
+        0.0015367902858247945,
+        0.00203637716471777,
+        0.056764714894718946,
+        0.004403044534780354,
+        0.009609439435278587,
+        0.01305783823793262,
+        0.388093082620787
+      ]
+    },
+    {
+      "circuit_name": "ghz_n4",
+      "family": "ghz",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.44028080888914356,
+        0.004858881893232282,
+        0.004733329069865569,
+        0.005308505843000677,
+        0.03497395328131273,
+        0.0008584723886323634,
+        0.001018983572549457,
+        0.019598915685989385,
+        0.012866862202233919,
+        0.0015367902858247943,
+        0.0020363771647177696,
+        0.05676471489471893,
+        0.004403044534780355,
+        0.009609439435278585,
+        0.013057838237932615,
+        0.38809308262078696
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d2",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 1.0000000000000007,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8183855049090093,
+        0.010511034880311318,
+        0.010256544384503227,
+        0.007398900732883218,
+        0.07446004666261014,
+        0.0010487802356612473,
+        0.0010566181329065387,
+        0.0041532379389850336,
+        0.046891216284217045,
+        0.00070474400556008,
+        0.0007245015833917362,
+        0.004281880188303399,
+        0.015723178565427327,
+        0.0002985570225484231,
+        0.00032605683023571836,
+        0.003779197643446268
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d2",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 1.0000000000000002,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8183855049090092,
+        0.010511034880311318,
+        0.010256544384503224,
+        0.007398900732883221,
+        0.07446004666261012,
+        0.0010487802356612473,
+        0.0010566181329065385,
+        0.004153237938985034,
+        0.04689121628421707,
+        0.0007047440055600803,
+        0.0007245015833917352,
+        0.004281880188303403,
+        0.015723178565427327,
+        0.0002985570225484231,
+        0.00032605683023571836,
+        0.0037791976434462687
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d2",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 1.0000000000000009,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.818385504909009,
+        0.010511034880311312,
+        0.01025654438450322,
+        0.007398900732883215,
+        0.0744600466626101,
+        0.0010487802356612466,
+        0.0010566181329065383,
+        0.004153237938985033,
+        0.046891216284217295,
+        0.0007047440055600838,
+        0.0007245015833917384,
+        0.004281880188303398,
+        0.01572317856542734,
+        0.0002985570225484233,
+        0.00032605683023571847,
+        0.0037791976434462665
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d2",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8183855049090093,
+        0.010511034880311318,
+        0.010256544384503226,
+        0.007398900732883218,
+        0.07446004666261014,
+        0.0010487802356612473,
+        0.0010566181329065387,
+        0.004153237938985034,
+        0.04689121628421706,
+        0.0007047440055600803,
+        0.0007245015833917365,
+        0.0042818801883034,
+        0.01572317856542733,
+        0.0002985570225484231,
+        0.0003260568302357184,
+        0.003779197643446267
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d4",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999987,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6983221018858254,
+        0.017012404813534027,
+        0.01462450505620095,
+        0.020003917128782845,
+        0.08275504363314286,
+        0.003997325615003692,
+        0.005615223893362165,
+        0.011953228440196556,
+        0.05934439367149847,
+        0.005316488884783565,
+        0.007396935908975781,
+        0.014271924216624234,
+        0.04145923218184456,
+        0.003454851860217578,
+        0.003410709772521702,
+        0.011061713037485557
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d4",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999977,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6983221018858261,
+        0.017012404813534037,
+        0.014624505056200877,
+        0.02000391712878275,
+        0.0827550436331427,
+        0.0039973256150036785,
+        0.005615223893362127,
+        0.011953228440196494,
+        0.05934439367149838,
+        0.0053164888847835635,
+        0.007396935908975655,
+        0.014271924216624198,
+        0.04145923218184477,
+        0.003454851860217573,
+        0.0034107097725216357,
+        0.011061713037485548
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d4",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999982,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6983221018858257,
+        0.017012404813534044,
+        0.014624505056200877,
+        0.020003917128782793,
+        0.08275504363314272,
+        0.003997325615003684,
+        0.005615223893362142,
+        0.011953228440196495,
+        0.05934439367149853,
+        0.005316488884783568,
+        0.007396935908975707,
+        0.014271924216624236,
+        0.04145923218184474,
+        0.0034548518602175813,
+        0.003410709772521672,
+        0.011061713037485524
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d4",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6983221018858252,
+        0.017012404813534058,
+        0.014624505056200948,
+        0.02000391712878288,
+        0.08275504363314286,
+        0.003997325615003682,
+        0.005615223893362172,
+        0.01195322844019656,
+        0.05934439367149854,
+        0.005316488884783601,
+        0.007396935908975784,
+        0.014271924216624278,
+        0.04145923218184459,
+        0.0034548518602175687,
+        0.0034107097725217137,
+        0.011061713037485548
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d8",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999944,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.5184683414953717,
+        0.04251419924957844,
+        0.037867542530641125,
+        0.035327430001516974,
+        0.09198766361426755,
+        0.029207534983735736,
+        0.02639213162641536,
+        0.02773353539941014,
+        0.049728132994035,
+        0.019457238317894615,
+        0.016877015670080115,
+        0.01656742699987126,
+        0.03292157469996959,
+        0.01863472965168856,
+        0.018933301083074568,
+        0.01738220168244931
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d8",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999941,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.5184683414953718,
+        0.042514199249578326,
+        0.037867542530641264,
+        0.03532743000151683,
+        0.09198766361426743,
+        0.0292075349837357,
+        0.026392131626415426,
+        0.02773353539941011,
+        0.04972813299403514,
+        0.01945723831789465,
+        0.016877015670080136,
+        0.01656742699987128,
+        0.032921574699969605,
+        0.0186347296516886,
+        0.018933301083074425,
+        0.01738220168244937
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d8",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999942,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.5184683414953717,
+        0.0425141992495785,
+        0.03786754253064116,
+        0.03532743000151684,
+        0.0919876636142673,
+        0.02920753498373574,
+        0.02639213162641549,
+        0.027733535399410113,
+        0.04972813299403493,
+        0.019457238317894678,
+        0.016877015670080063,
+        0.01656742699987131,
+        0.032921574699969605,
+        0.01863472965168863,
+        0.018933301083074613,
+        0.01738220168244934
+      ]
+    },
+    {
+      "circuit_name": "mirror_n4_d8",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.5184683414953717,
+        0.04251419924957844,
+        0.0378675425306411,
+        0.03532743000151696,
+        0.09198766361426756,
+        0.029207534983735742,
+        0.026392131626415405,
+        0.027733535399410147,
+        0.04972813299403499,
+        0.019457238317894643,
+        0.01687701567008012,
+        0.01656742699987125,
+        0.03292157469996958,
+        0.018634729651688584,
+        0.018933301083074557,
+        0.01738220168244931
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d2",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999992,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8181238378704196,
+        0.008184169032178926,
+        0.018840504524609093,
+        0.00018847253501658523,
+        0.10403619227894978,
+        0.0010407345974561928,
+        0.010512314856616746,
+        0.0001051608053983472,
+        0.023711310599567992,
+        0.00023719804379052724,
+        0.0006675031327129393,
+        6.677422432569832e-06,
+        0.013681115998579036,
+        0.00013686016798219582,
+        0.0005227190711130678,
+        5.229063176348756e-06
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d2",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999979,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8181238378704202,
+        0.008184169032178779,
+        0.018840504524608982,
+        0.00018847253501657615,
+        0.10403619227894967,
+        0.001040734597455922,
+        0.010512314856616753,
+        0.00010516080539833823,
+        0.023711310599567943,
+        0.00023719804379060522,
+        0.0006675031327129251,
+        6.677422432581167e-06,
+        0.013681115998579015,
+        0.00013686016798227435,
+        0.0005227190711130628,
+        5.2290631763841556e-06
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d2",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999993,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8181238378704195,
+        0.008184169032178862,
+        0.01884050452460893,
+        0.00018847253501657842,
+        0.10403619227894988,
+        0.0010407345974559493,
+        0.01051231485661682,
+        0.00010516080539834355,
+        0.023711310599568092,
+        0.0002371980437906466,
+        0.0006675031327129179,
+        6.677422432588628e-06,
+        0.013681115998579074,
+        0.00013686016798223653,
+        0.0005227190711130987,
+        5.229063176387617e-06
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d2",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8181238378704199,
+        0.008184169032178815,
+        0.018840504524609097,
+        0.000188472535016578,
+        0.1040361922789498,
+        0.0010407345974562218,
+        0.010512314856616752,
+        0.00010516080539834131,
+        0.023711310599567985,
+        0.00023719804379052347,
+        0.000667503132712935,
+        6.677422432573741e-06,
+        0.01368111599857903,
+        0.00013686016798221545,
+        0.0005227190711130579,
+        5.229063176348175e-06
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d4",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999993,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7541797815447424,
+        0.013379324517996338,
+        0.01772715999028289,
+        0.0022880871803166863,
+        0.08021124731277555,
+        0.0015723431411809822,
+        0.01084335216829477,
+        0.0004901007547567905,
+        0.06373025119418732,
+        0.0057048049431130095,
+        0.012520823639497665,
+        0.002150849027078562,
+        0.023864713602061927,
+        0.0009352922190963139,
+        0.00993597191137505,
+        0.0004658968532437889
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d4",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999991,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7541797815447423,
+        0.013379324517996302,
+        0.017727159990282897,
+        0.0022880871803166846,
+        0.08021124731277568,
+        0.0015723431411809661,
+        0.010843352168294781,
+        0.0004901007547567889,
+        0.06373025119418733,
+        0.005704804943113034,
+        0.01252082363949767,
+        0.002150849027078561,
+        0.023864713602061854,
+        0.0009352922190963554,
+        0.009935971911375057,
+        0.0004658968532437877
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d4",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999994,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7541797815447422,
+        0.013379324517996274,
+        0.01772715999028289,
+        0.0022880871803166846,
+        0.08021124731277568,
+        0.001572343141180968,
+        0.010843352168294776,
+        0.0004901007547567897,
+        0.06373025119418754,
+        0.005704804943113063,
+        0.012520823639497667,
+        0.002150849027078562,
+        0.023864713602061858,
+        0.0009352922190963031,
+        0.00993597191137505,
+        0.00046589685324378795
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d4",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7541797815447424,
+        0.013379324517996326,
+        0.017727159990282897,
+        0.0022880871803166863,
+        0.08021124731277557,
+        0.001572343141180981,
+        0.010843352168294773,
+        0.0004901007547567909,
+        0.06373025119418733,
+        0.005704804943113007,
+        0.012520823639497667,
+        0.0021508490270785623,
+        0.02386471360206189,
+        0.0009352922190963244,
+        0.009935971911375052,
+        0.0004658968532437892
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d8",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999959,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6432921412614262,
+        0.02365225979619852,
+        0.034368934497903576,
+        0.016875925271810158,
+        0.06592559943903202,
+        0.006013077318346076,
+        0.034312450122450364,
+        0.01499140671352591,
+        0.02446938813251715,
+        0.01731414405211419,
+        0.03528158850011595,
+        0.026718110561875848,
+        0.02868429832657557,
+        0.013166431845909004,
+        0.00715268778571321,
+        0.0077815563744860735
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d8",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999962,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6432921412614261,
+        0.023652259796199077,
+        0.034368934497904,
+        0.016875925271810196,
+        0.06592559943903203,
+        0.006013077318346104,
+        0.03431245012245034,
+        0.014991406713525833,
+        0.024469388132517145,
+        0.017314144052114098,
+        0.035281588500115604,
+        0.026718110561875712,
+        0.028684298326575566,
+        0.013166431845908955,
+        0.007152687785713242,
+        0.007781556374486092
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d8",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.999999999999998,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6432921412614258,
+        0.023652259796199004,
+        0.03436893449790365,
+        0.016875925271810133,
+        0.065925599439032,
+        0.0060130773183462325,
+        0.03431245012245045,
+        0.014991406713525902,
+        0.024469388132517124,
+        0.017314144052114223,
+        0.03528158850011583,
+        0.026718110561875737,
+        0.028684298326575687,
+        0.013166431845908976,
+        0.0071526877857132475,
+        0.007781556374486052
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d8",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6432921412614263,
+        0.023652259796198463,
+        0.034368934497903646,
+        0.016875925271810224,
+        0.06592559943903203,
+        0.006013077318346035,
+        0.03431245012245041,
+        0.014991406713525921,
+        0.024469388132517166,
+        0.017314144052114226,
+        0.03528158850011588,
+        0.026718110561875813,
+        0.028684298326575583,
+        0.013166431845908995,
+        0.007152687785713219,
+        0.007781556374486008
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d16",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999915,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4491729439218756,
+        0.025848345284659208,
+        0.061846533287164475,
+        0.0371318140830629,
+        0.10797171582823324,
+        0.02542124543863968,
+        0.04751820829455614,
+        0.02308625743835018,
+        0.061178334056985,
+        0.01724735395263438,
+        0.026026883685147176,
+        0.021059114830282916,
+        0.04275887497148985,
+        0.01713031140317801,
+        0.022020354382906622,
+        0.014581709140834622
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d16",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999876,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.44917294392187684,
+        0.02584834528465921,
+        0.06184653328716439,
+        0.03713181408306283,
+        0.10797171582823295,
+        0.02542124543863968,
+        0.047518208294556025,
+        0.023086257438350036,
+        0.061178334056984945,
+        0.01724735395263434,
+        0.026026883685147162,
+        0.021059114830282822,
+        0.04275887497148989,
+        0.017130311403177806,
+        0.022020354382906702,
+        0.014581709140834478
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d16",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999898,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.44917294392187596,
+        0.025848345284659298,
+        0.06184653328716437,
+        0.03713181408306292,
+        0.1079717158282333,
+        0.025421245438639745,
+        0.047518208294555886,
+        0.0230862574383501,
+        0.061178334056985036,
+        0.017247353952634357,
+        0.02602688368514709,
+        0.021059114830283034,
+        0.042758874971489905,
+        0.017130311403177875,
+        0.022020354382906646,
+        0.01458170914083466
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d16",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.44917294392187557,
+        0.025848345284659287,
+        0.06184653328716449,
+        0.037131814083062875,
+        0.10797171582823327,
+        0.025421245438639665,
+        0.04751820829455615,
+        0.02308625743835018,
+        0.06117833405698503,
+        0.017247353952634378,
+        0.026026883685147172,
+        0.02105911483028292,
+        0.04275887497148985,
+        0.017130311403177972,
+        0.02202035438290663,
+        0.01458170914083462
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d32",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.999999999999985,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.22263384450680215,
+        0.07100336682423308,
+        0.06209657926804714,
+        0.058894732137620885,
+        0.06312812658319734,
+        0.052609442146093144,
+        0.057804577044792006,
+        0.042161322558427555,
+        0.05760990344949591,
+        0.04717987055350882,
+        0.04665346697395874,
+        0.042384856792208436,
+        0.04494883320006588,
+        0.04075066810983579,
+        0.04673496633193739,
+        0.04340544351977586
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d32",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999807,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.2226338445068028,
+        0.07100336682423299,
+        0.06209657926804725,
+        0.05889473213762069,
+        0.06312812658319736,
+        0.05260944214609297,
+        0.05780457704479199,
+        0.042161322558427486,
+        0.05760990344949596,
+        0.04717987055350874,
+        0.04665346697395869,
+        0.04238485679220829,
+        0.04494883320006582,
+        0.040750668109835596,
+        0.046734966331937466,
+        0.0434054435197759
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d32",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999833,
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.22263384450680235,
+        0.07100336682423301,
+        0.06209657926804711,
+        0.05889473213762071,
+        0.06312812658319727,
+        0.05260944214609315,
+        0.05780457704479198,
+        0.04216132255842748,
+        0.057609903449495965,
+        0.047179870553508765,
+        0.04665346697395879,
+        0.04238485679220841,
+        0.04494883320006592,
+        0.040750668109835714,
+        0.046734966331937494,
+        0.043405443519775856
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n4_d32",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 4,
+      "physical_qubits": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.22263384450680232,
+        0.07100336682423307,
+        0.06209657926804711,
+        0.05889473213762086,
+        0.06312812658319733,
+        0.05260944214609313,
+        0.05780457704479199,
+        0.042161322558427534,
+        0.057609903449495896,
+        0.047179870553508786,
+        0.0466534669739587,
+        0.04238485679220842,
+        0.04494883320006583,
+        0.04075066810983575,
+        0.0467349663319374,
+        0.04340544351977587
+      ]
+    },
+    {
+      "circuit_name": "ghz_n5",
+      "family": "ghz",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.999999999999999,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4288884295939974,
+        0.004680826802007961,
+        0.004539641378708019,
+        0.0030472517970808934,
+        0.03394214543655277,
+        0.000476670635510469,
+        0.0005038264841215666,
+        0.004552685351753306,
+        0.007619951039442281,
+        0.0001757687984589856,
+        0.00020667351906620727,
+        0.003812669644042576,
+        0.0008275163666476987,
+        0.0006448112155323574,
+        0.0008739348442988898,
+        0.025809866559735543,
+        0.012353108348429797,
+        0.00018840578982344205,
+        0.00020367357732720983,
+        0.0022626187048290776,
+        0.0011075135792879076,
+        0.00038194488123310797,
+        0.0005150288205349017,
+        0.015019043138097257,
+        0.005251344535596074,
+        0.0013580177776877722,
+        0.0018255972486626167,
+        0.05282820333630933,
+        0.003568480791835066,
+        0.00894366061291717,
+        0.01215540052531311,
+        0.36143528886515913
+      ]
+    },
+    {
+      "circuit_name": "ghz_n5",
+      "family": "ghz",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 1.0,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4288884295939977,
+        0.004680826802007963,
+        0.004539641378708021,
+        0.0030472517970808943,
+        0.033942145436552794,
+        0.00047667063551046934,
+        0.0005038264841215669,
+        0.004552685351753308,
+        0.007619951039442283,
+        0.00017576879845898556,
+        0.00020667351906620727,
+        0.003812669644042575,
+        0.0008275163666476989,
+        0.0006448112155323572,
+        0.0008739348442988897,
+        0.025809866559735533,
+        0.0123531083484298,
+        0.00018840578982344205,
+        0.00020367357732720986,
+        0.002262618704829078,
+        0.001107513579287908,
+        0.00038194488123310797,
+        0.0005150288205349018,
+        0.015019043138097259,
+        0.005251344535596075,
+        0.001358017777687772,
+        0.0018255972486626165,
+        0.052828203336309325,
+        0.003568480791835066,
+        0.00894366061291717,
+        0.012155400525313107,
+        0.3614352888651591
+      ]
+    },
+    {
+      "circuit_name": "ghz_n5",
+      "family": "ghz",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999996,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4288884295939974,
+        0.004680826802007961,
+        0.004539641378708019,
+        0.003047251797080894,
+        0.03394214543655277,
+        0.00047667063551046907,
+        0.0005038264841215666,
+        0.004552685351753307,
+        0.007619951039442281,
+        0.0001757687984589856,
+        0.00020667351906620727,
+        0.003812669644042576,
+        0.0008275163666476987,
+        0.0006448112155323574,
+        0.0008739348442988898,
+        0.02580986655973554,
+        0.012353108348429799,
+        0.00018840578982344205,
+        0.00020367357732720983,
+        0.0022626187048290776,
+        0.0011075135792879079,
+        0.00038194488123310797,
+        0.0005150288205349017,
+        0.015019043138097257,
+        0.005251344535596074,
+        0.0013580177776877722,
+        0.0018255972486626167,
+        0.05282820333630933,
+        0.003568480791835067,
+        0.00894366061291717,
+        0.01215540052531311,
+        0.36143528886515913
+      ]
+    },
+    {
+      "circuit_name": "ghz_n5",
+      "family": "ghz",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4288884295939974,
+        0.004680826802007961,
+        0.004539641378708019,
+        0.003047251797080893,
+        0.03394214543655277,
+        0.000476670635510469,
+        0.0005038264841215666,
+        0.004552685351753305,
+        0.007619951039442281,
+        0.0001757687984589856,
+        0.00020667351906620727,
+        0.0038126696440425765,
+        0.0008275163666476987,
+        0.0006448112155323575,
+        0.00087393484429889,
+        0.025809866559735543,
+        0.012353108348429795,
+        0.00018840578982344202,
+        0.00020367357732720977,
+        0.002262618704829078,
+        0.0011075135792879076,
+        0.00038194488123310797,
+        0.0005150288205349017,
+        0.015019043138097257,
+        0.005251344535596073,
+        0.0013580177776877722,
+        0.001825597248662617,
+        0.05282820333630934,
+        0.003568480791835066,
+        0.008943660612917171,
+        0.01215540052531311,
+        0.3614352888651592
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d2",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999997,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7910703806904765,
+        0.010968987560840741,
+        0.03082528780354974,
+        0.004124374040700681,
+        0.06602223866242253,
+        0.000982798467326446,
+        0.016597892709345988,
+        0.0005344469301143535,
+        0.03619307636671488,
+        0.0005075413130487122,
+        0.0025950873589392137,
+        0.0002047678341097635,
+        0.0034072758848525835,
+        8.821535297157614e-05,
+        0.008666746388320155,
+        0.0001335131174118346,
+        0.017495728338602787,
+        0.00024263139244322003,
+        0.0006891424359694945,
+        9.131711335230407e-05,
+        0.0014625954753317491,
+        2.200601431744259e-05,
+        0.0004164378128802219,
+        1.2500763146476053e-05,
+        0.0055278024518287125,
+        7.677135168384357e-05,
+        0.000240979076035405,
+        2.916704099384206e-05,
+        0.00046969433008559015,
+        7.801344303083559e-06,
+        0.0002867053189032095,
+        6.0892589770047595e-06
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d2",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999999,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7910703806904763,
+        0.010968987560840736,
+        0.030825287803549876,
+        0.004124374040700679,
+        0.0660222386624225,
+        0.0009827984673264458,
+        0.016597892709345998,
+        0.0005344469301143533,
+        0.036193076366714746,
+        0.0005075413130487143,
+        0.0025950873589392215,
+        0.00020476783410976654,
+        0.003407275884852581,
+        8.82153529715764e-05,
+        0.008666746388320157,
+        0.0001335131174118349,
+        0.017495728338602738,
+        0.0002426313924432186,
+        0.0006891424359695326,
+        9.131711335230341e-05,
+        0.0014625954753317454,
+        2.2006014317442477e-05,
+        0.0004164378128802253,
+        1.2500763146476003e-05,
+        0.005527802451828727,
+        7.677135168384342e-05,
+        0.00024097907603549872,
+        2.9167040993842625e-05,
+        0.00046969433008559226,
+        7.80134430308356e-06,
+        0.0002867053189032178,
+        6.0892589770048205e-06
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d2",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 1.0000000000000002,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7910703806904761,
+        0.010968987560840734,
+        0.03082528780354992,
+        0.00412437404070068,
+        0.06602223866242249,
+        0.0009827984673264458,
+        0.016597892709345995,
+        0.0005344469301143533,
+        0.03619307636671466,
+        0.0005075413130487136,
+        0.0025950873589393516,
+        0.00020476783410976808,
+        0.0034072758848525736,
+        8.821535297157637e-05,
+        0.008666746388320158,
+        0.00013351311741183498,
+        0.01749572833860286,
+        0.00024263139244322057,
+        0.0006891424359695772,
+        9.131711335230468e-05,
+        0.0014625954753317565,
+        2.200601431744266e-05,
+        0.00041643781288023017,
+        1.2500763146476135e-05,
+        0.0055278024518287715,
+        7.677135168384448e-05,
+        0.00024097907603547503,
+        2.916704099384308e-05,
+        0.0004696943300855964,
+        7.801344303083665e-06,
+        0.0002867053189032168,
+        6.089258977004876e-06
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d2",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7910703806904765,
+        0.01096898756084074,
+        0.030825287803549727,
+        0.004124374040700681,
+        0.06602223866242252,
+        0.000982798467326446,
+        0.016597892709345988,
+        0.0005344469301143535,
+        0.03619307636671491,
+        0.0005075413130487123,
+        0.0025950873589392263,
+        0.0002047678341097635,
+        0.0034072758848525857,
+        8.821535297157614e-05,
+        0.008666746388320155,
+        0.0001335131174118346,
+        0.01749572833860278,
+        0.00024263139244322,
+        0.0006891424359694911,
+        9.131711335230404e-05,
+        0.0014625954753317487,
+        2.200601431744258e-05,
+        0.00041643781288022166,
+        1.2500763146476053e-05,
+        0.0055278024518287255,
+        7.677135168384368e-05,
+        0.00024097907603539884,
+        2.916704099384198e-05,
+        0.0004696943300855912,
+        7.801344303083565e-06,
+        0.000286705318903209,
+        6.089258977004754e-06
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d4",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999996,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6645101018611239,
+        0.022074026522523254,
+        0.018178337944725047,
+        0.009851967767595783,
+        0.05595731694149455,
+        0.007440581002442718,
+        0.020721964801435656,
+        0.0017133326418861845,
+        0.02622646624820878,
+        0.0014678306591844423,
+        0.003265558541810424,
+        0.002857903368967594,
+        0.0030694323023708124,
+        0.0032544059495597465,
+        0.016731781334562705,
+        0.0010992418402308453,
+        0.029870222827807987,
+        0.0015466781940061606,
+        0.0025351779737642324,
+        0.002685931053756304,
+        0.0031140889443475005,
+        0.0029143442995076896,
+        0.01131368156991073,
+        0.0008203163953255,
+        0.02646901945769974,
+        0.0021818136986009175,
+        0.00539781854154373,
+        0.006518097485286354,
+        0.005011314927079662,
+        0.006884795010568461,
+        0.029641455567386857,
+        0.004674994325285699
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d4",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 1.0000000000000007,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6645101018611235,
+        0.022074026522523275,
+        0.01817833794472506,
+        0.009851967767595785,
+        0.055957316941494514,
+        0.0074405810024427204,
+        0.020721964801435833,
+        0.001713332641886169,
+        0.026226466248208843,
+        0.0014678306591844673,
+        0.0032655585418104403,
+        0.0028579033689675837,
+        0.0030694323023708198,
+        0.0032544059495597474,
+        0.016731781334562813,
+        0.0010992418402307504,
+        0.02987022282780784,
+        0.0015466781940062253,
+        0.0025351779737642433,
+        0.002685931053756306,
+        0.0031140889443474896,
+        0.0029143442995076944,
+        0.0113136815699108,
+        0.0008203163953254841,
+        0.026469019457699788,
+        0.002181813698601023,
+        0.005397818541543731,
+        0.0065180974852863645,
+        0.0050113149270796615,
+        0.00688479501056847,
+        0.029641455567386853,
+        0.004674994325285731
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d4",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 1.0000000000000004,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6645101018611236,
+        0.022074026522523164,
+        0.01817833794472504,
+        0.009851967767595783,
+        0.05595731694149453,
+        0.007440581002442711,
+        0.020721964801435684,
+        0.0017133326418862064,
+        0.02622646624820874,
+        0.0014678306591844954,
+        0.0032655585418104225,
+        0.0028579033689676036,
+        0.0030694323023708115,
+        0.003254405949559757,
+        0.016731781334562698,
+        0.0010992418402309071,
+        0.029870222827808022,
+        0.0015466781940062305,
+        0.002535177973764232,
+        0.0026859310537563036,
+        0.003114088944347502,
+        0.0029143442995076957,
+        0.011313681569910696,
+        0.0008203163953254744,
+        0.026469019457699833,
+        0.002181813698600911,
+        0.005397818541543737,
+        0.006518097485286357,
+        0.005011314927079666,
+        0.006884795010568461,
+        0.029641455567386888,
+        0.004674994325285699
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d4",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6645101018611238,
+        0.02207402652252329,
+        0.018178337944725044,
+        0.009851967767595789,
+        0.05595731694149454,
+        0.0074405810024427204,
+        0.020721964801435663,
+        0.0017133326418862014,
+        0.026226466248208735,
+        0.001467830659184457,
+        0.0032655585418104247,
+        0.002857903368967596,
+        0.003069432302370809,
+        0.0032544059495597474,
+        0.016731781334562722,
+        0.0010992418402308408,
+        0.029870222827808098,
+        0.0015466781940061572,
+        0.002535177973764242,
+        0.0026859310537563036,
+        0.00311408894434751,
+        0.0029143442995076883,
+        0.011313681569910795,
+        0.0008203163953254869,
+        0.026469019457699784,
+        0.0021818136986009326,
+        0.005397818541543733,
+        0.006518097485286353,
+        0.005011314927079666,
+        0.006884795010568463,
+        0.02964145556738687,
+        0.004674994325285689
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d8",
+      "family": "mirror",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999981,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.48376847515525423,
+        0.02998817236296855,
+        0.025973124775089715,
+        0.016221618327403407,
+        0.047791099781735215,
+        0.01186749529699682,
+        0.016463749416023493,
+        0.009797565760087334,
+        0.03451078750659016,
+        0.020124333267889517,
+        0.008060217917195512,
+        0.005380675858860101,
+        0.009928822321782544,
+        0.011376898200151888,
+        0.014911047944673959,
+        0.010109078657288715,
+        0.0356209558011102,
+        0.015122151508358187,
+        0.007645086870896755,
+        0.009036986073943779,
+        0.008252288162754376,
+        0.0071229011918293944,
+        0.015413358196706015,
+        0.0069018288541267325,
+        0.02803438348615215,
+        0.016873716239517406,
+        0.009889050316024134,
+        0.006820723902513464,
+        0.022982644198829644,
+        0.00999839961505999,
+        0.031164228787097733,
+        0.012848134245088802
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d8",
+      "family": "mirror",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999989,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.48376847515525395,
+        0.029988172362968548,
+        0.025973124775089704,
+        0.016221618327403466,
+        0.04779109978173518,
+        0.011867495296996822,
+        0.016463749416023504,
+        0.009797565760087326,
+        0.034510787506590326,
+        0.02012433326788938,
+        0.008060217917195588,
+        0.005380675858860152,
+        0.00992882232178249,
+        0.011376898200151817,
+        0.014911047944674023,
+        0.01010907865728879,
+        0.03562095580111007,
+        0.0151221515083582,
+        0.007645086870896744,
+        0.009036986073943732,
+        0.008252288162754366,
+        0.007122901191829346,
+        0.01541335819670605,
+        0.006901828854126735,
+        0.028034383486152354,
+        0.016873716239517392,
+        0.009889050316024151,
+        0.006820723902513464,
+        0.0229826441988296,
+        0.009998399615060032,
+        0.0311642287870978,
+        0.012848134245088873
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d8",
+      "family": "mirror",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999988,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.48376847515525406,
+        0.02998817236296858,
+        0.025973124775089684,
+        0.016221618327403448,
+        0.04779109978173517,
+        0.011867495296996829,
+        0.016463749416023465,
+        0.009797565760087319,
+        0.03451078750659004,
+        0.020124333267889517,
+        0.008060217917195578,
+        0.005380675858860183,
+        0.009928822321782497,
+        0.01137689820015187,
+        0.014911047944673917,
+        0.010109078657288703,
+        0.03562095580111014,
+        0.015122151508358196,
+        0.0076450868708967095,
+        0.009036986073943768,
+        0.008252288162754359,
+        0.007122901191829387,
+        0.015413358196706013,
+        0.00690182885412674,
+        0.02803438348615222,
+        0.016873716239517444,
+        0.009889050316024125,
+        0.006820723902513497,
+        0.022982644198829665,
+        0.00999839961506015,
+        0.03116422878709773,
+        0.01284813424508887
+      ]
+    },
+    {
+      "circuit_name": "mirror_n5_d8",
+      "family": "mirror",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4837684751552542,
+        0.029988172362968538,
+        0.025973124775089677,
+        0.01622161832740343,
+        0.04779109978173519,
+        0.011867495296996829,
+        0.016463749416023483,
+        0.009797565760087343,
+        0.0345107875065902,
+        0.020124333267889507,
+        0.008060217917195498,
+        0.005380675858860102,
+        0.009928822321782523,
+        0.011376898200151905,
+        0.014911047944673968,
+        0.010109078657288719,
+        0.03562095580111024,
+        0.015122151508358196,
+        0.007645086870896744,
+        0.009036986073943752,
+        0.008252288162754383,
+        0.00712290119182942,
+        0.015413358196706016,
+        0.006901828854126741,
+        0.028034383486152142,
+        0.01687371623951741,
+        0.00988905031602413,
+        0.006820723902513452,
+        0.022982644198829665,
+        0.009998399615060011,
+        0.031164228787097733,
+        0.012848134245088813
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d2",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999999,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8252198209800435,
+        0.008097588429836822,
+        0.007603024799361065,
+        7.460577664500542e-05,
+        0.07498011941853117,
+        0.0007357532284551902,
+        0.0006908167895447714,
+        6.778739312770374e-06,
+        0.03872992587870445,
+        0.0003800429797134251,
+        0.00035683169435202266,
+        3.5014624299165157e-06,
+        0.011846251128408852,
+        0.00011624304656233497,
+        0.00010914345343981588,
+        1.0709858673984308e-06,
+        0.020483553269445443,
+        0.0002009978186898384,
+        0.00018872179209373623,
+        1.8518597848284882e-06,
+        0.0019266010030031969,
+        1.8905050017221992e-05,
+        1.775041610962619e-05,
+        1.7417851639020926e-07,
+        0.007200316315844105,
+        7.065414160932341e-05,
+        6.633891009499448e-05,
+        6.509601165362783e-07,
+        0.0008556093368054976,
+        8.395789933824315e-06,
+        7.883013520653161e-06,
+        7.735320632662337e-08
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d2",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 1.0,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8252198209800439,
+        0.008097588429836829,
+        0.007603024799360691,
+        7.460577664500179e-05,
+        0.07498011941853121,
+        0.0007357532284551905,
+        0.0006908167895447382,
+        6.7787393127700515e-06,
+        0.03872992587870454,
+        0.00038004297971342587,
+        0.0003568316943520225,
+        3.5014624299164137e-06,
+        0.011846251128408864,
+        0.00011624304656233509,
+        0.00010914345343981167,
+        1.070985867398384e-06,
+        0.020483553269445457,
+        0.00020099781868983846,
+        0.0001887217920937275,
+        1.851859784828403e-06,
+        0.0019266010030031982,
+        1.890505001722201e-05,
+        1.7750416109625446e-05,
+        1.7417851639020196e-07,
+        0.007200316315844108,
+        7.065414160932345e-05,
+        6.633891009499683e-05,
+        6.509601165362946e-07,
+        0.000855609336805498,
+        8.39578993382432e-06,
+        7.883013520653278e-06,
+        7.735320632662404e-08
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d2",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999994,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8252198209800441,
+        0.008097588429836829,
+        0.007603024799360565,
+        7.460577664500062e-05,
+        0.07498011941853122,
+        0.0007357532284551908,
+        0.0006908167895447283,
+        6.778739312769962e-06,
+        0.038729925878704365,
+        0.0003800429797134242,
+        0.00035683169435202737,
+        3.5014624299165043e-06,
+        0.011846251128408845,
+        0.00011624304656233488,
+        0.00010914345343981211,
+        1.0709858673983904e-06,
+        0.020483553269445457,
+        0.00020099781868983846,
+        0.0001887217920937252,
+        1.8518597848283822e-06,
+        0.001926601003003198,
+        1.890505001722201e-05,
+        1.7750416109625263e-05,
+        1.741785163902003e-07,
+        0.0072003163158441035,
+        7.06541416093234e-05,
+        6.633891009499524e-05,
+        6.509601165362817e-07,
+        0.0008556093368054975,
+        8.395789933824315e-06,
+        7.88301352065313e-06,
+        7.735320632662278e-08
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d2",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.8252198209800437,
+        0.008097588429836823,
+        0.007603024799360983,
+        7.460577664500466e-05,
+        0.07498011941853117,
+        0.0007357532284551903,
+        0.0006908167895447664,
+        6.778739312770329e-06,
+        0.03872992587870445,
+        0.00038004297971342506,
+        0.00035683169435203436,
+        3.501462429916635e-06,
+        0.01184625112840885,
+        0.00011624304656233495,
+        0.00010914345343981778,
+        1.070985867398452e-06,
+        0.02048355326944545,
+        0.00020099781868983843,
+        0.00018872179209373545,
+        1.8518597848284813e-06,
+        0.001926601003003197,
+        1.8905050017221995e-05,
+        1.775041610962615e-05,
+        1.7417851639020892e-07,
+        0.007200316315844105,
+        7.065414160932342e-05,
+        6.633891009499562e-05,
+        6.509601165362886e-07,
+        0.0008556093368054976,
+        8.395789933824315e-06,
+        7.88301352065327e-06,
+        7.735320632662444e-08
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d4",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999952,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7927958620904548,
+        0.014483242017899536,
+        0.020135626169758645,
+        0.004737974096535712,
+        0.0934014764001681,
+        0.0017819456474888504,
+        0.009429524852358885,
+        0.0006564544669908332,
+        0.023367183616773896,
+        0.00044089389165324536,
+        0.0006442029393983196,
+        0.00012956352354123951,
+        0.01014441401269775,
+        0.00018821702842501027,
+        0.0004350088944559527,
+        6.233383016412238e-05,
+        0.01746286318855765,
+        0.00032408064707793683,
+        0.00043456099989521053,
+        0.0001001066444888782,
+        0.00209843569010721,
+        4.032623818523609e-05,
+        0.00020317386111615092,
+        1.4332378111820645e-05,
+        0.005338620098620694,
+        9.79180922958625e-05,
+        0.00013653430546419718,
+        3.161463508189529e-05,
+        0.0007961740680377505,
+        1.5139018926967822e-05,
+        6.686364307553611e-05,
+        5.333012192166936e-06
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d4",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.999999999999997,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.792795862090455,
+        0.014483242017899293,
+        0.02013562616975865,
+        0.004737974096535707,
+        0.09340147640016816,
+        0.0017819456474887896,
+        0.009429524852358883,
+        0.0006564544669908289,
+        0.023367183616773892,
+        0.0004408938916532394,
+        0.0006442029393983193,
+        0.00012956352354123922,
+        0.010144414012697752,
+        0.0001882170284250049,
+        0.00043500889445595263,
+        6.233383016412226e-05,
+        0.01746286318855765,
+        0.00032408064707793244,
+        0.00043456099989521064,
+        0.00010010664448887808,
+        0.0020984356901072106,
+        4.032623818523482e-05,
+        0.00020317386111615092,
+        1.4332378111820546e-05,
+        0.005338620098620694,
+        9.791809229586261e-05,
+        0.0001365343054641972,
+        3.161463508189529e-05,
+        0.000796174068037749,
+        1.5139018926967822e-05,
+        6.686364307553607e-05,
+        5.333012192166894e-06
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d4",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.999999999999996,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7927958620904547,
+        0.014483242017899373,
+        0.020135626169758652,
+        0.004737974096535705,
+        0.09340147640016826,
+        0.0017819456474888525,
+        0.009429524852358888,
+        0.0006564544669908278,
+        0.02336718361677388,
+        0.0004408938916532424,
+        0.0006442029393983194,
+        0.00012956352354123922,
+        0.010144414012697752,
+        0.00018821702842500645,
+        0.00043500889445595263,
+        6.233383016412229e-05,
+        0.017462863188557644,
+        0.0003240806470779338,
+        0.0004345609998952106,
+        0.00010010664448887804,
+        0.002098435690107212,
+        4.032623818523599e-05,
+        0.00020317386111615092,
+        1.4332378111820536e-05,
+        0.005338620098620691,
+        9.791809229586304e-05,
+        0.0001365343054641972,
+        3.161463508189526e-05,
+        0.0007961740680377494,
+        1.5139018926968093e-05,
+        6.686364307553607e-05,
+        5.333012192166906e-06
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d4",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.7927958620904547,
+        0.014483242017899581,
+        0.02013562616975864,
+        0.004737974096535712,
+        0.09340147640016806,
+        0.0017819456474888861,
+        0.009429524852358883,
+        0.0006564544669908328,
+        0.023367183616773885,
+        0.0004408938916532464,
+        0.0006442029393983196,
+        0.0001295635235412395,
+        0.010144414012697743,
+        0.00018821702842501125,
+        0.0004350088944559527,
+        6.233383016412234e-05,
+        0.01746286318855765,
+        0.00032408064707793776,
+        0.00043456099989521053,
+        0.0001001066444888782,
+        0.0020984356901072084,
+        4.0326238185236725e-05,
+        0.0002031738611161509,
+        1.4332378111820643e-05,
+        0.005338620098620692,
+        9.79180922958628e-05,
+        0.00013653430546419713,
+        3.1614635081895295e-05,
+        0.0007961740680377502,
+        1.5139018926968098e-05,
+        6.686364307553611e-05,
+        5.333012192166945e-06
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d8",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999971,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6405732616961123,
+        0.019991463825626558,
+        0.02021442849073561,
+        0.0070244058948677945,
+        0.0654503439839487,
+        0.007523862054241687,
+        0.028908887064144354,
+        0.003622396953190065,
+        0.022155054354757436,
+        0.0009559684675738987,
+        0.004861500954731823,
+        0.0006669086544544551,
+        0.011919588635538955,
+        0.0006716563985319907,
+        0.0019800647869746843,
+        0.0004946600844732468,
+        0.05589131527982792,
+        0.005721602357867463,
+        0.017235300337124743,
+        0.009123374677783475,
+        0.01642339876621329,
+        0.0029382130926092183,
+        0.015544711315437417,
+        0.007245330650772307,
+        0.013776975181983859,
+        0.0007242395641842221,
+        0.004476130460313307,
+        0.0006494061643652095,
+        0.010468112960298278,
+        0.0005706983650615584,
+        0.0016907303435866636,
+        0.000506008182667458
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d8",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999971,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6405732616961127,
+        0.01999146382562655,
+        0.020214428490735646,
+        0.007024405894867702,
+        0.06545034398394857,
+        0.007523862054241605,
+        0.028908887064144344,
+        0.003622396953190047,
+        0.022155054354757297,
+        0.0009559684675738635,
+        0.00486150095473182,
+        0.0006669086544544766,
+        0.011919588635538924,
+        0.0006716563985319843,
+        0.001980064786974677,
+        0.0004946600844732439,
+        0.0558913152798282,
+        0.005721602357867404,
+        0.01723530033712461,
+        0.00912337467778342,
+        0.01642339876621346,
+        0.002938213092609221,
+        0.015544711315437372,
+        0.0072453306507723435,
+        0.01377697518198388,
+        0.0007242395641842133,
+        0.004476130460313325,
+        0.0006494061643651734,
+        0.010468112960298282,
+        0.0005706983650615557,
+        0.00169073034358666,
+        0.0005060081826674524
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d8",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999956,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6405732616961132,
+        0.019991463825626325,
+        0.020214428490735677,
+        0.007024405894867903,
+        0.06545034398394853,
+        0.00752386205424163,
+        0.028908887064144392,
+        0.003622396953190142,
+        0.022155054354757318,
+        0.0009559684675738396,
+        0.004861500954731862,
+        0.0006669086544544684,
+        0.011919588635538936,
+        0.0006716563985319759,
+        0.0019800647869746835,
+        0.0004946600844732425,
+        0.0558913152798281,
+        0.005721602357867271,
+        0.01723530033712466,
+        0.009123374677783487,
+        0.016423398766213296,
+        0.002938213092609201,
+        0.015544711315437294,
+        0.007245330650772322,
+        0.01377697518198372,
+        0.0007242395641842364,
+        0.0044761304603132945,
+        0.0006494061643651778,
+        0.010468112960298264,
+        0.0005706983650615519,
+        0.001690730343586658,
+        0.0005060081826674496
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d8",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.6405732616961122,
+        0.019991463825626568,
+        0.020214428490735688,
+        0.007024405894867806,
+        0.06545034398394871,
+        0.007523862054241669,
+        0.02890888706414436,
+        0.0036223969531900754,
+        0.022155054354757325,
+        0.0009559684675738909,
+        0.004861500954731818,
+        0.0006669086544544632,
+        0.011919588635538951,
+        0.0006716563985319901,
+        0.0019800647869746804,
+        0.0004946600844732487,
+        0.05589131527982796,
+        0.0057216023578675005,
+        0.017235300337124743,
+        0.009123374677783494,
+        0.016423398766213345,
+        0.0029382130926092166,
+        0.01554471131543745,
+        0.007245330650772317,
+        0.013776975181983906,
+        0.0007242395641842229,
+        0.004476130460313338,
+        0.0006494061643652094,
+        0.010468112960298275,
+        0.0005706983650615585,
+        0.0016907303435866653,
+        0.0005060081826674588
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d16",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999928,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.442740310850482,
+        0.016579764951199116,
+        0.019910872744453564,
+        0.007147215152450087,
+        0.05200610210438361,
+        0.005342358276149577,
+        0.026398431423405627,
+        0.005008252595697398,
+        0.05637297706330661,
+        0.01734867435024318,
+        0.02010913735495445,
+        0.005911827707587253,
+        0.02678364110450055,
+        0.004859410729647867,
+        0.0209930166026015,
+        0.008193555345762061,
+        0.026014364861590103,
+        0.012702513995871387,
+        0.026763119763744243,
+        0.004639330775103202,
+        0.03178050051971228,
+        0.003876822319397643,
+        0.016677405398203907,
+        0.014228925148544356,
+        0.03316186155677281,
+        0.00941036521213827,
+        0.017196437559745845,
+        0.003608630236663307,
+        0.015400962318994623,
+        0.0036917174510373413,
+        0.04002404725573357,
+        0.005117447269922766
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d16",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999934,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4427403108504823,
+        0.01657976495119894,
+        0.01991087274445355,
+        0.007147215152450028,
+        0.05200610210438353,
+        0.0053423582761494256,
+        0.026398431423405574,
+        0.005008252595697426,
+        0.05637297706330644,
+        0.017348674350243187,
+        0.0201091373549545,
+        0.0059118277075872,
+        0.026783641104500714,
+        0.004859410729647895,
+        0.020993016602601482,
+        0.008193555345762077,
+        0.026014364861590044,
+        0.01270251399587135,
+        0.026763119763744087,
+        0.0046393307751032295,
+        0.03178050051971239,
+        0.0038768223193976934,
+        0.01667740539820379,
+        0.01422892514854431,
+        0.03316186155677294,
+        0.009410365212138271,
+        0.01719643755974584,
+        0.003608630236663283,
+        0.015400962318994722,
+        0.003691717451037397,
+        0.04002404725573356,
+        0.005117447269922789
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d16",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.9999999999999922,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.4427403108504821,
+        0.01657976495119892,
+        0.019910872744453616,
+        0.007147215152450091,
+        0.05200610210438346,
+        0.005342358276149412,
+        0.026398431423405647,
+        0.0050082525956974076,
+        0.05637297706330643,
+        0.017348674350243086,
+        0.020109137354954572,
+        0.005911827707587167,
+        0.026783641104500617,
+        0.00485941072964789,
+        0.020993016602601538,
+        0.008193555345762112,
+        0.026014364861590204,
+        0.01270251399587144,
+        0.0267631197637443,
+        0.004639330775103225,
+        0.031780500519712374,
+        0.003876822319397629,
+        0.01667740539820374,
+        0.01422892514854435,
+        0.03316186155677278,
+        0.009410365212138358,
+        0.017196437559745828,
+        0.003608630236663265,
+        0.015400962318994658,
+        0.0036917174510373556,
+        0.0400240472557336,
+        0.005117447269922713
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d16",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.44274031085048193,
+        0.016579764951199075,
+        0.01991087274445355,
+        0.007147215152450089,
+        0.052006102104383604,
+        0.0053423582761496086,
+        0.026398431423405602,
+        0.0050082525956974145,
+        0.05637297706330658,
+        0.017348674350243183,
+        0.02010913735495445,
+        0.005911827707587272,
+        0.026783641104500547,
+        0.004859410729647892,
+        0.020993016602601517,
+        0.008193555345762065,
+        0.026014364861590093,
+        0.012702513995871407,
+        0.026763119763744205,
+        0.0046393307751032165,
+        0.031780500519712304,
+        0.0038768223193976423,
+        0.016677405398203896,
+        0.01422892514854439,
+        0.03316186155677278,
+        0.009410365212138316,
+        0.01719643755974582,
+        0.0036086302366633055,
+        0.015400962318994642,
+        0.003691717451037371,
+        0.04002404725573359,
+        0.005117447269922799
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d32",
+      "family": "rb_style",
+      "framework": "reference",
+      "metadata": {
+        "density_trace": 0.9999999999999868,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.2265597996162795,
+        0.03164948608655005,
+        0.031089374657063833,
+        0.024057002192483964,
+        0.04435114306099067,
+        0.0261278437564568,
+        0.019393140672855535,
+        0.02314870140710521,
+        0.03978192927023901,
+        0.027073846346814045,
+        0.03033142662267423,
+        0.019043819892130855,
+        0.03655462598837149,
+        0.036432215851626815,
+        0.027361581878663718,
+        0.02156457742258795,
+        0.022206516192527746,
+        0.016716566691193813,
+        0.016601981875335153,
+        0.021865464527714536,
+        0.030613744492423222,
+        0.016166073266582807,
+        0.02473700150288244,
+        0.022509372630165256,
+        0.019922481406102276,
+        0.020940527114925667,
+        0.02691387487880002,
+        0.024559138643592535,
+        0.020295752735007166,
+        0.016055806739642058,
+        0.022853525667266398,
+        0.012521656912945215
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d32",
+      "family": "rb_style",
+      "framework": "qiskit",
+      "metadata": {
+        "density_trace": 0.9999999999999851,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.22655979961628023,
+        0.03164948608654995,
+        0.03108937465706371,
+        0.02405700219248395,
+        0.04435114306099072,
+        0.0261278437564568,
+        0.01939314067285551,
+        0.02314870140710525,
+        0.03978192927023902,
+        0.027073846346814093,
+        0.030331426622674285,
+        0.019043819892130835,
+        0.036554625988371406,
+        0.03643221585162689,
+        0.027361581878663586,
+        0.02156457742258792,
+        0.02220651619252773,
+        0.016716566691193785,
+        0.01660198187533508,
+        0.02186546452771456,
+        0.03061374449242317,
+        0.01616607326658266,
+        0.02473700150288237,
+        0.02250937263016522,
+        0.01992248140610219,
+        0.020940527114925667,
+        0.026913874878799957,
+        0.024559138643592486,
+        0.02029575273500715,
+        0.01605580673964203,
+        0.02285352566726656,
+        0.012521656912945165
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d32",
+      "family": "rb_style",
+      "framework": "cirq",
+      "metadata": {
+        "density_trace": 0.999999999999988,
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.2265597996162793,
+        0.03164948608654998,
+        0.031089374657063608,
+        0.024057002192484002,
+        0.044351143060990646,
+        0.026127843756456774,
+        0.019393140672855552,
+        0.023148701407105256,
+        0.039781929270239096,
+        0.027073846346814107,
+        0.030331426622674258,
+        0.019043819892130963,
+        0.036554625988371406,
+        0.036432215851626905,
+        0.027361581878663627,
+        0.021564577422587997,
+        0.022206516192527823,
+        0.01671656669119384,
+        0.016601981875335143,
+        0.02186546452771468,
+        0.030613744492423222,
+        0.016166073266582832,
+        0.02473700150288243,
+        0.022509372630165395,
+        0.01992248140610227,
+        0.020940527114925677,
+        0.02691387487880005,
+        0.024559138643592535,
+        0.02029575273500715,
+        0.016055806739642044,
+        0.02285352566726635,
+        0.01252165691294521
+      ]
+    },
+    {
+      "circuit_name": "rbstyle_n5_d32",
+      "family": "rb_style",
+      "framework": "pennylane",
+      "metadata": {
+        "physical_qubits": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "num_qubits": 5,
+      "physical_qubits": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "probabilities": [
+        0.2265597996162795,
+        0.03164948608655005,
+        0.031089374657063837,
+        0.024057002192483943,
+        0.04435114306099067,
+        0.026127843756456794,
+        0.019393140672855524,
+        0.02314870140710522,
+        0.03978192927023901,
+        0.027073846346814055,
+        0.03033142662267422,
+        0.019043819892130876,
+        0.03655462598837149,
+        0.0364322158516268,
+        0.027361581878663718,
+        0.021564577422587928,
+        0.022206516192527753,
+        0.016716566691193816,
+        0.016601981875335153,
+        0.02186546452771454,
+        0.03061374449242324,
+        0.0161660732665828,
+        0.02473700150288243,
+        0.022509372630165274,
+        0.01992248140610225,
+        0.020940527114925674,
+        0.026913874878800027,
+        0.02455913864359253,
+        0.020295752735007177,
+        0.016055806739642076,
+        0.022853525667266394,
+        0.012521656912945222
+      ]
+    }
+  ],
+  "summary": {
+    "backend_count": 2,
+    "data_classification": "Packaged Qiskit fake-backend calibrations plus deterministic fixtures; no live hardware claim.",
+    "frameworks_completed": [
+      "qiskit",
+      "cirq",
+      "pennylane"
+    ],
+    "frameworks_requested": [
+      "qiskit",
+      "cirq",
+      "pennylane"
+    ],
+    "integrity_statement": "No result is labeled as live hardware evidence unless its snapshot provenance identifies the IBM Quantum Platform. Committed demo snapshots are synthetic fixtures and are retained only so CI and autonomous agents can verify the entire pipeline without credentials.",
+    "mode": "auto",
+    "primary_snapshot": "snapshots/qiskit_fake/fake_manila/2024-05-27T15-27-23-03-00.json",
+    "profile": "full",
+    "run_timestamp": "2026-07-14T08:35:46.232203Z",
+    "snapshot_count": 3,
+    "status": "OFFLINE_PILOT_VERIFIED_WITH_CALIBRATION_ARTIFACTS"
+  },
+  "validation": {
+    "errors": [],
+    "warnings": [
+      {
+        "code": "zero_gate_duration",
+        "message": "Zero duration is acceptable for virtual gates but produces no relaxation.",
+        "path": "gates[5].duration_ns",
+        "severity": "warning"
+      },
+      {
+        "code": "zero_gate_duration",
+        "message": "Zero duration is acceptable for virtual gates but produces no relaxation.",
+        "path": "gates[6].duration_ns",
+        "severity": "warning"
+      },
+      {
+        "code": "zero_gate_duration",
+        "message": "Zero duration is acceptable for virtual gates but produces no relaxation.",
+        "path": "gates[7].duration_ns",
+        "severity": "warning"
+      },
+      {
+        "code": "zero_gate_duration",
+        "message": "Zero duration is acceptable for virtual gates but produces no relaxation.",
+        "path": "gates[8].duration_ns",
+        "severity": "warning"
+      },
+      {
+        "code": "zero_gate_duration",
+        "message": "Zero duration is acceptable for virtual gates but produces no relaxation.",
+        "path": "gates[9].duration_ns",
+        "severity": "warning"
+      }
+    ]
+  }
+}

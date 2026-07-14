@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use NoiseVault or its archived calibration snapshots, cite this software and the specific snapshot hash."
+title: "NoiseVault"
+version: 0.1.0
+authors:
+  - family-names: "Goyal"
+    given-names: "Dev D."
+license: Apache-2.0
+date-released: 2026-07-14

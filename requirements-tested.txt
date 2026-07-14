@@ -1,0 +1,19 @@
+# Versions validated while assembling the NoiseVault pilot packet.
+# This is a tested reference, not a mandatory cross-platform lock file.
+numpy==2.5.1
+pydantic==2.13.4
+typer==0.26.8
+rich==14.3.4
+qiskit==2.5.0
+qiskit-aer==0.17.2
+qiskit-ibm-runtime==0.47.0
+cirq-core==1.6.1
+PennyLane==0.45.1
+scipy==1.18.0
+matplotlib==3.11.0
+pandas==2.3.3
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.15.21
+build==1.5.1
+twine==6.2.0
