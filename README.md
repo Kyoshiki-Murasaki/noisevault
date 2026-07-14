@@ -2,7 +2,19 @@
 
 NoiseVault is a pilot implementation of an open, versioned archive of calibrated quantum-device noise models. A dated JSON snapshot can be validated, subsetted, converted into Qiskit Aer, Cirq, and PennyLane noise representations, and exercised against one common benchmark suite.
 
-This repository is deliberately structured for autonomous execution by Claude Cowork or another coding agent. Begin with [`START_HERE.md`](START_HERE.md). The agent should begin with [`COWORK_TASK.md`](COWORK_TASK.md), run the bootstrap script, repair any dependency/API drift it encounters, execute the complete pilot, and leave a clean final report.
+## In plain terms
+
+Quantum computers are noisy, the noise is different on every device, and it changes from week to week. That creates three practical problems:
+
+- **Lost history.** When a device is retired or recalibrated, the record of exactly how noisy it was on a given day is usually lost with it. Researchers have resorted to hand-copying calibration numbers into paper appendices just to keep a record.
+- **No shared drift record.** Device error rates can drift by 10x or more over a few months. Studies that need this history currently have to collect it themselves, one paper at a time, because no public archive exists.
+- **No shared format.** Qiskit, Cirq, and PennyLane each describe device noise in their own way. A noise model built for one toolkit can't be reused in another, so the same model gets rebuilt by hand for each one.
+
+NoiseVault is an open file format plus a set of converters that address all three: a dated snapshot of a device's calibration data, in a format any of the three toolkits can read.
+
+This is not a new idea from nothing — Qiskit already ships a handful of frozen calibration snapshots for testing (the "fake backend" system this pilot uses as its data source). But those are single, often years-old snapshots built into the Qiskit package itself, not a dated, versioned archive, and they only work inside Qiskit. Building a noise model directly from a live device (`NoiseModel.from_backend()`) needs a live connection and, again, only works in Qiskit. Neither approach preserves history, and neither is portable across toolkits.
+
+**Current status:** this repository is a working pilot. The file format, all three converters, and four validation checks (see "Experiment definitions" below) are implemented and passing. Everything so far has run in simulation, using one of Qiskit's packaged test calibration files — not a live device. Validating against real quantum hardware is the natural next step and has not happened yet.
 
 ## What is already implemented
 
@@ -19,8 +31,8 @@ This repository is deliberately structured for autonomous execution by Claude Co
 ## One-command execution
 
 ```bash
-unzip noisevault-pilot.zip
-cd noisevault-pilot
+git clone https://github.com/Kyoshiki-Murasaki/noisevault.git
+cd noisevault
 bash scripts/bootstrap.sh
 ```
 
@@ -32,7 +44,6 @@ experiments/results/pilot_results.json
 experiments/figures/cross_framework_tvd.png
 experiments/figures/ghz_fidelity.png
 experiments/figures/drift_comparison.png
-reports/RESULTS_FOR_INTERPRETATION.md   # created by Cowork after the final run
 ```
 
 ## IBM authentication
@@ -88,7 +99,7 @@ pennylane_conversion = to_pennylane(snapshot, physical_qubits)
 
 A packaged Qiskit fake backend is imported into the NoiseVault schema. Qiskit Aer's native `NoiseModel.from_backend()` is compared with the snapshot-reconstructed model on circuits already expressed in the backend basis. Readout is disabled for this density-matrix comparison. The target maximum TVD is `0.01`.
 
-This experiment intentionally uses prefix qubits because Aer noise models attach errors to absolute qargs. The code does not make undocumented private-object mutations to remap arbitrary physical qubits.
+This experiment uses a fixed, ordered set of qubits because Aer attaches noise to specific physical qubit positions. The code deliberately avoids relying on undocumented internals to remap arbitrary qubits onto that set.
 
 ### B. Cross-framework agreement
 
@@ -113,13 +124,10 @@ src/noisevault/              package code
   runners/                   exact framework simulations
 snapshots/                   the versioned archive
 experiments/                 generated report, results, and figures
-reports/                     report templates and final handoff
-scripts/                     autonomous bootstrap and pilot entry points
+scripts/                     bootstrap and pilot entry points
 tests/                       schema, channel, metric, selection, and runner tests
 docs/                        schema, methodology, limitations, and source plan
 .github/workflows/           CI and scheduled harvesting templates
-.claude/CLAUDE.md            persistent instructions for Claude Cowork
-COWORK_TASK.md                autonomous acceptance criteria
 ```
 
 ## Scientific limitations

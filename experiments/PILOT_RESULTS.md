@@ -11,7 +11,7 @@ Hardware job ran: **no**
 
 ## Scope and integrity statement
 
-No result is labeled as live hardware evidence unless its snapshot provenance identifies the IBM Quantum Platform. Committed demo snapshots are synthetic fixtures and are retained only so CI and autonomous agents can verify the entire pipeline without credentials.
+No result is labeled as live hardware evidence unless its snapshot provenance identifies the IBM Quantum Platform. Committed demo snapshots are synthetic fixtures, kept only so the full pipeline can be tested — in CI or locally — without needing real credentials.
 
 ## Headline numbers
 

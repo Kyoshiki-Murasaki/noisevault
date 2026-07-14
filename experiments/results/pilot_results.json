@@ -6156,7 +6156,7 @@
       "pennylane"
     ],
     "hardware_job_ran": false,
-    "integrity_statement": "No result is labeled as live hardware evidence unless its snapshot provenance identifies the IBM Quantum Platform. Committed demo snapshots are synthetic fixtures and are retained only so CI and autonomous agents can verify the entire pipeline without credentials.",
+    "integrity_statement": "No result is labeled as live hardware evidence unless its snapshot provenance identifies the IBM Quantum Platform. Committed demo snapshots are synthetic fixtures, kept only so the full pipeline can be tested, in CI or locally, without needing real credentials.",
     "live_ibm_authentication_available": false,
     "live_ibm_snapshot_count": 0,
     "live_snapshots_harvested_this_run": 0,

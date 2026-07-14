@@ -8,7 +8,7 @@ For every ideal operation, NoiseVault inserts:
 2. Independent zero-temperature amplitude relaxation and pure dephasing on each participating qubit for the archived gate duration.
 3. Asymmetric classical readout confusion after the complete circuit.
 
-For a reported total average infidelity `e`, Hilbert-space dimension `d`, and relaxation fidelity `F_relax`, the residual depolarizing strength is `lambda = d*(e - (1-F_relax))/(d*F_relax - 1)`, clipped to the completely-positive bound. This follows Qiskit Aer's backend-noise construction. If relaxation alone already exceeds the reported error, no depolarization is added and the relaxation floor is retained and reported. The earlier pilot baseline incorrectly assigned the full `e` to depolarization before adding relaxation; the autonomous run corrected that double counting.
+For a reported total average infidelity `e`, Hilbert-space dimension `d`, and relaxation fidelity `F_relax`, the residual depolarizing strength is `lambda = d*(e - (1-F_relax))/(d*F_relax - 1)`, clipped to the completely-positive bound. This follows Qiskit Aer's backend-noise construction. If relaxation alone already exceeds the reported error, no depolarization is added and the relaxation floor is retained and reported. An earlier version of this pilot incorrectly assigned the full `e` to depolarization before adding relaxation, which double-counted the source error. That has since been corrected.
 
 For relaxation, amplitude damping supplies the `exp(-t/(2*T1))` coherence component. The residual pure-dephasing rate is `max(0, 1/T2 - 1/(2*T1))`. A phase-flip Kraus channel is selected so its off-diagonal attenuation equals the residual coherence factor.
 
