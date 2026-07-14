@@ -170,10 +170,11 @@ device observation. The two demo entries are deterministic synthetic fixtures.
 
 ## Independent reviews
 
-Independent subagents performed code, scientific-method, and baseline
-result-consistency reviews. Their substantive findings are the defects and fixes
-recorded above. A final saved-vector recomputation was then performed by the
-standalone clean-room script.
+Independent subagents performed code, scientific-method, and result-consistency
+reviews. Their substantive findings are the defects and fixes recorded above.
+All three final closure reviews reported no remaining code, scientific, figure,
+or saved-result blocker. A final saved-vector recomputation was also performed by
+the standalone clean-room script.
 
 ## Remaining limitation/blocker
 
@@ -181,4 +182,3 @@ The only external evidence blocker is unavailable IBM Quantum authentication:
 there are zero live IBM calibration snapshots and no hardware validation point.
 The offline packaged-calibration result is technically verified, but it cannot
 support claims about current live-device fidelity or empirical drift.
-

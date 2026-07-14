@@ -37,9 +37,9 @@ supplied repository at baseline.
 - [x] Visually inspect every final generated figure and cross-check plotted values,
   axes, legends, and labels against the final JSON.
 - [x] Reconcile all independent code, scientific, and result-consistency reviews.
-- [~] Populate `reports/AUTONOMOUS_RUN_LOG.md`, `reports/FINAL_HANDOFF.md`, and
+- [x] Populate `reports/AUTONOMOUS_RUN_LOG.md`, `reports/FINAL_HANDOFF.md`, and
   `reports/RESULTS_FOR_INTERPRETATION.md` with final evidence and no placeholders.
-- [ ] Build/check release artifacts, scan tracked content and task-created history
+- [x] Build/check release artifacts, scan tracked content and task-created history
   for secrets, commit coherent changes, and leave a clean worktree.
 
 ## Immutable integrity constraints
