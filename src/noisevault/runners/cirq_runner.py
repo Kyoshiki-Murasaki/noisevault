@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..adapters.cirq_adapter import to_cirq
 from ..benchmarks import CircuitSpec
-from ..channels import channel_sequence_for_operation
 from ..readout import apply_readout_error
 from .common import SimulationResult
 
@@ -30,14 +30,8 @@ def run_cirq(snapshot, circuit: CircuitSpec, physical_qubits: list[int]) -> Simu
         else:
             raise ValueError(f"Unsupported operation {operation.name}")
 
-        physical_wires = tuple(physical_qubits[wire] for wire in operation.wires)
-        for channel in channel_sequence_for_operation(
-            snapshot, operation.name, operation.wires, physical_wires
-        ):
-            gate = cirq.KrausChannel(kraus_ops=list(channel.kraus))
-            moments.append(gate.on(*(qubits[wire] for wire in channel.wires)))
-
-    cirq_circuit = cirq.Circuit(moments)
+    conversion = to_cirq(snapshot, physical_qubits)
+    cirq_circuit = cirq.Circuit(moments).with_noise(conversion.noise_model)
     simulator = cirq.DensityMatrixSimulator(dtype=np.complex128)
     simulation = simulator.simulate(cirq_circuit, qubit_order=qubits)
     rho = np.asarray(simulation.final_density_matrix, dtype=complex)
@@ -47,5 +41,9 @@ def run_cirq(snapshot, circuit: CircuitSpec, physical_qubits: list[int]) -> Simu
         framework="cirq",
         circuit_name=circuit.name,
         probabilities=probs,
-        metadata={"physical_qubits": physical_qubits, "density_trace": float(np.trace(rho).real)},
+        metadata={
+            "physical_qubits": physical_qubits,
+            "density_trace": float(np.trace(rho).real),
+            "converter": "noisevault.adapters.to_cirq",
+        },
     )

@@ -19,7 +19,12 @@ def main() -> int:
     args = parser.parse_args()
     result = run_pilot(ROOT, mode=args.mode, profile=args.profile)
     print(json.dumps(result["summary"], indent=2))
-    return 0 if result["summary"]["status"] != "PARTIAL" else 2
+    verified = {
+        "PILOT_VERIFIED_WITH_LIVE_CALIBRATION_METADATA",
+        "OFFLINE_PILOT_VERIFIED_WITH_CALIBRATION_ARTIFACTS",
+        "OFFLINE_PIPELINE_VERIFIED",
+    }
+    return 0 if result["summary"]["status"] in verified else 2
 
 
 if __name__ == "__main__":

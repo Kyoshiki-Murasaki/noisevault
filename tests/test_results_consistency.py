@@ -32,6 +32,17 @@ def test_committed_results_are_internally_consistent(root):
     assert float(np.mean(values)) == pytest.approx(
         data["experiment_b"]["mean_pairwise_tvd"], abs=1e-15
     )
+    drift_values = []
+    for row in data["experiment_d"]["rows"]:
+        older = np.asarray(row["older_probabilities"], dtype=float)
+        newer = np.asarray(row["newer_probabilities"], dtype=float)
+        recomputed = total_variation_distance(older, newer)
+        assert recomputed == pytest.approx(row["tvd"], abs=1e-15)
+        drift_values.append(recomputed)
+    assert drift_values
+    assert max(drift_values) == pytest.approx(
+        data["experiment_d"]["simulation_tvd"], abs=1e-15
+    )
     report = (root / "experiments/PILOT_RESULTS.md").read_text(encoding="utf-8")
     assert data["summary"]["status"] in report
     assert data["experiment_d"]["pair_classification"] in report

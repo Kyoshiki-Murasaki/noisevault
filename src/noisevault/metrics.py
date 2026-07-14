@@ -7,6 +7,10 @@ def normalize_probabilities(values: np.ndarray | list[float]) -> np.ndarray:
     probs = np.asarray(values, dtype=float)
     if probs.ndim != 1:
         raise ValueError("Probability vector must be one-dimensional.")
+    if not np.all(np.isfinite(probs)):
+        raise ValueError("Probability vector must contain only finite values.")
+    if np.any(probs < -1e-12):
+        raise ValueError("Probability vector contains materially negative values.")
     probs = np.clip(probs, 0.0, None)
     total = float(probs.sum())
     if total <= 0:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..adapters.qiskit_adapter import to_qiskit_aer
 from ..benchmarks import CircuitSpec
-from ..channels import channel_sequence_for_operation
 from ..readout import apply_readout_error
 from .common import SimulationResult
 
@@ -35,7 +35,6 @@ def _canonicalize_qiskit_diagonal(diagonal: np.ndarray, num_qubits: int) -> np.n
 def run_qiskit(snapshot, circuit: CircuitSpec, physical_qubits: list[int]) -> SimulationResult:
     try:
         from qiskit import QuantumCircuit
-        from qiskit.quantum_info import Kraus
         from qiskit_aer import AerSimulator
     except ImportError as exc:
         raise RuntimeError("Qiskit pilot dependencies are not installed.") from exc
@@ -43,14 +42,11 @@ def run_qiskit(snapshot, circuit: CircuitSpec, physical_qubits: list[int]) -> Si
     qc = QuantumCircuit(circuit.num_qubits)
     for operation in circuit.operations:
         _append_ideal(qc, operation)
-        physical_wires = tuple(physical_qubits[wire] for wire in operation.wires)
-        for channel in channel_sequence_for_operation(
-            snapshot, operation.name, operation.wires, physical_wires
-        ):
-            instruction = Kraus(list(channel.kraus)).to_instruction()
-            qc.append(instruction, list(channel.wires))
     qc.save_density_matrix()
-    result = AerSimulator(method="density_matrix").run(qc).result()
+    conversion = to_qiskit_aer(snapshot, physical_qubits, include_readout=False)
+    result = AerSimulator(
+        method="density_matrix", noise_model=conversion.noise_model
+    ).run(qc).result()
     rho = np.asarray(result.data(0)["density_matrix"], dtype=complex)
     diagonal = np.real_if_close(np.diag(rho)).real
     probs = _canonicalize_qiskit_diagonal(diagonal, circuit.num_qubits)
@@ -59,5 +55,9 @@ def run_qiskit(snapshot, circuit: CircuitSpec, physical_qubits: list[int]) -> Si
         framework="qiskit",
         circuit_name=circuit.name,
         probabilities=probs,
-        metadata={"physical_qubits": physical_qubits, "density_trace": float(np.trace(rho).real)},
+        metadata={
+            "physical_qubits": physical_qubits,
+            "density_trace": float(np.trace(rho).real),
+            "converter": "noisevault.adapters.to_qiskit_aer",
+        },
     )

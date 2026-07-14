@@ -30,6 +30,10 @@ def import_ibm_calibration_csv(
                 return value
         return None
 
+    def optional_float(row, *names):
+        value = first(row, *names)
+        return None if value is None else float(value)
+
     qubits: dict[int, QubitCalibration] = {}
     gates: list[GateCalibration] = []
     coupling: set[tuple[int, int]] = set()
@@ -44,8 +48,10 @@ def import_ibm_calibration_csv(
                     GateCalibration(
                         name=str(gate_name).lower(),
                         qubits=indices,
-                        error=float(first(row, "gate_error", "error") or 0.0),
-                        duration_ns=float(first(row, "gate_length_ns", "duration_ns", "gate_length") or 0.0),
+                        error=optional_float(row, "gate_error", "error"),
+                        duration_ns=optional_float(
+                            row, "gate_length_ns", "duration_ns", "gate_length"
+                        ),
                     )
                 )
                 if len(indices) == 2:
@@ -56,12 +62,12 @@ def import_ibm_calibration_csv(
         index = int(qubit_raw)
         qubits[index] = QubitCalibration(
             index=index,
-            t1_us=float(first(row, "t1_us", "t1") or 0.0) or None,
-            t2_us=float(first(row, "t2_us", "t2") or 0.0) or None,
-            frequency_ghz=float(first(row, "frequency_ghz", "frequency") or 0.0) or None,
-            readout_error=float(first(row, "readout_error") or 0.0),
-            prob_meas0_prep1=float(first(row, "prob_meas0_prep1", "p0_given_1") or 0.0),
-            prob_meas1_prep0=float(first(row, "prob_meas1_prep0", "p1_given_0") or 0.0),
+            t1_us=optional_float(row, "t1_us", "t1"),
+            t2_us=optional_float(row, "t2_us", "t2"),
+            frequency_ghz=optional_float(row, "frequency_ghz", "frequency"),
+            readout_error=optional_float(row, "readout_error"),
+            prob_meas0_prep1=optional_float(row, "prob_meas0_prep1", "p0_given_1"),
+            prob_meas1_prep0=optional_float(row, "prob_meas1_prep0", "p1_given_0"),
         )
     if not qubits:
         raise ValueError("No qubit calibration rows could be identified in the CSV.")
@@ -69,14 +75,26 @@ def import_ibm_calibration_csv(
     for index in range(count):
         qubits.setdefault(index, QubitCalibration(index=index, operational=False))
     raw = path.read_text(encoding="utf-8-sig")
+    archive_timestamp = captured_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
     return DeviceNoiseSnapshot(
         provider="ibm_csv",
         backend_name=backend_name,
-        captured_at=captured_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        captured_at=archive_timestamp,
         num_qubits=count,
         coupling_map=[list(edge) for edge in sorted(coupling)],
         basis_gates=sorted({gate.name for gate in gates}),
         qubits=[qubits[i] for i in range(count)],
         gates=gates,
-        provenance=Provenance(source=f"IBM calibration CSV: {path.name}", raw_hash=raw_payload_hash(raw)),
+        provenance=Provenance(
+            source=f"IBM calibration CSV: {path.name}",
+            raw_hash=raw_payload_hash(raw),
+            source_timestamp=captured_at,
+            notes=(
+                []
+                if captured_at is not None
+                else [
+                    "Calibration/source timestamp was unavailable; captured_at is the import time and this snapshot is ineligible for temporal-drift evidence."
+                ]
+            ),
+        ),
     )

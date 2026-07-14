@@ -26,8 +26,12 @@ Null means unavailable. Null never means zero. Raw unphysical values are preserv
 
 A zero gate duration is allowed for virtual operations such as `rz`. Missing duration invokes a documented conservative pilot default at conversion time; this is recorded as an approximation, not source data.
 
+Two-qubit `qubits` order is semantic. Converters and subset selection do not assume that `[control, target]` can borrow calibration data from `[target, control]`. A requested directed entangler without a matching ordered calibration is rejected.
+
 ## Provenance and hashing
 
 `raw_hash` hashes the provider payload before normalization. It is not a signature and does not establish provider authenticity. It establishes that two NoiseVault imports used byte-equivalent normalized source content.
 
 Each archived filename includes a full timestamp rather than only a date so intraday calibration changes cannot overwrite one another.
+
+`captured_at` records the archive/import event. Temporal-drift experiments require a distinct timezone-qualified `provenance.source_timestamp` that identifies the underlying calibration state; an undated CSV import cannot use its import time as a calibration date.

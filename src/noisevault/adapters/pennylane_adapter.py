@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..channels import channel_sequence_for_operation
+from ..channels import CalibrationUnavailableError, channel_sequence_for_operation
 from ..models import DeviceNoiseSnapshot
 
 
@@ -41,13 +41,21 @@ def to_pennylane(snapshot: DeviceNoiseSnapshot, physical_qubits: list[int]) -> P
                 if a != b
             ]
         for logical_wires in wire_tuples:
-            condition = qml.noise.op_eq(operation_type) & qml.noise.wires_eq(logical_wires)
             physical_wires = tuple(logical_to_physical[wire] for wire in logical_wires)
-            channels = channel_sequence_for_operation(
-                snapshot, name, logical_wires, physical_wires
-            )
+            try:
+                channels = channel_sequence_for_operation(
+                    snapshot, name, logical_wires, physical_wires
+                )
+            except CalibrationUnavailableError:
+                continue
             if not channels:
                 continue
+
+            ordered_wires = qml.BooleanFn(
+                lambda op, *, _wires=logical_wires: tuple(op.wires) == _wires,
+                name=f"ordered_wires_eq_{logical_wires}",
+            )
+            condition = qml.noise.op_eq(operation_type) & ordered_wires
 
             def noise_fn(op, *, _channels=channels, **kwargs):
                 del op, kwargs
@@ -58,6 +66,7 @@ def to_pennylane(snapshot: DeviceNoiseSnapshot, physical_qubits: list[int]) -> P
 
     notes = [
         "The returned qml.NoiseModel inserts QubitChannel operations with the canonical Kraus representation.",
+        "Directed multi-qubit operations use order-sensitive wire predicates.",
         "Readout error remains common post-processing because PennyLane's cross-conversion support does not uniformly preserve readout errors.",
     ]
     return PennyLaneConversion(qml.NoiseModel(model_map), logical_to_physical, notes)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from math import isfinite
 
 from .models import DeviceNoiseSnapshot
 
@@ -35,8 +36,24 @@ class ValidationReport:
 
 
 def _check_probability(report: ValidationReport, value: float | None, path: str) -> None:
-    if value is not None and not 0.0 <= value <= 1.0:
+    if value is not None and (not isfinite(value) or not 0.0 <= value <= 1.0):
         report.add("error", "probability_out_of_range", path, f"Expected [0, 1], got {value}.")
+
+
+def _check_finite(report: ValidationReport, value: float | None, path: str) -> bool:
+    if value is not None and not isfinite(value):
+        report.add("error", "nonfinite_value", path, f"Expected a finite value, got {value}.")
+        return False
+    return True
+
+
+def _check_timestamp(report: ValidationReport, value: str, path: str) -> None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            report.add("error", "naive_timestamp", path, "Timestamp must include a timezone.")
+    except ValueError:
+        report.add("error", "invalid_timestamp", path, "Timestamp is not ISO-8601.")
 
 
 def validate_snapshot(snapshot: DeviceNoiseSnapshot) -> ValidationReport:
@@ -51,12 +68,11 @@ def validate_snapshot(snapshot: DeviceNoiseSnapshot) -> ValidationReport:
         )
     if snapshot.num_qubits <= 0:
         report.add("error", "invalid_qubit_count", "num_qubits", "num_qubits must be positive.")
-    try:
-        parsed = datetime.fromisoformat(snapshot.captured_at.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            report.add("warning", "naive_timestamp", "captured_at", "Timestamp has no timezone.")
-    except ValueError:
-        report.add("error", "invalid_timestamp", "captured_at", "Timestamp is not ISO-8601.")
+    _check_timestamp(report, snapshot.captured_at, "captured_at")
+    if snapshot.provenance.source_timestamp is not None:
+        _check_timestamp(
+            report, snapshot.provenance.source_timestamp, "provenance.source_timestamp"
+        )
 
     indices = [qubit.index for qubit in snapshot.qubits]
     if len(indices) != len(set(indices)):
@@ -65,7 +81,7 @@ def validate_snapshot(snapshot: DeviceNoiseSnapshot) -> ValidationReport:
     actual = set(indices)
     if actual != expected:
         report.add(
-            "warning",
+            "error",
             "incomplete_qubit_table",
             "qubits",
             f"Expected indices {min(expected, default=0)}..{max(expected, default=0)}; missing={sorted(expected-actual)}, extra={sorted(actual-expected)}.",
@@ -73,12 +89,26 @@ def validate_snapshot(snapshot: DeviceNoiseSnapshot) -> ValidationReport:
 
     for i, qubit in enumerate(snapshot.qubits):
         path = f"qubits[{i}]"
-        if qubit.t1_us is not None and qubit.t1_us <= 0:
+        t1_finite = _check_finite(report, qubit.t1_us, f"{path}.t1_us")
+        t2_finite = _check_finite(report, qubit.t2_us, f"{path}.t2_us")
+        frequency_finite = _check_finite(
+            report, qubit.frequency_ghz, f"{path}.frequency_ghz"
+        )
+        if t1_finite and qubit.t1_us is not None and qubit.t1_us <= 0:
             report.add("error", "nonpositive_t1", f"{path}.t1_us", "T1 must be positive.")
-        if qubit.t2_us is not None and qubit.t2_us <= 0:
+        if t2_finite and qubit.t2_us is not None and qubit.t2_us <= 0:
             report.add("error", "nonpositive_t2", f"{path}.t2_us", "T2 must be positive.")
+        if frequency_finite and qubit.frequency_ghz is not None and qubit.frequency_ghz <= 0:
+            report.add(
+                "error",
+                "nonpositive_frequency",
+                f"{path}.frequency_ghz",
+                "Frequency must be positive.",
+            )
         if (
-            qubit.t1_us is not None
+            t1_finite
+            and t2_finite
+            and qubit.t1_us is not None
             and qubit.t2_us is not None
             and qubit.t2_us > 2.0 * qubit.t1_us
         ):
@@ -105,7 +135,8 @@ def validate_snapshot(snapshot: DeviceNoiseSnapshot) -> ValidationReport:
         if not set(gate.qubits).issubset(valid_indices):
             report.add("error", "gate_qubit_out_of_range", f"{path}.qubits", str(gate.qubits))
         _check_probability(report, gate.error, f"{path}.error")
-        if gate.duration_ns is not None and gate.duration_ns < 0:
+        duration_finite = _check_finite(report, gate.duration_ns, f"{path}.duration_ns")
+        if duration_finite and gate.duration_ns is not None and gate.duration_ns < 0:
             report.add("error", "negative_gate_duration", f"{path}.duration_ns", "Duration cannot be negative.")
         elif gate.duration_ns == 0:
             report.add(

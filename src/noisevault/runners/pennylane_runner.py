@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..adapters.pennylane_adapter import to_pennylane
 from ..benchmarks import CircuitSpec
-from ..channels import channel_sequence_for_operation
 from ..readout import apply_readout_error
 from .common import SimulationResult
 
@@ -32,18 +32,18 @@ def run_pennylane(snapshot, circuit: CircuitSpec, physical_qubits: list[int]) ->
             else:
                 raise ValueError(f"Unsupported operation {operation.name}")
 
-            physical_wires = tuple(physical_qubits[wire] for wire in operation.wires)
-            for channel in channel_sequence_for_operation(
-                snapshot, operation.name, operation.wires, physical_wires
-            ):
-                qml.QubitChannel(list(channel.kraus), wires=list(channel.wires))
         return qml.probs(wires=range(circuit.num_qubits))
 
-    probs = np.asarray(qnode(), dtype=float)
+    conversion = to_pennylane(snapshot, physical_qubits)
+    noisy_qnode = qml.add_noise(qnode, conversion.noise_model)
+    probs = np.asarray(noisy_qnode(), dtype=float)
     probs = apply_readout_error(probs, snapshot, physical_qubits)
     return SimulationResult(
         framework="pennylane",
         circuit_name=circuit.name,
         probabilities=probs,
-        metadata={"physical_qubits": physical_qubits},
+        metadata={
+            "physical_qubits": physical_qubits,
+            "converter": "noisevault.adapters.to_pennylane",
+        },
     )

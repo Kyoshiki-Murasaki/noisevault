@@ -75,7 +75,12 @@ def run(
 ) -> None:
     result = run_pilot(root, mode=mode, profile=profile)
     console.print_json(json.dumps(result["summary"]))
-    raise typer.Exit(0 if result["summary"]["status"] != "PARTIAL" else 2)
+    verified = {
+        "PILOT_VERIFIED_WITH_LIVE_CALIBRATION_METADATA",
+        "OFFLINE_PILOT_VERIFIED_WITH_CALIBRATION_ARTIFACTS",
+        "OFFLINE_PIPELINE_VERIFIED",
+    }
+    raise typer.Exit(0 if result["summary"]["status"] in verified else 2)
 
 
 if __name__ == "__main__":

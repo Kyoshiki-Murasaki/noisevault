@@ -4,7 +4,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .adapters.qiskit_adapter import to_qiskit_aer
+from .adapters.qiskit_adapter import _sequence_to_quantum_error, to_qiskit_aer
+from .channels import channel_sequence_for_operation, find_gate_calibration
 from .metrics import total_variation_distance
 
 
@@ -15,6 +16,7 @@ class NativeRoundtripResult:
     num_qubits: int
     circuits: list[dict[str, object]]
     max_tvd: float | None
+    calibration_checks: list[dict[str, object]]
     notes: list[str]
 
 
@@ -45,6 +47,7 @@ def compare_native_aer(backend, snapshot, num_qubits: int = 2) -> NativeRoundtri
             num_qubits,
             [],
             None,
+            [],
             [f"Qiskit dependencies unavailable: {exc}"],
         )
 
@@ -55,25 +58,32 @@ def compare_native_aer(backend, snapshot, num_qubits: int = 2) -> NativeRoundtri
             num_qubits,
             [],
             None,
+            [],
             ["Backend has fewer qubits than requested."],
         )
     prefix = list(range(num_qubits))
-    edges = {tuple(edge) for edge in snapshot.coupling_map}
-    if num_qubits > 1 and not all(
-        (i, i + 1) in edges or (i + 1, i) in edges for i in range(num_qubits - 1)
-    ):
-        return NativeRoundtripResult(
-            "skipped",
-            _backend_name(backend),
-            num_qubits,
-            [],
-            None,
-            ["The prefix qubits are not connected; native Aer qarg remapping is intentionally not guessed."],
-        )
-
     basis = set(snapshot.basis_gates)
-    one_gate = "sx" if "sx" in basis else "x" if "x" in basis else None
-    two_gate = next((name for name in ("cx", "ecr", "cz") if name in basis), None)
+    one_gate = next(
+        (
+            name
+            for name in ("sx", "x")
+            if name in basis
+            and all(find_gate_calibration(snapshot, name, (q,)) is not None for q in prefix)
+        ),
+        None,
+    )
+    two_gate = next(
+        (
+            name
+            for name in ("cx", "ecr", "cz")
+            if name in basis
+            and all(
+                find_gate_calibration(snapshot, name, (q, q + 1)) is not None
+                for q in range(num_qubits - 1)
+            )
+        ),
+        None,
+    )
     if one_gate is None or (num_qubits > 1 and two_gate is None):
         return NativeRoundtripResult(
             "skipped",
@@ -81,6 +91,7 @@ def compare_native_aer(backend, snapshot, num_qubits: int = 2) -> NativeRoundtri
             num_qubits,
             [],
             None,
+            [],
             [f"Unsupported basis for native comparison: {sorted(basis)}"],
         )
 
@@ -99,7 +110,51 @@ def compare_native_aer(backend, snapshot, num_qubits: int = 2) -> NativeRoundtri
             num_qubits,
             [],
             None,
+            [],
             [f"Could not construct noise models: {type(exc).__name__}: {exc}"],
+        )
+
+    from qiskit.quantum_info import average_gate_fidelity
+
+    calibration_checks = []
+    check_specs = [(one_gate, (q,)) for q in prefix]
+    if "rz" in basis:
+        check_specs.extend(("rz", (q,)) for q in prefix)
+    if two_gate is not None:
+        check_specs.extend((two_gate, (q, q + 1)) for q in range(num_qubits - 1))
+    for name, physical_qargs in check_specs:
+        calibration = find_gate_calibration(snapshot, name, physical_qargs)
+        if calibration is None or calibration.error is None:
+            continue
+        logical_qargs = physical_qargs
+        sequence = channel_sequence_for_operation(
+            snapshot, name, logical_qargs, physical_qargs
+        )
+        reconstructed_error = _sequence_to_quantum_error(sequence, logical_qargs)
+        reconstructed_infidelity = (
+            0.0
+            if reconstructed_error is None
+            else 1.0 - float(average_gate_fidelity(reconstructed_error.to_quantumchannel()))
+        )
+        relaxation_only = [channel for channel in sequence if channel.kind == "thermal_relaxation"]
+        relaxation_error = _sequence_to_quantum_error(relaxation_only, logical_qargs)
+        relaxation_infidelity = (
+            0.0
+            if relaxation_error is None
+            else 1.0 - float(average_gate_fidelity(relaxation_error.to_quantumchannel()))
+        )
+        native_model_target = max(float(calibration.error), relaxation_infidelity)
+        calibration_checks.append(
+            {
+                "gate": name,
+                "qargs": list(physical_qargs),
+                "reported_avg_gate_error": float(calibration.error),
+                "relaxation_avg_gate_error": relaxation_infidelity,
+                "reported_target_reachable": calibration.error >= relaxation_infidelity,
+                "native_model_target_avg_gate_error": native_model_target,
+                "reconstructed_avg_gate_error": reconstructed_infidelity,
+                "absolute_difference": abs(reconstructed_infidelity - native_model_target),
+            }
         )
 
     circuits = []
@@ -142,8 +197,11 @@ def compare_native_aer(backend, snapshot, num_qubits: int = 2) -> NativeRoundtri
         num_qubits,
         circuits,
         max_tvd,
+        calibration_checks,
         [
             "Comparison uses prefix qubits so native and reconstructed qargs align without private NoiseModel remapping.",
+            "Every entangling operation uses an exact direction-aligned calibration.",
+            "Residual depolarization is solved after relaxation so the composed channel targets the archived average gate error.",
             "Readout error is disabled in both models; Experiment B/D apply readout through the shared exact post-processor.",
         ],
     )

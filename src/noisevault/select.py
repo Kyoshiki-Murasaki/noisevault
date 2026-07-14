@@ -27,55 +27,85 @@ def _edge_score(snapshot: DeviceNoiseSnapshot, a: int, b: int) -> float:
         if gate.operational
         and gate.error is not None
         and len(gate.qubits) == 2
-        and set(gate.qubits) == {a, b}
+        and tuple(gate.qubits) == (a, b)
+        and gate.name in {"cx", "ecr", "cz"}
     ]
-    return min(errors) if errors else 0.1
+    return min(errors) if errors else float("inf")
+
+
+def _directed_entangling_graph(snapshot: DeviceNoiseSnapshot) -> dict[int, set[int]]:
+    operational = {q.index for q in snapshot.qubits if q.operational}
+    coupling = {tuple(edge) for edge in snapshot.coupling_map if len(edge) == 2}
+    graph: dict[int, set[int]] = defaultdict(set)
+    for gate in snapshot.gates:
+        if (
+            gate.operational
+            and gate.name in {"cx", "ecr", "cz"}
+            and len(gate.qubits) == 2
+            and set(gate.qubits).issubset(operational)
+            and (
+                tuple(gate.qubits) in coupling
+                or tuple(reversed(gate.qubits)) in coupling
+            )
+        ):
+            graph[gate.qubits[0]].add(gate.qubits[1])
+    return graph
+
+
+def _path_score(snapshot: DeviceNoiseSnapshot, path: tuple[int, ...]) -> float:
+    return sum(_qubit_score(snapshot, q) for q in path) + sum(
+        _edge_score(snapshot, a, b) for a, b in zip(path, path[1:], strict=False)
+    )
+
+
+def _calibrated_path_candidates(
+    snapshot: DeviceNoiseSnapshot, size: int
+) -> list[tuple[float, tuple[int, ...]]]:
+    operational = {q.index for q in snapshot.qubits if q.operational}
+    if size == 1:
+        return [(_qubit_score(snapshot, q), (q,)) for q in sorted(operational)]
+
+    graph = _directed_entangling_graph(snapshot)
+    paths: set[tuple[int, ...]] = set()
+
+    def extend(path: tuple[int, ...]) -> None:
+        if len(path) == size:
+            paths.add(path)
+            return
+        for neighbour in sorted(graph[path[-1]] - set(path)):
+            extend((*path, neighbour))
+
+    for seed in sorted(operational):
+        extend((seed,))
+    return sorted((_path_score(snapshot, path), path) for path in paths)
 
 
 def best_connected_subset(snapshot: DeviceNoiseSnapshot, size: int) -> list[int]:
     if size < 1 or size > snapshot.num_qubits:
         raise ValueError(f"Invalid subset size {size} for {snapshot.num_qubits}-qubit snapshot.")
 
-    operational = {q.index for q in snapshot.qubits if q.operational}
-    graph: dict[int, set[int]] = defaultdict(set)
-    for edge in snapshot.coupling_map:
-        if len(edge) == 2 and edge[0] in operational and edge[1] in operational:
-            graph[edge[0]].add(edge[1])
-            graph[edge[1]].add(edge[0])
-
-    if size == 1:
-        return [min(operational, key=lambda q: _qubit_score(snapshot, q))]
-
-    candidates: list[tuple[float, tuple[int, ...]]] = []
-    for seed in sorted(operational):
-        chosen = [seed]
-        frontier = set(graph[seed])
-        while len(chosen) < size and frontier:
-            next_qubit = min(
-                frontier,
-                key=lambda q: _qubit_score(snapshot, q)
-                + min(_edge_score(snapshot, q, existing) for existing in chosen if q in graph[existing]),
-            )
-            chosen.append(next_qubit)
-            frontier.remove(next_qubit)
-            frontier.update(graph[next_qubit] - set(chosen))
-        if len(chosen) == size:
-            chosen_tuple = tuple(sorted(chosen))
-            qubit_cost = sum(_qubit_score(snapshot, q) for q in chosen_tuple)
-            edge_cost = sum(
-                _edge_score(snapshot, a, b)
-                for a in chosen_tuple
-                for b in chosen_tuple
-                if a < b and b in graph[a]
-            )
-            candidates.append((qubit_cost + edge_cost, chosen_tuple))
-
+    candidates = _calibrated_path_candidates(snapshot, size)
     if not candidates:
-        # Disconnected fallback is explicit and deterministic; caller records it in the report.
-        ranked = sorted(operational, key=lambda q: (_qubit_score(snapshot, q), q))
-        if len(ranked) < size:
-            raise ValueError(f"Only {len(ranked)} operational qubits available.")
-        return ranked[:size]
+        raise ValueError(
+            f"No directed, calibrated entangling path of {size} operational qubits is available."
+        )
+    return list(min(candidates)[1])
+
+
+def best_common_connected_path(
+    first: DeviceNoiseSnapshot, second: DeviceNoiseSnapshot, size: int
+) -> list[int]:
+    """Return a directed calibrated path valid in both dated snapshots."""
+    second_paths = {path for _, path in _calibrated_path_candidates(second, size)}
+    candidates = [
+        (_path_score(first, path) + _path_score(second, path), path)
+        for _, path in _calibrated_path_candidates(first, size)
+        if path in second_paths
+    ]
+    if not candidates:
+        raise ValueError(
+            f"No shared directed, calibrated path of {size} operational qubits is available."
+        )
     return list(min(candidates)[1])
 
 

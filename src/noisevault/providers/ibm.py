@@ -84,6 +84,17 @@ def build_snapshot_from_backend(
         faulty_qubits = set(props.faulty_qubits())
     except Exception:
         pass
+    faulty_gates: set[tuple[str, tuple[int, ...]]] = set()
+    try:
+        for faulty_gate in props.faulty_gates():
+            faulty_gates.add(
+                (
+                    str(getattr(faulty_gate, "gate", getattr(faulty_gate, "name", "unknown"))),
+                    tuple(int(q) for q in getattr(faulty_gate, "qubits", [])),
+                )
+            )
+    except Exception:
+        pass
 
     qubits: list[QubitCalibration] = []
     for index, parameters in enumerate(getattr(props, "qubits", [])):
@@ -109,13 +120,18 @@ def build_snapshot_from_backend(
     gates: list[GateCalibration] = []
     for gate in getattr(props, "gates", []):
         values = _parameter_map(getattr(gate, "parameters", []))
+        gate_name = str(getattr(gate, "gate", getattr(gate, "name", "unknown")))
+        gate_qubits = [int(q) for q in getattr(gate, "qubits", [])]
         gates.append(
             GateCalibration(
-                name=str(getattr(gate, "gate", getattr(gate, "name", "unknown"))),
-                qubits=[int(q) for q in getattr(gate, "qubits", [])],
+                name=gate_name,
+                qubits=gate_qubits,
                 error=_value(values, "gate_error"),
                 duration_ns=_value(values, "gate_length", "ns"),
-                operational=True,
+                operational=(
+                    (gate_name, tuple(gate_qubits)) not in faulty_gates
+                    and not set(gate_qubits).intersection(faulty_qubits)
+                ),
             )
         )
 

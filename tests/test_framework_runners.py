@@ -25,9 +25,10 @@ from noisevault.select import best_connected_subset
 def test_framework_matches_reference(module, runner, demo_snapshot):
     if importlib.util.find_spec(module) is None:
         pytest.skip(f"{module} not installed")
-    circuit = ghz(2)
-    physical = best_connected_subset(demo_snapshot, 2)
-    reference = run_reference(demo_snapshot, circuit, physical)
-    actual = runner(demo_snapshot, circuit, physical)
-    assert np.isclose(actual.probabilities.sum(), 1.0)
-    assert total_variation_distance(reference.probabilities, actual.probabilities) <= 1e-7
+    for size in (2, 3):
+        circuit = ghz(size)
+        physical = best_connected_subset(demo_snapshot, size)
+        reference = run_reference(demo_snapshot, circuit, physical)
+        actual = runner(demo_snapshot, circuit, physical)
+        assert np.isclose(actual.probabilities.sum(), 1.0)
+        assert total_variation_distance(reference.probabilities, actual.probabilities) <= 1e-7

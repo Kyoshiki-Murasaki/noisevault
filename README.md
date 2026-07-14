@@ -92,7 +92,7 @@ This experiment intentionally uses prefix qubits because Aer noise models attach
 
 ### B. Cross-framework agreement
 
-The same abstract circuits and the same canonical Kraus channels are run independently through Qiskit Aer, Cirq, and PennyLane. Asymmetric readout confusion is applied once through common classical post-processing. The density-matrix target is maximum pairwise TVD `<= 0.02`.
+The same abstract circuits are converted through the exported Qiskit Aer, Cirq, and PennyLane adapters and run in each framework's independent density-matrix engine. Asymmetric readout confusion is applied once through common classical post-processing. The density-matrix target is maximum pairwise TVD `<= 0.02`.
 
 This validates converter consistency. It does not prove that calibration-derived Markovian noise fully predicts hardware.
 
