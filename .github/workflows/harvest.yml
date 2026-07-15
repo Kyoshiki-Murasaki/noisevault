@@ -1,0 +1,45 @@
+name: Harvest IBM calibrations
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e '.[pilot]'
+      - name: Harvest metadata
+        env:
+          IBM_QUANTUM_TOKEN: ${{ secrets.IBM_QUANTUM_TOKEN }}
+          IBM_QUANTUM_INSTANCE: ${{ secrets.IBM_QUANTUM_INSTANCE }}
+        run: |
+          if [ -z "$IBM_QUANTUM_TOKEN" ]; then
+            echo "IBM_QUANTUM_TOKEN is not configured; leaving archive unchanged."
+            exit 0
+          fi
+          noisevault harvest-ibm --max-backends 10
+      - name: Validate archive
+        run: |
+          find snapshots -name '*.json' -print0 | xargs -0 -n1 noisevault validate
+      - name: Commit new snapshots
+        run: |
+          git config user.name "noisevault-bot"
+          git config user.email "noisevault-bot@users.noreply.github.com"
+          git add snapshots
+          if git diff --cached --quiet; then
+            echo "No new calibration snapshots."
+          else
+            git commit -m "data: archive IBM calibration snapshots"
+            git push
+          fi

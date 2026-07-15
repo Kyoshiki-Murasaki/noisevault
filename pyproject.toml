@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "noisevault"
+version = "0.1.0"
+description = "Pilot implementation of a versioned, framework-agnostic archive of calibrated quantum-device noise models."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = {text = "Apache-2.0"}
+authors = [{name = "Dev D. Goyal"}]
+dependencies = [
+  "numpy>=1.26",
+  "pydantic>=2.8,<3",
+  "typer>=0.12,<1",
+  "rich>=13.7,<15",
+]
+
+[project.optional-dependencies]
+pilot = [
+  "qiskit>=2.2,<3",
+  "qiskit-aer>=0.17,<0.18",
+  "qiskit-ibm-runtime>=0.46,<0.50",
+  "cirq-core>=1.6,<1.7",
+  "pennylane>=0.45,<0.46",
+  "scipy>=1.13,<2",
+  "matplotlib>=3.8,<4",
+  "pandas>=2.2,<3",
+  "pytest>=8,<10",
+  "pytest-cov>=5,<8",
+  "ruff>=0.9,<1",
+]
+mitiq = ["mitiq>=0.42,<1"]
+dev = [
+  "build>=1.2,<2",
+  "twine>=5,<7",
+  "pytest>=8,<10",
+  "pytest-cov>=5,<8",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+noisevault = "noisevault.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/noisevault"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]

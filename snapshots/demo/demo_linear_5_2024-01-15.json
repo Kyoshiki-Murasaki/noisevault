@@ -1,0 +1,406 @@
+{
+  "schema_version": "0.1",
+  "provider": "demo",
+  "backend_name": "demo_linear_5",
+  "captured_at": "2024-01-15T09:00:00Z",
+  "num_qubits": 5,
+  "coupling_map": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      0
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      2,
+      1
+    ],
+    [
+      2,
+      3
+    ],
+    [
+      3,
+      2
+    ],
+    [
+      3,
+      4
+    ],
+    [
+      4,
+      3
+    ]
+  ],
+  "basis_gates": [
+    "h",
+    "x",
+    "rx",
+    "rz",
+    "cx"
+  ],
+  "qubits": [
+    {
+      "index": 0,
+      "t1_us": 110.0,
+      "t2_us": 85.0,
+      "frequency_ghz": 4.8,
+      "readout_error": 0.0165,
+      "prob_meas0_prep1": 0.018,
+      "prob_meas1_prep0": 0.015,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "index": 1,
+      "t1_us": 118.0,
+      "t2_us": 91.0,
+      "frequency_ghz": 4.85,
+      "readout_error": 0.01875,
+      "prob_meas0_prep1": 0.020499999999999997,
+      "prob_meas1_prep0": 0.017,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "index": 2,
+      "t1_us": 126.0,
+      "t2_us": 97.0,
+      "frequency_ghz": 4.8999999999999995,
+      "readout_error": 0.020999999999999998,
+      "prob_meas0_prep1": 0.023,
+      "prob_meas1_prep0": 0.019,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "index": 3,
+      "t1_us": 134.0,
+      "t2_us": 103.0,
+      "frequency_ghz": 4.95,
+      "readout_error": 0.02325,
+      "prob_meas0_prep1": 0.0255,
+      "prob_meas1_prep0": 0.020999999999999998,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "index": 4,
+      "t1_us": 142.0,
+      "t2_us": 109.0,
+      "frequency_ghz": 5.0,
+      "readout_error": 0.0255,
+      "prob_meas0_prep1": 0.027999999999999997,
+      "prob_meas1_prep0": 0.023,
+      "operational": true,
+      "metadata": {}
+    }
+  ],
+  "gates": [
+    {
+      "name": "h",
+      "qubits": [
+        0
+      ],
+      "error": 0.0007,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "x",
+      "qubits": [
+        0
+      ],
+      "error": 0.0006,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rx",
+      "qubits": [
+        0
+      ],
+      "error": 0.0008,
+      "duration_ns": 55.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rz",
+      "qubits": [
+        0
+      ],
+      "error": 0.0,
+      "duration_ns": 0.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "h",
+      "qubits": [
+        1
+      ],
+      "error": 0.0007,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "x",
+      "qubits": [
+        1
+      ],
+      "error": 0.0006,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rx",
+      "qubits": [
+        1
+      ],
+      "error": 0.0008,
+      "duration_ns": 55.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rz",
+      "qubits": [
+        1
+      ],
+      "error": 0.0,
+      "duration_ns": 0.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "h",
+      "qubits": [
+        2
+      ],
+      "error": 0.0007,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "x",
+      "qubits": [
+        2
+      ],
+      "error": 0.0006,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rx",
+      "qubits": [
+        2
+      ],
+      "error": 0.0008,
+      "duration_ns": 55.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rz",
+      "qubits": [
+        2
+      ],
+      "error": 0.0,
+      "duration_ns": 0.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "h",
+      "qubits": [
+        3
+      ],
+      "error": 0.0007,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "x",
+      "qubits": [
+        3
+      ],
+      "error": 0.0006,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rx",
+      "qubits": [
+        3
+      ],
+      "error": 0.0008,
+      "duration_ns": 55.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rz",
+      "qubits": [
+        3
+      ],
+      "error": 0.0,
+      "duration_ns": 0.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "h",
+      "qubits": [
+        4
+      ],
+      "error": 0.0007,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "x",
+      "qubits": [
+        4
+      ],
+      "error": 0.0006,
+      "duration_ns": 50.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rx",
+      "qubits": [
+        4
+      ],
+      "error": 0.0008,
+      "duration_ns": 55.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "rz",
+      "qubits": [
+        4
+      ],
+      "error": 0.0,
+      "duration_ns": 0.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "cx",
+      "qubits": [
+        0,
+        1
+      ],
+      "error": 0.008,
+      "duration_ns": 360.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "cx",
+      "qubits": [
+        1,
+        0
+      ],
+      "error": 0.008,
+      "duration_ns": 360.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "cx",
+      "qubits": [
+        1,
+        2
+      ],
+      "error": 0.0095,
+      "duration_ns": 380.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "cx",
+      "qubits": [
+        2,
+        1
+      ],
+      "error": 0.0095,
+      "duration_ns": 380.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "cx",
+      "qubits": [
+        2,
+        3
+      ],
+      "error": 0.011,
+      "duration_ns": 400.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "cx",
+      "qubits": [
+        3,
+        2
+      ],
+      "error": 0.011,
+      "duration_ns": 400.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "cx",
+      "qubits": [
+        3,
+        4
+      ],
+      "error": 0.0125,
+      "duration_ns": 420.0,
+      "operational": true,
+      "metadata": {}
+    },
+    {
+      "name": "cx",
+      "qubits": [
+        4,
+        3
+      ],
+      "error": 0.0125,
+      "duration_ns": 420.0,
+      "operational": true,
+      "metadata": {}
+    }
+  ],
+  "provenance": {
+    "source": "NoiseVault deterministic demonstration fixture",
+    "raw_hash": "sha256:98d477858773707ad4dd3b1f9014dd14f9f0ed0304f4f3b16f615e8d5c9335e3",
+    "harvester_version": "0.1.0",
+    "source_timestamp": "2024-01-15T09:00:00Z",
+    "source_url": null,
+    "notes": [
+      "Synthetic but physically plausible fixture for zero-credential CI and pipeline verification."
+    ]
+  },
+  "extensions": {}
+}

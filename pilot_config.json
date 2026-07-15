@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1",
+  "seed": 271828,
+  "subset_sizes": [2, 3, 4, 5],
+  "mirror_depths": [2, 4, 8],
+  "rb_depths": [2, 4, 8, 16, 32],
+  "frameworks": ["qiskit", "cirq", "pennylane"],
+  "thresholds": {
+    "roundtrip_tvd_density_matrix": 0.01,
+    "cross_framework_tvd_density_matrix": 0.02,
+    "cross_framework_tvd_sampled": 0.05
+  },
+  "live": {
+    "max_backends": 2,
+    "prefer_operational": true,
+    "simulator": false
+  }
+}

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e '.[pilot]'
+      - run: ruff check .
+      - run: pytest
+      - run: python scripts/run_pilot.py --mode offline --profile smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pilot-${{ matrix.python-version }}
+          path: |
+            experiments/PILOT_RESULTS.md
+            experiments/results/pilot_results.json
+            experiments/figures/*.png
