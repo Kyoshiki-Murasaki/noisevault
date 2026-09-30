@@ -1,249 +1,251 @@
+"""Channels built from resolved noise, keeping the 0.1 math and Qiskit Aer's conventions.
+
+Kraus operators are big-endian over their ``wires`` (the first wire is the most significant
+tensor factor). Superoperators use column stacking, vec(K rho K^dagger) = (conj(K) (x) K) vec(rho),
+which is also Qiskit's ``SuperOp`` convention.
+
+A gate with a stated average infidelity gets depolarizing noise followed by zero-temperature
+thermal relaxation over its duration; the depolarizing strength is solved so the composed
+channel has the stated infidelity (Aer's residual rule). When relaxation alone already exceeds
+it, relaxation is kept and :attr:`GateChannels.floor` is true. A missing T2 means T2 = 2 T1
+(no pure dephasing); T2 above 2 T1 is clamped to 2 T1. A ``pauli`` spec is the whole channel,
+so no relaxation is added to it.
+"""
+
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from itertools import product
+from typing import Literal
 
 import numpy as np
 
-from .models import DeviceNoiseSnapshot, GateCalibration
+from . import metrics
+from .errors import DisabledGateError
+from .table import GateNoise, QubitNoise
 
-I2 = np.eye(2, dtype=complex)
-X = np.array([[0, 1], [1, 0]], dtype=complex)
-Y = np.array([[0, -1j], [1j, 0]], dtype=complex)
-Z = np.array([[1, 0], [0, -1]], dtype=complex)
+_I2 = np.eye(2, dtype=complex)
+_PAULIS = {
+    "I": _I2,
+    "X": np.array([[0, 1], [1, 0]], dtype=complex),
+    "Y": np.array([[0, -1j], [1j, 0]], dtype=complex),
+    "Z": np.array([[1, 0], [0, -1]], dtype=complex),
+}
+_FLOOR_TOL = 1e-12
 
 
 @dataclass(frozen=True)
 class ChannelSpec:
-    kind: str
-    wires: tuple[int, ...]
+    kind: Literal["depolarizing", "thermal_relaxation", "pauli"]
+    wires: tuple[int, ...]  # physical qubits, big-endian
     kraus: tuple[np.ndarray, ...]
-    metadata: dict[str, float | str | bool | None]
 
 
-class CalibrationUnavailableError(ValueError):
-    """Raised when a requested operation has no direction-aligned calibration."""
+@dataclass(frozen=True)
+class GateChannels:
+    """Channels for one gate application, in the order they act, with bookkeeping."""
+
+    gate: GateNoise
+    channels: tuple[ChannelSpec, ...]
+    requested: float | None  # stated average infidelity
+    achieved: float  # average infidelity of the composed channel
+    relaxation: float  # average infidelity of relaxation alone
+    t2_clamped: tuple[int, ...]  # qubits whose T2 was clamped to 2 T1
+
+    @property
+    def floor(self) -> bool:
+        """True when relaxation alone exceeds the stated error, so the model is noisier."""
+        return self.requested is not None and self.achieved > self.requested + _FLOOR_TOL
 
 
-def compose_kraus(after: Iterable[np.ndarray], before: Iterable[np.ndarray]) -> list[np.ndarray]:
+def gate_channels(gate: GateNoise, qubits: Sequence[QubitNoise]) -> GateChannels:
+    """Channels for ``gate``; ``qubits`` are the resolved qubits in ``gate.qubits`` order."""
+    if [q.index for q in qubits] != list(gate.qubits):
+        raise ValueError(f"qubits {[q.index for q in qubits]} do not match {gate.qubits}")
+    if gate.state == "disabled":
+        raise DisabledGateError(f"{gate.gate} on {gate.qubits} is disabled in this profile")
+    if gate.state == "ideal":
+        return GateChannels(gate, (), None, 0.0, 0.0, ())
+    if gate.pauli is not None:
+        r = metrics.avg_from_pauli(gate.pauli)
+        spec = ChannelSpec("pauli", gate.qubits, tuple(pauli_kraus(gate.pauli)))
+        return GateChannels(gate, (spec,), r, r, 0.0, ())
+
+    n = len(qubits)
+    duration = gate.duration_ns or 0.0
+    thermal = [
+        thermal_relaxation_kraus(q.t1_ns, q.t2_ns, duration, q.dephasing_rate_per_s) for q in qubits
+    ]
+    relaxation = _tensor_kraus(thermal)
+    relaxation_error = max(0.0, 1.0 - average_gate_fidelity(relaxation))
+    residual = _residual_depolarizing(gate.avg_infidelity, relaxation, n)
+    depolarizing = depolarizing_kraus(residual, n)
+
+    channels = []
+    if len(depolarizing) > 1:
+        channels.append(ChannelSpec("depolarizing", gate.qubits, tuple(depolarizing)))
+    for q, kraus in zip(qubits, thermal, strict=True):
+        if len(kraus) > 1:
+            channels.append(ChannelSpec("thermal_relaxation", (q.index,), tuple(kraus)))
+    achieved = 1.0 - average_gate_fidelity(_compose(relaxation, depolarizing))
+    clamped = tuple(q.index for q in qubits if _t2_clamped(q))
+    return GateChannels(
+        gate, tuple(channels), gate.avg_infidelity, max(achieved, 0.0), relaxation_error, clamped
+    )
+
+
+def thermal_relaxation_kraus(
+    t1_ns: float | None,
+    t2_ns: float | None,
+    duration_ns: float,
+    dephasing_rate_per_s: float | None = None,
+) -> list[np.ndarray]:
+    """Amplitude damping then pure dephasing at rate 1/T2 - 1/(2 T1), zero temperature.
+
+    A ``dephasing_rate_per_s`` adds a Z error with probability rate * duration (capped at 1/2).
+    """
+    rate = dephasing_rate_per_s or 0.0
+    if duration_ns <= 0 or (t1_ns is None and t2_ns is None and rate == 0):
+        return [_I2.copy()]
+    t1 = np.inf if t1_ns is None else max(float(t1_ns), 1e-12)
+    if t2_ns is None:
+        t2 = np.inf if not np.isfinite(t1) else 2.0 * t1
+    else:
+        t2 = max(float(t2_ns), 1e-12)
+        if np.isfinite(t1):
+            t2 = min(t2, 2.0 * t1)
+    duration = float(duration_ns)
+
+    gamma = 0.0 if not np.isfinite(t1) else float(np.clip(1.0 - np.exp(-duration / t1), 0.0, 1.0))
+    amplitude = [
+        np.array([[1.0, 0.0], [0.0, np.sqrt(1.0 - gamma)]], dtype=complex),
+        np.array([[0.0, np.sqrt(gamma)], [0.0, 0.0]], dtype=complex),
+    ]
+    inverse_t1 = 0.0 if not np.isfinite(t1) else 1.0 / t1
+    inverse_t2 = 0.0 if not np.isfinite(t2) else 1.0 / t2
+    pure_rate = max(0.0, inverse_t2 - inverse_t1 / 2.0)
+    z_error = min(rate * duration * 1e-9, 0.5)
+    coherence = float(np.exp(-duration * pure_rate)) * (1.0 - 2.0 * z_error)
+    flip = float(np.clip((1.0 - coherence) / 2.0, 0.0, 0.5))
+    phase = [np.sqrt(1.0 - flip) * _I2, np.sqrt(flip) * _PAULIS["Z"]]
+    return _compose(phase, amplitude)
+
+
+def depolarizing_kraus(avg_infidelity: float | None, num_qubits: int) -> list[np.ndarray]:
+    """(1 - lambda) rho + lambda I/d with r = lambda (d - 1)/d, clipped to the CPTP range."""
+    if avg_infidelity is None or avg_infidelity <= 0:
+        return [np.eye(2**num_qubits, dtype=complex)]
+    r = float(np.clip(avg_infidelity, 0.0, metrics.max_avg_infidelity(num_qubits)))
+    lam = min(
+        metrics.depolarizing_from_avg(r, num_qubits), metrics.max_depolarizing_param(num_qubits)
+    )
+    paulis = _pauli_basis(num_qubits)
+    weights = [lam / len(paulis)] * len(paulis)
+    weights[0] += 1.0 - lam
+    return [np.sqrt(max(w, 0.0)) * p for w, p in zip(weights, paulis, strict=True)]
+
+
+def pauli_kraus(pauli: Sequence[float]) -> list[np.ndarray]:
+    """Kraus operators of a Pauli channel given its non-identity probabilities."""
+    n = metrics.pauli_arity(len(pauli))
+    probs = [1.0 - float(np.sum(pauli)), *map(float, pauli)]
+    return [np.sqrt(max(p, 0.0)) * op for p, op in zip(probs, _pauli_basis(n), strict=True)]
+
+
+def average_gate_fidelity(kraus: Iterable[np.ndarray]) -> float:
+    """Average gate fidelity to the identity of a trace-preserving channel."""
+    operators = [np.asarray(op, dtype=complex) for op in kraus]
+    d = operators[0].shape[0]
+    entanglement = sum(abs(np.trace(op)) ** 2 for op in operators) / d**2
+    return float((d * entanglement + 1.0) / (d + 1.0))
+
+
+def superoperator(channels: Iterable[ChannelSpec], wires: Sequence[int]) -> np.ndarray:
+    """Column-stacking superoperator of ``channels`` applied in order, over ``wires``."""
+    wires = tuple(wires)
+    position = {w: i for i, w in enumerate(wires)}
+    n = len(wires)
+    total = np.eye(4**n, dtype=complex)
+    for channel in channels:
+        places = [position[w] for w in channel.wires]
+        ops = channel.kraus
+        if places != list(range(n)):
+            ops = tuple(_embed(k, places, n) for k in channel.kraus)
+        total = sum(np.kron(np.conj(k), k) for k in ops) @ total
+    return total
+
+
+def pauli_twirl(channels: Iterable[ChannelSpec], wires: Sequence[int]) -> tuple[float, ...]:
+    """Non-identity Pauli probabilities of the twirled composition (metrics label order)."""
+    n = len(wires)
+    d = 2**n
+    s = superoperator(channels, wires).reshape(d, d, d, d)
+    choi = s.transpose(3, 1, 2, 0).reshape(d * d, d * d)
+    out = []
+    for label in metrics.pauli_labels(n):
+        v = _kron_all(_PAULIS[c] for c in label).flatten(order="F")
+        out.append(max(float(np.real(np.conj(v) @ choi @ v)) / d**2, 0.0))
+    return tuple(out)
+
+
+def readout_matrix(qubit: QubitNoise) -> np.ndarray | None:
+    """M[measured, prepared] = [[1-a, b], [a, 1-b]] with a = P(1|0), b = P(0|1); None if unknown."""
+    if qubit.readout is None:
+        return None
+    a, b = qubit.readout
+    return np.array([[1.0 - a, b], [a, 1.0 - b]])
+
+
+def _residual_depolarizing(
+    requested: float | None, relaxation: list[np.ndarray], num_qubits: int
+) -> float | None:
+    """Average infidelity of the depolarizing part so the composition matches ``requested``."""
+    fidelity = average_gate_fidelity(relaxation)
+    relaxation_error = max(0.0, 1.0 - fidelity)
+    if requested is None or requested <= relaxation_error:
+        return None
+    d = 2**num_qubits
+    target = min(float(requested), metrics.max_avg_infidelity(num_qubits))
+    denominator = d * fidelity - 1.0
+    if denominator <= 0:
+        return None
+    strength = d * (target - relaxation_error) / denominator
+    strength = float(np.clip(strength, 0.0, metrics.max_depolarizing_param(num_qubits)))
+    return metrics.avg_from_depolarizing(strength, num_qubits)
+
+
+def _t2_clamped(q: QubitNoise) -> bool:
+    return q.t1_ns is not None and q.t2_ns is not None and q.t2_ns > 2 * q.t1_ns
+
+
+def _compose(after: Iterable[np.ndarray], before: Iterable[np.ndarray]) -> list[np.ndarray]:
+    before = list(before)
     return [np.asarray(a) @ np.asarray(b) for a in after for b in before]
 
 
-def tensor_kraus(channels: list[list[np.ndarray]]) -> list[np.ndarray]:
+def _tensor_kraus(channels: list[list[np.ndarray]]) -> list[np.ndarray]:
     result = [np.array([[1.0 + 0.0j]])]
     for channel in channels:
         result = [np.kron(left, right) for left in result for right in channel]
     return result
 
 
-def thermal_relaxation_kraus(
-    t1_us: float | None, t2_us: float | None, duration_ns: float
-) -> list[np.ndarray]:
-    if duration_ns <= 0 or (t1_us is None and t2_us is None):
-        return [I2.copy()]
-    t1_ns = np.inf if t1_us is None else max(float(t1_us) * 1000.0, 1e-12)
-    if t2_us is None:
-        t2_ns = np.inf if not np.isfinite(t1_ns) else 2.0 * t1_ns
-    else:
-        t2_ns = max(float(t2_us) * 1000.0, 1e-12)
-        if np.isfinite(t1_ns):
-            t2_ns = min(t2_ns, 2.0 * t1_ns)
-    duration_ns = float(duration_ns)
-
-    gamma_amp = (
-        0.0
-        if not np.isfinite(t1_ns)
-        else float(np.clip(1.0 - np.exp(-duration_ns / t1_ns), 0.0, 1.0))
-    )
-    amplitude = [
-        np.array([[1.0, 0.0], [0.0, np.sqrt(1.0 - gamma_amp)]], dtype=complex),
-        np.array([[0.0, np.sqrt(gamma_amp)], [0.0, 0.0]], dtype=complex),
-    ]
-
-    inverse_t1 = 0.0 if not np.isfinite(t1_ns) else 1.0 / t1_ns
-    inverse_t2 = 0.0 if not np.isfinite(t2_ns) else 1.0 / t2_ns
-    pure_rate = max(0.0, inverse_t2 - inverse_t1 / 2.0)
-    coherence_factor = float(np.exp(-duration_ns * pure_rate))
-    phase_flip_probability = float(np.clip((1.0 - coherence_factor) / 2.0, 0.0, 0.5))
-    phase = [
-        np.sqrt(1.0 - phase_flip_probability) * I2,
-        np.sqrt(phase_flip_probability) * Z,
-    ]
-    return compose_kraus(phase, amplitude)
-
-
-def _pauli_basis(num_qubits: int) -> list[np.ndarray]:
-    basis = [I2, X, Y, Z]
-    return [
-        np.array([[1.0 + 0.0j]]) if num_qubits == 0 else _kron_many(items)
-        for items in product(basis, repeat=num_qubits)
-    ]
-
-
-def _kron_many(items: Iterable[np.ndarray]) -> np.ndarray:
+def _kron_all(ops: Iterable[np.ndarray]) -> np.ndarray:
     result = np.array([[1.0 + 0.0j]])
-    for item in items:
-        result = np.kron(result, item)
+    for op in ops:
+        result = np.kron(result, op)
     return result
 
 
-def depolarizing_kraus(avg_gate_error: float | None, num_qubits: int) -> list[np.ndarray]:
-    if avg_gate_error is None or avg_gate_error <= 0:
-        return [np.eye(2**num_qubits, dtype=complex)]
-    dimension = 2**num_qubits
-    # The most general n-qubit depolarizing channel remains CPTP through
-    # lambda=4**n/(4**n-1), corresponding to average infidelity d/(d+1).
-    max_infidelity = dimension / (dimension + 1.0)
-    clipped_error = float(np.clip(avg_gate_error, 0.0, max_infidelity))
-    lam = clipped_error * dimension / (dimension - 1.0)
-    lam = min(lam, 4**num_qubits / (4**num_qubits - 1.0))
-    paulis = _pauli_basis(num_qubits)
-    pauli_count = len(paulis)
-    weights = [lam / pauli_count] * pauli_count
-    weights[0] += 1.0 - lam
-    return [np.sqrt(max(weight, 0.0)) * pauli for weight, pauli in zip(weights, paulis, strict=True)]
+def _pauli_basis(num_qubits: int) -> list[np.ndarray]:
+    return [_kron_all(_PAULIS[c] for c in labels) for labels in product("IXYZ", repeat=num_qubits)]
 
 
-_GATE_ALIASES: dict[str, tuple[str, ...]] = {
-    "h": ("h", "sx", "x"),
-    "x": ("x", "sx"),
-    "rx": ("rx", "sx", "x"),
-    "rz": ("rz",),
-    "cx": ("cx", "ecr", "cz"),
-}
-
-
-def find_gate_calibration(
-    snapshot: DeviceNoiseSnapshot,
-    operation_name: str,
-    physical_wires: tuple[int, ...],
-) -> GateCalibration | None:
-    aliases = _GATE_ALIASES.get(operation_name, (operation_name,))
-    # Alias order is semantic precedence: an exact H calibration must not lose to
-    # a numerically smaller SX/X fallback. Two-qubit qargs are directional and are
-    # never silently borrowed from the reversed operation.
-    for alias in aliases:
-        candidates = [
-            gate
-            for gate in snapshot.gates
-            if gate.name == alias
-            and gate.operational
-            and tuple(gate.qubits) == physical_wires
-        ]
-        if candidates:
-            return min(
-                candidates,
-                key=lambda gate: float("inf") if gate.error is None else gate.error,
-            )
-    return None
-
-
-def average_gate_fidelity_from_kraus(kraus: Iterable[np.ndarray]) -> float:
-    """Return average gate fidelity to identity for a trace-preserving channel."""
-    operators = [np.asarray(operator, dtype=complex) for operator in kraus]
-    if not operators:
-        raise ValueError("At least one Kraus operator is required.")
-    dimension = operators[0].shape[0]
-    if any(operator.shape != (dimension, dimension) for operator in operators):
-        raise ValueError("Kraus operators must be square and have one common dimension.")
-    entanglement_fidelity = sum(abs(np.trace(operator)) ** 2 for operator in operators)
-    entanglement_fidelity /= dimension**2
-    return float((dimension * entanglement_fidelity.real + 1.0) / (dimension + 1.0))
-
-
-def _residual_depolarizing_infidelity(
-    reported_error: float | None,
-    relaxation_kraus: list[np.ndarray],
-    num_qubits: int,
-) -> tuple[float | None, float, float | None]:
-    """Match Aer's residual-depolarization convention for total gate infidelity."""
-    relaxation_fidelity = average_gate_fidelity_from_kraus(relaxation_kraus)
-    relaxation_infidelity = max(0.0, 1.0 - relaxation_fidelity)
-    if reported_error is None or reported_error <= relaxation_infidelity:
-        return None, relaxation_infidelity, None
-
-    dimension = 2**num_qubits
-    target_error = min(float(reported_error), dimension / (dimension + 1.0))
-    denominator = dimension * relaxation_fidelity - 1.0
-    if denominator <= 0:
-        return None, relaxation_infidelity, None
-    strength = dimension * (target_error - relaxation_infidelity) / denominator
-    strength = float(
-        np.clip(strength, 0.0, 4**num_qubits / (4**num_qubits - 1.0))
-    )
-    residual_infidelity = strength * (dimension - 1.0) / dimension
-    return residual_infidelity, relaxation_infidelity, strength
-
-
-def channel_sequence_for_operation(
-    snapshot: DeviceNoiseSnapshot,
-    operation_name: str,
-    logical_wires: tuple[int, ...],
-    physical_wires: tuple[int, ...],
-) -> list[ChannelSpec]:
-    gate = find_gate_calibration(snapshot, operation_name, physical_wires)
-    if gate is None and len(logical_wires) > 1:
-        raise CalibrationUnavailableError(
-            f"No direction-aligned calibration for {operation_name}{physical_wires}."
-        )
-    default_duration = 60.0 if len(logical_wires) == 1 else 600.0
-    if gate is None:
-        duration_ns = default_duration
-        duration_source = "pilot_default_missing_calibration"
-    elif gate.duration_ns is None:
-        duration_ns = default_duration
-        duration_source = "pilot_default_missing_duration"
-    else:
-        duration_ns = gate.duration_ns
-        duration_source = "snapshot"
-    gate_error = None if gate is None else gate.error
-    duration_ns = float(duration_ns)
-    thermal_specs: list[ChannelSpec] = []
-    thermal_by_wire: list[list[np.ndarray]] = []
-
-    by_index = {qubit.index: qubit for qubit in snapshot.qubits}
-    for logical, physical in zip(logical_wires, physical_wires, strict=True):
-        qubit = by_index[physical]
-        thermal = thermal_relaxation_kraus(qubit.t1_us, qubit.t2_us, duration_ns)
-        thermal_by_wire.append(thermal)
-        if len(thermal) > 1:
-            thermal_specs.append(
-                ChannelSpec(
-                    kind="thermal_relaxation",
-                    wires=(logical,),
-                    kraus=tuple(thermal),
-                    metadata={
-                        "t1_us": qubit.t1_us,
-                        "t2_us": qubit.t2_us,
-                        "duration_ns": duration_ns,
-                        "duration_source": duration_source,
-                    },
-                )
-            )
-
-    relaxation_kraus = tensor_kraus(thermal_by_wire)
-    residual_error, relaxation_error, depolarizing_strength = (
-        _residual_depolarizing_infidelity(
-            gate_error, relaxation_kraus, len(logical_wires)
-        )
-    )
-    channels: list[ChannelSpec] = []
-    depolarizing = depolarizing_kraus(residual_error, len(logical_wires))
-    if len(depolarizing) > 1:
-        channels.append(
-            ChannelSpec(
-                kind="depolarizing",
-                wires=logical_wires,
-                kraus=tuple(depolarizing),
-                metadata={
-                    "reported_total_avg_gate_error": gate_error,
-                    "relaxation_avg_gate_error": relaxation_error,
-                    "residual_depolarizing_avg_gate_error": residual_error,
-                    "depolarizing_strength": depolarizing_strength,
-                    "calibration_gate": None if gate is None else gate.name,
-                    "duration_source": duration_source,
-                },
-            )
-        )
-    return channels + thermal_specs
+def _embed(op: np.ndarray, places: list[int], n: int) -> np.ndarray:
+    """``op`` acting on qubit positions ``places`` (in that order) of an n-qubit register."""
+    rest = [i for i in range(n) if i not in places]
+    full = np.kron(op, np.eye(2 ** len(rest)))
+    perm = list(np.argsort(places + rest))
+    tensor = full.reshape([2] * (2 * n)).transpose(perm + [n + p for p in perm])
+    return tensor.reshape(2**n, 2**n)

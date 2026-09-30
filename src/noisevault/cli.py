@@ -1,87 +1,124 @@
+"""Command line: ``noisevault`` (alias ``nv``)."""
+
 from __future__ import annotations
 
-import json
+import platform
+import warnings
+import zlib
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 
-from .pilot import run_pilot
-from .providers.ibm import harvest_ibm
-from .providers.qiskit_fake import import_fake_backend, list_fake_backends
-from .schema import validate_snapshot
-from .snapshot_io import load_snapshot
+from . import __version__
+from .catalog import bundled_profiles, vault_dir
+from .errors import NoiseVaultError
+from .profile import Profile, load_file
 
-app = typer.Typer(no_args_is_help=True, help="NoiseVault pilot CLI")
-console = Console()
+app = typer.Typer(
+    no_args_is_help=True,
+    add_completion=False,
+    help="NoiseVault: real device noise, pinned and portable.",
+)
+out = Console(highlight=False, soft_wrap=True)
+err = Console(stderr=True, highlight=False, soft_wrap=True)
+
+_OPTIONAL = (
+    "qiskit",
+    "qiskit-aer",
+    "qiskit-ibm-runtime",
+    "cirq-core",
+    "cirq-google",
+    "pennylane",
+    "stim",
+    "pymatching",
+)
 
 
-@app.command("doctor")
+@app.callback()
+def main() -> None:
+    """NoiseVault: real device noise, pinned and portable."""
+
+
+@app.command()
 def doctor() -> None:
-    """Check package and optional framework availability."""
-    import importlib.util
-    import platform
-
-    table = Table("Component", "Status")
-    table.add_row("Python", platform.python_version())
-    for name, module in (
-        ("Qiskit Aer", "qiskit_aer"),
-        ("IBM Runtime", "qiskit_ibm_runtime"),
-        ("Cirq", "cirq"),
-        ("PennyLane", "pennylane"),
-        ("Matplotlib", "matplotlib"),
-    ):
-        table.add_row(name, "available" if importlib.util.find_spec(module) else "missing")
-    console.print(table)
-
-
-@app.command("validate")
-def validate(path: Path) -> None:
-    snapshot = load_snapshot(path, require_valid=False)
-    report = validate_snapshot(snapshot)
-    for issue in report.issues:
-        console.print(f"[{issue.severity}] {issue.path}: {issue.message}")
-    raise typer.Exit(0 if report.valid else 1)
+    """Show versions of NoiseVault, Python and the optional frameworks, and where profiles live."""
+    table = Table("component", "status")
+    table.add_row("noisevault", __version__)
+    table.add_row("python", platform.python_version())
+    for package in _OPTIONAL:
+        try:
+            table.add_row(package, version(package))
+        except PackageNotFoundError:
+            table.add_row(package, "not installed")
+    vault = vault_dir()
+    count = len(list(vault.glob("*.json*"))) if vault.is_dir() else 0
+    table.add_row("vault", f"{vault} ({count} files)")
+    table.add_row("bundled profiles", str(len(bundled_profiles())))
+    out.print(table)
 
 
-@app.command("list-fakes")
-def list_fakes() -> None:
-    for name in list_fake_backends():
-        console.print(name)
-
-
-@app.command("import-fake")
-def import_fake(name: str, output_root: Path = Path("snapshots")) -> None:
-    console.print(import_fake_backend(name, output_root))
-
-
-@app.command("harvest-ibm")
-def harvest(
-    output_root: Path = Path("snapshots"),
-    max_backends: int = 2,
-    backend: list[str] | None = None,
+@app.command()
+def validate(
+    file: Annotated[Path, typer.Argument(help="Profile: .json or .json.gz, format 1.0 or 0.1.")],
+    strict: Annotated[bool, typer.Option("--strict", help="Treat warnings as errors.")] = False,
 ) -> None:
-    paths = harvest_ibm(output_root, max_backends=max_backends, backend_names=backend)
-    for path in paths:
-        console.print(path)
+    """Check a profile file against the format rules."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            profile = load_file(file)
+        except FileNotFoundError:
+            _fail(f"no file {file}")
+        except (OSError, EOFError, zlib.error) as exc:  # a directory, bad gzip or cut-off file
+            _fail(f"cannot read {file}: {exc}")
+        except ValidationError as exc:
+            for line in _validation_lines(exc):
+                err.print(f"error: {line}", markup=False)
+            raise typer.Exit(1) from None
+        except (ValueError, NoiseVaultError) as exc:
+            _fail(str(exc))
+    notes = [str(w.message) for w in caught] + _soft_issues(profile)
+    when = profile.device.calibrated_at.isoformat() if profile.device.calibrated_at else "undated"
+    out.print(
+        f"ok: {profile.id} calibrated {when}, {profile.device.num_qubits} qubits,"
+        f" {len(profile.gates)} gates, {len(profile.calibrations)} calibration records,"
+        f" {profile.short_fingerprint}",
+        markup=False,
+    )
+    for note in notes:
+        err.print(f"warning: {note}", markup=False)
+    if strict and notes:
+        raise typer.Exit(1)
 
 
-@app.command("run-pilot")
-def run(
-    root: Path = Path("."),
-    mode: str = typer.Option("auto", help="auto, offline, or live"),
-    profile: str = typer.Option("full", help="smoke or full"),
-) -> None:
-    result = run_pilot(root, mode=mode, profile=profile)
-    console.print_json(json.dumps(result["summary"]))
-    verified = {
-        "PILOT_VERIFIED_WITH_LIVE_CALIBRATION_METADATA",
-        "OFFLINE_PILOT_VERIFIED_WITH_CALIBRATION_ARTIFACTS",
-        "OFFLINE_PIPELINE_VERIFIED",
-    }
-    raise typer.Exit(0 if result["summary"]["status"] in verified else 2)
+def _fail(message: str) -> None:
+    err.print(f"error: {message}", markup=False)
+    raise typer.Exit(1)
 
 
-if __name__ == "__main__":
-    app()
+def _validation_lines(exc: ValidationError) -> list[str]:
+    lines = []
+    for error in exc.errors():
+        where = ".".join(str(part) for part in error["loc"])
+        message = error["msg"].removeprefix("Value error, ")
+        for part in message.split("\n"):
+            lines.append(f"{where}: {part}" if where else part)
+    return lines
+
+
+def _soft_issues(profile: Profile) -> list[str]:
+    """Legal but noteworthy values: they change what a conversion produces."""
+    notes = []
+    for i in range(profile.device.num_qubits):
+        q = profile.table.qubit(i)
+        if q.t1_ns is not None and q.t2_ns is not None and q.t2_ns > 2 * q.t1_ns:
+            notes.append(f"qubit {i}: T2 exceeds 2*T1; conversions clamp it to 2*T1")
+    for record in profile.calibrations:
+        if record.scope == "cycle":
+            notes.append(f"{record.gate} {list(record.qubits)}: error is per cycle, not per gate")
+    return notes

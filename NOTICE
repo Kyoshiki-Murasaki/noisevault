@@ -1,0 +1,18 @@
+NoiseVault
+Copyright 2026 Dev D. Goyal
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Bundled calibration data
+========================
+
+NoiseVault ships device calibration profiles under src/noisevault/data/profiles/. Each
+profile records its source, license and attribution in its "provenance" block. The numbers
+are the source's; NoiseVault only converts them to its profile format.
+
+ibm_manila@2024-05-27.json.gz
+  Source: the FakeManilaV2 calibration snapshot packaged in qiskit-ibm-runtime
+          (https://github.com/Qiskit/qiskit-ibm-runtime), recorded from the IBM Quantum
+          device ibmq_manila.
+  License: Apache License, Version 2.0. Copyright IBM and its contributors.
+  Attribution: IBM Quantum (via qiskit-ibm-runtime).

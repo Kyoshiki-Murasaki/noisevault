@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "profiles": [
+    {
+      "id": "ibm_manila",
+      "file": "ibm_manila@2024-05-27.json.gz",
+      "calibrated_at": "2024-05-27T18:27:23Z",
+      "vendor": "ibm",
+      "technology": "superconducting",
+      "num_qubits": 5,
+      "fingerprint": "61b81b3c4239365c9c4d01789e2e10e04e87744ef3fe1d65ca1f90bcba9cbe32",
+      "artifact_hash": "29e4704db7ec514885fd4a78e58184467ff3dea180052ddb856ee10ba71b4355",
+      "license": "Apache-2.0",
+      "attribution": "IBM Quantum (via qiskit-ibm-runtime)"
+    }
+  ]
+}

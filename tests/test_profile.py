@@ -1,0 +1,473 @@
+from __future__ import annotations
+
+import json
+import random
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+import pytest
+from conftest import toy
+from pydantic import ValidationError
+
+from noisevault.profile import Profile, Ref, json_schema, load_file, parse_ref, profile_id
+
+TWO_EDGES = {"edges": [[0, 1], [1, 2]]}
+
+
+def _invalid(data: dict, match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        Profile.model_validate(data)
+
+
+def test_toy_profile_is_valid() -> None:
+    profile = Profile.model_validate(toy())
+    assert profile.id == "test_toy"
+
+
+@pytest.mark.parametrize(
+    ("section", "value", "match"),
+    [
+        ("color", "blue", "Extra inputs"),
+        ("device", {"name": "t", "technology": "other", "num_qubits": 3, "x": 1}, "Extra"),
+        ("device", {"name": "a@b", "technology": "superconducting", "num_qubits": 3}, "free of @"),
+        ("device", {"name": "t", "technology": "superconducting", "num_qubits": 0}, "greater"),
+        ("connectivity", {"edges": [[0, 3]]}, "outside 0..2"),
+        ("connectivity", {"edges": [[1, 1]]}, "itself"),
+        ("connectivity", {"edges": [[0, 1], [1, 0]]}, "listed twice"),
+        ("gates", {"sx": {"avg_infidelity": 1e-3, "colour": 1}}, "Extra"),
+        ("gates", {"sx": {"avg_infidelity": 1e-3, "process_infidelity": 1e-3}}, "one error metric"),
+        ("gates", {"sx": {"avg_infidelity": 0.7}}, r"avg_infidelity of a 1-qubit gate"),
+        ("gates", {"cz": {"avg_infidelity": 0.81}}, r"avg_infidelity of a 2-qubit gate"),
+        ("gates", {"sx": {"depolarizing_param": 1.4}}, "depolarizing_param"),
+        ("gates", {"sx": {"process_infidelity": 1.2}}, "process_infidelity"),
+        ("gates", {"sx": {"pauli": [0.1, -0.1, 0.0]}}, ">= 0"),
+        ("gates", {"sx": {"pauli": [0.5, 0.5, 0.5]}}, "sum to"),
+        ("gates", {"cz": {"pauli": [0.01, 0.01, 0.01]}}, "needs 15 entries"),
+        ("gates", {"rz": {"virtual": True, "avg_infidelity": 0.0}}, "virtual gate"),
+        ("gates", {"rz": {"virtual": True, "duration_ns": 10}}, "virtual gate"),
+        ("gates", {"fsim": {"avg_infidelity": 1e-3}}, "state its arity"),
+        ("gates", {"cz": {"qubits": 1, "avg_infidelity": 1e-3}}, "acts on 2"),
+        ("readout", {"p1_given_0": 0.01}, "both p1_given_0 and p0_given_1"),
+        ("readout", {"error": 0.01, "p1_given_0": 0.01, "p0_given_1": 0.02}, "not both"),
+        ("readout", {"error": 1.5}, "less than or equal"),
+        ("prep", {"error": -0.1}, "greater than or equal"),
+        ("idle", {"t1_us": 0}, "must be positive"),
+        ("idle", {"t2_us": -5}, "must be positive"),
+        ("idle", {"t1_us": float("nan")}, "finite"),
+        ("idle", {"t1_us": float("inf")}, "finite"),
+        ("idle", {"t1_us": 100, "t1_ms": 0.1}, "given twice"),
+        ("idle", {"t1_us": "100"}, "must be a number"),
+        ("qubits", [{"index": 3}], "outside 0..2"),
+        ("qubits", [{"index": 1}, {"index": 1}], "listed twice"),
+        ("effects", [{"type": "leakage", "gate": "cz", "prob": 1e-4, "allow": "maybe"}], "allow"),
+        ("effects", [{"type": "heating", "gate": "cz"}], "type"),
+        ("effects", [{"type": "leakage", "prob": 1e-4}], "exactly one of gate or on"),
+        ("effects", [{"type": "leakage", "gate": "ms", "prob": 1e-4}], "not defined"),
+        ("effects", [{"type": "crosstalk_zz", "on": "idle", "qubits": [0, 5]}], "outside"),
+        ("provenance", {"source_hash": "sha256:abc"}, "pattern"),
+        ("provenance", {"redistributable": "maybe"}, "redistributable"),
+        ("noisevault", "2.0", "noisevault"),
+    ],
+)
+def test_section_rules(section: str, value, match: str) -> None:
+    data = toy(**{section: value})
+    if section == "gates":
+        data["gates"] = {**toy()["gates"], **value}
+    _invalid(data, match)
+
+
+@pytest.mark.parametrize(
+    ("record", "match"),
+    [
+        ({"gate": "ecr", "qubits": [0, 1], "avg_infidelity": 1e-2}, "not defined in gates"),
+        ({"gate": "cz", "qubits": [0], "avg_infidelity": 1e-2}, "acts on 2 qubits"),
+        ({"gate": "cz", "qubits": [1, 1], "avg_infidelity": 1e-2}, "distinct"),
+        ({"gate": "cz", "qubits": [1, 3], "avg_infidelity": 1e-2}, "outside 0..2"),
+        ({"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.9}, "2-qubit gate"),
+        ({"gate": "rz", "qubits": [0], "avg_infidelity": 1e-4}, "virtual gate"),
+        ({"gate": "sx", "qubits": [0], "duration_us": 0.1, "duration_ns": 100}, "given twice"),
+        ({"gate": "sx", "qubits": [0], "duration_ns": -1}, "must not be negative"),
+    ],
+)
+def test_calibration_record_rules(record: dict, match: str) -> None:
+    _invalid(toy(calibrations=[record]), match)
+
+
+def test_duplicate_calibration_records_are_rejected() -> None:
+    record = {"gate": "cz", "qubits": [0, 1], "avg_infidelity": 1e-2}
+    _invalid(toy(calibrations=[record, {**record, "avg_infidelity": 2e-2}]), "second record")
+
+
+def test_reversed_records_of_a_symmetric_gate_are_distinct_loci() -> None:
+    records = [
+        {"gate": "cz", "qubits": [0, 1], "avg_infidelity": 1e-2},
+        {"gate": "cz", "qubits": [1, 0], "avg_infidelity": 1e-2},
+    ]
+    Profile.model_validate(toy(calibrations=records))
+
+
+def test_a_record_may_calibrate_a_virtual_gate_when_it_says_so() -> None:
+    record = {"gate": "rz", "qubits": [0], "virtual": False, "avg_infidelity": 1e-4}
+    Profile.model_validate(toy(calibrations=[record]))
+
+
+def test_all_validation_issues_are_reported_together() -> None:
+    data = toy(calibrations=[{"gate": "ecr", "qubits": [0, 1]}, {"gate": "cz", "qubits": [0]}])
+    with pytest.raises(ValidationError) as info:
+        Profile.model_validate(data)
+    text = str(info.value)
+    assert "ecr" in text and "acts on 2 qubits" in text
+
+
+@pytest.mark.parametrize(
+    ("given", "canonical", "value"),
+    [
+        ({"duration_us": 0.25}, "duration_ns", 250.0),
+        ({"duration_ms": 0.002}, "duration_ns", 2000.0),
+        ({"duration_s": 1e-6}, "duration_ns", 1000.0),
+        ({"duration_ns": 40}, "duration_ns", 40.0),
+    ],
+)
+def test_duration_aliases_normalize(given: dict, canonical: str, value: float) -> None:
+    data = toy()
+    data["gates"]["sx"] = {"avg_infidelity": 1e-3, **given}
+    spec = Profile.model_validate(data).gates["sx"]
+    assert spec.duration_ns == pytest.approx(value, rel=1e-15)
+
+
+@pytest.mark.parametrize(
+    ("given", "t1_us", "t2_us"),
+    [
+        ({"t1_ms": 0.2, "t2_ns": 150_000}, 200.0, 150.0),
+        ({"t1_s": 1.0, "t2_s": 0.5}, 1e6, 5e5),
+        ({"t1_ns": 40}, 0.04, None),
+    ],
+)
+def test_coherence_aliases_normalize_in_idle_and_qubits(given: dict, t1_us, t2_us) -> None:
+    profile = Profile.model_validate(toy(idle=given, qubits=[{"index": 2, **given}]))
+    for holder in (profile.idle, profile.qubits[0]):
+        assert holder.t1_us == pytest.approx(t1_us, rel=1e-15)
+        assert holder.t2_us == (None if t2_us is None else pytest.approx(t2_us, rel=1e-15))
+
+
+def test_saved_files_use_canonical_units(tmp_path: Path) -> None:
+    data = toy(idle={"t1_ms": 0.2}, readout={"error": 0.01, "duration_us": 1.5})
+    path = Profile.model_validate(data).save(tmp_path / "p.json")
+    saved = json.loads(path.read_text())
+    assert saved["idle"] == {"t1_us": 200.0}
+    assert saved["readout"] == {"error": 0.01, "duration_ns": 1500.0}
+
+
+@pytest.mark.parametrize("suffix", [".json", ".json.gz"])
+def test_round_trip(tmp_path: Path, suffix: str) -> None:
+    profile = Profile.model_validate(
+        toy(
+            calibrations=[{"gate": "cz", "qubits": [1, 2], "pauli": [1e-3] * 15, "method": "irb"}],
+            qubits=[{"index": 0, "t1_us": 90, "readout": {"p1_given_0": 0.01, "p0_given_1": 0.02}}],
+            effects=[{"type": "leakage", "gate": "cz", "prob": 1e-4}],
+            device={
+                "name": "toy",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 3,
+                "calibrated_at": "2025-02-26T10:12:00+01:00",
+            },
+        )
+    )
+    loaded = load_file(profile.save(tmp_path / f"p{suffix}"))
+    assert loaded == profile
+    assert loaded.fingerprint == profile.fingerprint
+    assert loaded.artifact_hash == profile.artifact_hash
+    assert loaded.device.calibrated_at == datetime(2025, 2, 26, 9, 12, tzinfo=UTC)
+
+
+def test_gzip_output_is_reproducible(tmp_path: Path) -> None:
+    profile = Profile.model_validate(toy())
+    assert (
+        profile.save(tmp_path / "a.json.gz").read_bytes()
+        == profile.save(tmp_path / "b.json.gz").read_bytes()
+    )
+
+
+def _shuffled(value):
+    if isinstance(value, dict):
+        items = list(value.items())
+        random.Random(len(items)).shuffle(items)
+        return {k: _shuffled(v) for k, v in items}
+    if isinstance(value, list):
+        return [_shuffled(v) for v in value]
+    return value
+
+
+def test_fingerprint_ignores_key_order_provenance_and_extensions() -> None:
+    data = toy(calibrations=[{"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.02}])
+    base = Profile.model_validate(data)
+    shuffled = Profile.model_validate(_shuffled(data))
+    relabeled = Profile.model_validate(
+        {**data, "provenance": {"source": "elsewhere", "notes": ["x"]}, "extensions": {"a": 1}}
+    )
+    assert shuffled.fingerprint == base.fingerprint == relabeled.fingerprint
+    assert relabeled.artifact_hash != base.artifact_hash
+
+
+def _rich_toy() -> dict:
+    return toy(
+        qubits=[{"index": 0, "t1_us": 100}, {"index": 2, "t1_us": 80}, {"index": 1, "t1_us": 90}],
+        calibrations=[
+            {"gate": "cz", "qubits": [1, 2], "avg_infidelity": 0.03},
+            {"gate": "sx", "qubits": [2], "avg_infidelity": 0.002, "includes": ["spam", "leakage"]},
+            {"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.02},
+            {"gate": "sx", "qubits": [0], "avg_infidelity": 0.001},
+        ],
+        effects=[
+            {"type": "leakage", "gate": "cz", "prob": 1e-4},
+            {"type": "crosstalk_zz", "on": "idle", "qubits": [0, 1], "strength_hz": 5.0},
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        lambda d: d["calibrations"].reverse(),
+        lambda d: d["qubits"].reverse(),
+        lambda d: d["effects"].reverse(),
+        lambda d: d["connectivity"]["edges"].reverse(),
+        lambda d: d["connectivity"].update(edges=[[1, 0], [2, 1]]),
+        lambda d: d["calibrations"][1].update(includes=["leakage", "spam", "spam"]),
+        lambda d: d["gates"]["cz"].update(symmetric=True, qubits=2),
+        lambda d: d["gates"]["sx"].update(qubits=1),
+    ],
+    ids=[
+        "records",
+        "qubits",
+        "effects",
+        "edges",
+        "edge-orientation",
+        "includes",
+        "cz-defaults",
+        "sx-arity",
+    ],
+)
+def test_fingerprint_and_saved_form_ignore_order_and_restated_defaults(rewrite) -> None:
+    data = _rich_toy()
+    base = Profile.model_validate(data)
+    rewrite(data)
+    other = Profile.model_validate(data)
+    assert other.fingerprint == base.fingerprint
+    assert other.to_json() == base.to_json()
+
+
+def test_direction_of_a_directed_edge_is_physics() -> None:
+    data = toy(connectivity={"edges": [[0, 1], [1, 2]], "directed": True})
+    base = Profile.model_validate(data).fingerprint
+    data["connectivity"]["edges"] = [[1, 0], [1, 2]]
+    assert Profile.model_validate(data).fingerprint != base
+
+
+def test_a_default_that_differs_from_the_registry_is_kept() -> None:
+    profile = Profile.model_validate(toy(gates={**toy()["gates"], "cx": {"symmetric": True}}))
+    assert profile.gates["cx"].symmetric is True and profile.table.symmetric("cx")
+
+
+@pytest.mark.parametrize(
+    "typo",
+    [
+        lambda d: d["gates"]["sx"].update(avg_infidelity="1e-3"),
+        lambda d: d["gates"]["rz"].update(virtual="true"),
+        lambda d: d["gates"]["cz"].update(qubits=2.0),
+        lambda d: d["device"].update(num_qubits=3.0),
+        lambda d: d["device"].update(num_qubits=True),
+        lambda d: d["connectivity"].update(edges=[[0, 1], [True, 2]]),
+        lambda d: d["connectivity"].update(directed=0),
+        lambda d: d.update(calibrations=[{"gate": "cz", "qubits": [True, 0]}]),
+        lambda d: d.update(calibrations=[{"gate": "cz", "qubits": ["0", "1"]}]),
+        lambda d: d.update(qubits=[{"index": True}]),
+        lambda d: d.update(readout={"error": "0.01"}),
+    ],
+)
+def test_wrong_json_types_are_errors_not_coerced(typo) -> None:
+    data = toy()
+    typo(data)
+    with pytest.raises(ValidationError):
+        Profile.model_validate(data)
+
+
+def test_ints_are_accepted_where_numbers_are_expected() -> None:
+    profile = Profile.model_validate(toy(readout={"error": 0}, idle={"t1_us": 100}))
+    assert profile.readout.error == 0.0 and profile.idle.t1_us == 100.0
+
+
+def test_a_profile_cannot_be_changed_in_place() -> None:
+    profile = Profile.model_validate(
+        toy(benchmarks={"eplg": {"value": 3e-3, "layers": [1, 2]}}, extensions={"x": {"a": 1}})
+    )
+    for mutate in (
+        lambda: profile.gates.__setitem__("sx", profile.gates["cz"]),
+        lambda: profile.gates.pop("sx"),
+        lambda: profile.benchmarks["eplg"].__setitem__("value", 1.0),
+        lambda: profile.extensions.update(y=1),
+        lambda: profile.provenance.extra.setdefault("k", 1),
+    ):
+        with pytest.raises(TypeError, match="immutable"):
+            mutate()
+    assert profile.benchmarks["eplg"]["layers"] == (1, 2)
+    assert profile.to_dict()["benchmarks"] == {"eplg": {"value": 3e-3, "layers": [1, 2]}}
+
+
+def test_copies_and_pickles_keep_the_profile() -> None:
+    import copy
+    import pickle
+
+    profile = Profile.model_validate(toy(benchmarks={"eplg": {"value": 3e-3}}))
+    for clone in (
+        copy.deepcopy(profile),
+        pickle.loads(pickle.dumps(profile)),
+        profile.model_copy(deep=True),
+    ):
+        assert clone == profile and clone.fingerprint == profile.fingerprint
+
+
+def test_model_copy_with_update_is_validated() -> None:
+    profile = Profile.model_validate(toy())
+    with pytest.raises(ValidationError, match="not defined in gates"):
+        profile.model_copy(update={"calibrations": [{"gate": "nope", "qubits": [0]}]})
+    changed = profile.model_copy(update={"calibrations": [{"gate": "sx", "qubits": [0]}]})
+    assert changed.calibrations[0].gate == "sx"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda d: d["gates"]["sx"].update(avg_infidelity=1.000001e-3),
+        lambda d: d["gates"]["cz"].update(duration_ns=71),
+        lambda d: d["connectivity"].update(directed=True),
+        lambda d: d.update(readout={"error": 0.01}),
+        lambda d: d["device"].update(num_qubits=4),
+    ],
+)
+def test_fingerprint_changes_with_the_physics(change) -> None:
+    data = toy()
+    before = Profile.model_validate(data).fingerprint
+    change(data)
+    assert Profile.model_validate(data).fingerprint != before
+
+
+def test_fingerprint_is_the_sha256_of_canonical_physics() -> None:
+    import hashlib
+
+    profile = Profile.model_validate(toy())
+    physics = {k: v for k, v in profile.to_dict().items() if k not in ("provenance", "extensions")}
+    text = json.dumps(physics, sort_keys=True, separators=(",", ":"))
+    assert profile.fingerprint == hashlib.sha256(text.encode()).hexdigest()
+    assert profile.short_fingerprint == "nv:" + profile.fingerprint[:12]
+
+
+def test_model_copy_recomputes_hashes() -> None:
+    profile = Profile.model_validate(toy())
+    old = profile.fingerprint
+    readout = Profile.model_validate(toy(readout={"error": 0.02})).readout
+    changed = profile.model_copy(update={"readout": readout})
+    assert changed.fingerprint != old
+    assert changed.table.qubit(0).readout == (0.02, 0.02)
+
+
+@pytest.mark.parametrize(
+    ("vendor", "name", "expected"),
+    [
+        ("ibm", "ibm_fez", "ibm_fez"),
+        ("google", "willow_pink", "google_willow_pink"),
+        ("quantinuum", "H2-1", "quantinuum_h2-1"),
+        ("ionq", "forte-1", "ionq_forte-1"),
+        (None, "toy-ion-20", "toy-ion-20"),
+    ],
+)
+def test_profile_id(vendor, name, expected) -> None:
+    assert profile_id(vendor, name) == expected
+
+
+@pytest.mark.parametrize("name", ["Aria(1)", "t:x", "a,b"])
+def test_profile_id_must_be_loadable_as_a_ref(name: str) -> None:
+    with pytest.raises(ValidationError, match="profile id"):
+        Profile.uniform(
+            name,
+            technology="trapped_ion",
+            num_qubits=2,
+            one_qubit_error=1e-3,
+            two_qubit_error=1e-2,
+        )
+
+
+def test_parse_ref(tmp_path: Path) -> None:
+    assert parse_ref("ibm_fez") == Ref("ibm_fez")
+    assert parse_ref("IBM_Fez@2025-02-26") == Ref("ibm_fez", date=date(2025, 2, 26))
+    assert parse_ref("ibm_fez@2025-02-26T09:12:00Z") == Ref(
+        "ibm_fez", timestamp=datetime(2025, 2, 26, 9, 12, tzinfo=UTC)
+    )
+    assert parse_ref("ibm_fez@2025-02-26T10:12:00+01:00").timestamp == datetime(
+        2025, 2, 26, 9, 12, tzinfo=UTC
+    )
+    assert parse_ref("profiles/fez.json") == Path("profiles/fez.json")
+    assert parse_ref("fez.json.gz") == Path("fez.json.gz")
+    for bad in ("ibm fez", "ibm_fez@yesterday", "ibm_fez@2025-02-26T09:12:00"):
+        with pytest.raises(ValueError):
+            parse_ref(bad)
+
+
+def test_uniform_profile() -> None:
+    profile = Profile.uniform(
+        "toy-atoms",
+        technology="neutral_atom",
+        num_qubits=100,
+        one_qubit_error=1e-3,
+        two_qubit_error=5e-3,
+        readout_error=0.01,
+        t1_us=1e6,
+        two_qubit_ns=250,
+    )
+    table = profile.table
+    assert table.gate("h", (3,)).avg_infidelity == 1e-3
+    assert table.gate("cz", (0, 99)).avg_infidelity == 5e-3
+    assert table.gate("cz", (0, 99)).duration_ns == 250
+    assert table.gate("s", (0,)).state == "ideal"
+    assert table.qubit(7).readout == (0.01, 0.01)
+    assert table.qubit(7).t1_ns == 1e9
+    assert profile.provenance.data_kind == "hypothetical"
+    assert "swap" not in profile.gates
+
+
+@pytest.mark.parametrize("coherence", [{"t1_us": 0}, {"t2_us": 0}])
+def test_uniform_rejects_zero_coherence_times(coherence: dict) -> None:
+    with pytest.raises(ValidationError, match="must be positive"):
+        Profile.uniform(
+            "u",
+            technology="trapped_ion",
+            num_qubits=2,
+            one_qubit_error=1e-3,
+            two_qubit_error=1e-2,
+            **coherence,
+        )
+
+
+def test_json_schema_describes_the_format() -> None:
+    schema = json_schema()
+    assert {"noisevault", "device", "gates", "calibrations"} <= set(schema["properties"])
+    assert schema["required"] == ["noisevault", "device", "connectivity", "gates"]
+
+
+def test_citation_names_source_and_full_fingerprint() -> None:
+    profile = Profile.model_validate(
+        toy(provenance={"attribution": "Test Lab", "source": "hand entry", "license": "CC0-1.0"})
+    )
+    assert profile.fingerprint in profile.citation()
+    bib = profile.citation("bibtex")
+    assert bib.startswith("@misc{nv_test_toy") and "Test Lab" in bib and profile.fingerprint in bib
+
+
+def test_undated_citation_states_no_year() -> None:
+    data = toy()
+    bib = Profile.model_validate(data).citation("bibtex")
+    assert bib.startswith("@misc{nv_test_toy,") and "year" not in bib and "undated" not in bib
+    data["device"]["calibrated_at"] = "2025-02-26T09:12:00Z"
+    dated = Profile.model_validate(data).citation("bibtex")
+    assert "year = {2025}" in dated and dated.startswith("@misc{nv_test_toy_2025_02_26,")
