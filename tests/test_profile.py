@@ -710,3 +710,28 @@ def test_summary_keeps_a_reverse_order_that_resolves_differently(reverse: dict, 
     data = toy(connectivity="all_to_all", calibrations=calibrations)
     data["device"]["num_qubits"] = 2
     assert _summary_line(Profile.from_dict(data), "cz") == line
+
+
+@pytest.mark.parametrize(
+    ("qubits", "lines"),
+    [
+        (
+            [
+                {"index": 0, "t1_us": 300, "readout": {"p1_given_0": 0.008, "p0_given_1": 0.016}},
+                {"index": 1, "t1_us": 280, "readout": {"p1_given_0": 0.007, "p0_given_1": 0.013}},
+                {"index": 2, "t1_us": 260, "readout": {"p1_given_0": 0.01, "p0_given_1": 0.018}},
+                {"index": 3, "t1_us": 240, "readout": {"error": 0.016}, "disabled": True},
+            ],
+            ["median T1 280 us", "median readout error 0.012"],
+        ),
+        (
+            [{"index": 3, "t1_us": 240, "readout": {"error": 0.016}, "disabled": True}],
+            ["readout unknown"],
+        ),
+    ],
+)
+def test_summary_medians_leave_out_a_disabled_qubit(qubits: list, lines: list) -> None:
+    data = toy(qubits=qubits)
+    data["device"]["num_qubits"] = 4
+    summary = Profile.from_dict(data).summary().splitlines()
+    assert [line.strip() for line in summary if "T1" in line or "readout" in line] == lines

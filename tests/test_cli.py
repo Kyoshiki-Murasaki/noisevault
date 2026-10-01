@@ -411,6 +411,29 @@ def test_diff_prints_tables_and_json() -> None:
     assert data == nv.load("ibm_kyiv").diff(nv.load("ibm_brisbane")).to_dict()
 
 
+def test_every_device_median_leaves_out_a_disabled_qubit(tmp_path: Path) -> None:
+    def device(disabled_t1_us: float) -> Profile:
+        qubits = [
+            {"index": 0, "t1_us": 300, "readout": {"error": 0.012}},
+            {"index": 1, "t1_us": 280, "readout": {"error": 0.01}},
+            {"index": 2, "t1_us": 260, "readout": {"error": 0.014}},
+            {"index": 3, "t1_us": disabled_t1_us, "readout": {"error": 0.2}, "disabled": True},
+        ]
+        data = toy(qubits=qubits)
+        data["device"]["num_qubits"] = 4
+        return Profile.from_dict(data)
+
+    profile = device(240)
+    before, after = profile.save(tmp_path / "a.json"), device(1000).save(tmp_path / "b.json")
+    shown = json.loads(runner.invoke(app, ["show", str(before), "--json"]).stdout)
+    assert (shown["median_t1_us"], shown["median_readout_error"]) == (280, 0.012)
+    summary = profile.summary().splitlines()
+    assert summary[-2:] == ["  median T1 280 us", "  median readout error 0.012"]
+    drift = json.loads(runner.invoke(app, ["diff", str(before), str(after), "--json"]).stdout)
+    medians = {m["metric"]: (m["before"], m["after"]) for m in drift["medians"]}
+    assert medians["t1_us"] == (280, 280) and medians["readout_error"] == (0.012, 0.012)
+
+
 def test_diff_of_identical_profiles() -> None:
     result = runner.invoke(app, ["diff", "ibm_fez", "ibm_fez@2025-02-26"])
     assert result.exit_code == 0 and "No change" in result.stdout
@@ -724,6 +747,15 @@ def test_show_counts_a_disabled_reverse_order_of_a_symmetric_gate(tmp_path: Path
     natives = json.loads(runner.invoke(app, ["show", str(path), "--json"]).stdout)["natives"]
     cz = next(native for native in natives if native["gate"] == "cz")
     assert cz["loci"] == {"calibrated": 1, "ideal": 0, "uncalibrated": 0, "disabled": 1}
+
+
+def test_show_leaves_a_disabled_locus_out_of_the_median_duration(tmp_path: Path) -> None:
+    calibrations = [{"gate": "cz", "qubits": [0, 1], "disabled": True, "duration_ns": 500}]
+    path = tmp_path / "toy.json"
+    path.write_text(json.dumps(toy(calibrations=calibrations)))
+    natives = json.loads(runner.invoke(app, ["show", str(path), "--json"]).stdout)["natives"]
+    cz = next(native for native in natives if native["gate"] == "cz")
+    assert (cz["median_duration_ns"], cz["disabled"]) == (70, 1)
 
 
 def test_show_groups_a_record_assumption_shared_by_many_loci(tmp_path: Path) -> None:

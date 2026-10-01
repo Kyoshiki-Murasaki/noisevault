@@ -20,6 +20,7 @@ from itertools import combinations
 from math import comb
 from typing import TYPE_CHECKING, Any
 
+from .profile import qubit_medians
 from .table import GateNoise
 
 if TYPE_CHECKING:
@@ -164,10 +165,8 @@ def diff(a: Profile, b: Profile, *, top: int = 5) -> ProfileDiff:
         )
 
     qa, qb = _qubit_values(a.table), _qubit_values(b.table)
-    medians = tuple(
-        Change(m, _median(_samples(a.table, qa, m)), _median(_samples(b.table, qb, m)))
-        for m in METRICS
-    )
+    ma, mb = _medians(a, qa), _medians(b, qb)
+    medians = tuple(Change(m, ma[m], mb[m]) for m in METRICS)
     pa, pb = _pair_values(a.table, b.table)
     newly_disabled, reenabled = _availability(a, b)
     common = range(min(a.device.num_qubits, b.device.num_qubits))
@@ -288,10 +287,16 @@ def _error(found: Any) -> float | None:
     return found.avg_infidelity if isinstance(found, GateNoise) else None
 
 
-def _samples(table: NoiseTable, qubits: dict[int, dict[str, float]], metric: str) -> list[float]:
-    if metric == "error_2q":
-        return _pair_errors(table)
-    return [v[metric] for v in qubits.values() if metric in v]
+def _medians(profile: Profile, qubits: dict[int, dict[str, float]]) -> dict[str, float | None]:
+    """The qubit medians ``nv show`` prints, and the medians of the typical gate errors."""
+    shown = qubit_medians(profile)
+    return {
+        "t1_us": shown.t1_us,
+        "t2_us": shown.t2_us,
+        "error_1q": _median([v["error_1q"] for v in qubits.values() if "error_1q" in v]),
+        "error_2q": _median(_pair_errors(profile.table)),
+        "readout_error": shown.readout_error,
+    }
 
 
 def _median(found: list[float]) -> float | None:

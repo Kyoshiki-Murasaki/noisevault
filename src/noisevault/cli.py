@@ -13,11 +13,9 @@ import json
 import os
 import platform
 import re
-import statistics
 import sys
 import warnings
 import zlib
-from collections import Counter
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
@@ -42,7 +40,16 @@ from .errors import (
     did_you_mean,
     install_hint,
 )
-from .profile import Profile, Ref, Technology, gate_loci, json_schema, load_file, parse_ref
+from .profile import (
+    Profile,
+    Ref,
+    Technology,
+    gate_stats,
+    json_schema,
+    load_file,
+    parse_ref,
+    qubit_medians,
+)
 from .table import GateNoise
 
 # Click's UsageError; typer exports only this subclass of it.
@@ -296,8 +303,7 @@ def show(
 def card(profile: Profile) -> dict[str, Any]:
     """The facts ``nv show`` prints, as JSON-ready data."""
     dev, prov, table = profile.device, profile.provenance, profile.table
-    enabled = [table.qubit(i) for i in range(dev.num_qubits) if not table.qubit(i).disabled]
-    readout = [q.readout for q in enabled if q.readout is not None]
+    medians = qubit_medians(profile)
     return {
         "ref": f"{profile.id}@{_iso(dev.calibrated_at)}" if dev.calibrated_at else profile.id,
         "id": profile.id,
@@ -308,11 +314,11 @@ def card(profile: Profile) -> dict[str, Any]:
         "num_qubits": dev.num_qubits,
         "connectivity": _connectivity(profile),
         "natives": [_native(profile, name) for name in profile.gates],
-        "median_t1_us": _median([q.t1_ns / 1000 for q in enabled if q.t1_ns is not None]),
-        "median_t2_us": _median([q.t2_ns / 1000 for q in enabled if q.t2_ns is not None]),
-        "median_readout_error": _median([(a + b) / 2 for a, b in readout]),
-        "median_p1_given_0": _median([a for a, _ in readout]),
-        "median_p0_given_1": _median([b for _, b in readout]),
+        "median_t1_us": medians.t1_us,
+        "median_t2_us": medians.t2_us,
+        "median_readout_error": medians.readout_error,
+        "median_p1_given_0": medians.p1_given_0,
+        "median_p0_given_1": medians.p0_given_1,
         "disabled_qubits": [i for i in range(dev.num_qubits) if table.qubit(i).disabled],
         "provenance": prov.model_dump(mode="json", exclude_none=True, exclude={"notes", "extra"}),
         "fingerprint": profile.fingerprint,
@@ -363,17 +369,14 @@ def _connectivity(profile: Profile) -> dict[str, Any]:
 
 
 def _native(profile: Profile, name: str) -> dict[str, Any]:
-    found = gate_loci(profile, name)
-    states = Counter(g.state for g in found)
-    usable = [g for g in found if g.state != "disabled"]
+    stats = gate_stats(profile, name)
+    states = stats.states
     return {
         "gate": name,
         "qubits": profile.table.arity(name),
-        "virtual": bool(found) and states["ideal"] == len(found),
-        "median_avg_infidelity": _median(
-            [g.avg_infidelity for g in usable if g.avg_infidelity is not None]
-        ),
-        "median_duration_ns": _median([g.duration_ns for g in usable if g.duration_ns is not None]),
+        "virtual": bool(states) and states["ideal"] == states.total(),
+        "median_avg_infidelity": stats.median_error,
+        "median_duration_ns": stats.median_duration_ns,
         "records": sum(r.gate == name for r in profile.calibrations),
         "disabled": states["disabled"],
         "loci": {
@@ -994,10 +997,6 @@ def _echo_json(data: Any) -> None:
 
 def _iso(when: datetime | None) -> str | None:
     return when.isoformat().replace("+00:00", "Z") if when else None
-
-
-def _median(values: list[float]) -> float | None:
-    return statistics.median(values) if values else None
 
 
 def _duration(ns: float | None) -> str:

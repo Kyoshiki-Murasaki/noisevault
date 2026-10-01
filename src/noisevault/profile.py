@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import statistics
 import struct
 import tempfile
 import warnings
@@ -602,15 +603,15 @@ class Profile(_Model):
         ]
         for name in self.gates:
             lines.append(
-                f"  {name:<10} {table.arity(name)}q  {_describe_loci(gate_loci(self, name))}"
+                f"  {name:<10} {table.arity(name)}q  {_describe_loci(gate_stats(self, name))}"
             )
-        qubits = [table.qubit(i) for i in range(dev.num_qubits)]
-        t1 = [q.t1_ns / 1000 for q in qubits if q.t1_ns is not None]
-        readout = [sum(q.readout) / 2 for q in qubits if q.readout is not None]
-        if t1:
-            lines.append(f"  median T1 {_median(t1):.4g} us")
+        medians = qubit_medians(self)
+        if medians.t1_us is not None:
+            lines.append(f"  median T1 {medians.t1_us:.4g} us")
         lines.append(
-            f"  median readout error {_median(readout):.3g}" if readout else "  readout unknown"
+            "  readout unknown"
+            if medians.readout_error is None
+            else f"  median readout error {medians.readout_error:.3g}"
         )
         return "\n".join(lines)
 
@@ -749,25 +750,79 @@ def _resolved_alike(a: GateNoise, b: GateNoise) -> bool:
     return (a.state, a.avg_infidelity, a.duration_ns) == (b.state, b.avg_infidelity, b.duration_ns)
 
 
+@dataclass(frozen=True)
+class QubitMedians:
+    """The median of each qubit value over the qubits that are not disabled.
+
+    A value is None when no such qubit has it. ``readout_error`` is the median of each qubit's
+    mean of P(1|0) and P(0|1).
+    """
+
+    t1_us: float | None
+    t2_us: float | None
+    readout_error: float | None
+    p1_given_0: float | None
+    p0_given_1: float | None
+
+
+def qubit_medians(profile: Profile) -> QubitMedians:
+    """The device-wide qubit values that ``summary()``, ``nv show`` and ``nv diff`` print."""
+    table = profile.table
+    working = [q for q in map(table.qubit, range(table.num_qubits)) if not q.disabled]
+    readout = [q.readout for q in working if q.readout is not None]
+    return QubitMedians(
+        t1_us=_median([q.t1_ns / 1000 for q in working if q.t1_ns is not None]),
+        t2_us=_median([q.t2_ns / 1000 for q in working if q.t2_ns is not None]),
+        readout_error=_median([(a + b) / 2 for a, b in readout]),
+        p1_given_0=_median([a for a, _ in readout]),
+        p0_given_1=_median([b for _, b in readout]),
+    )
+
+
+@dataclass(frozen=True)
+class GateStats:
+    """One gate over the loci :func:`gate_loci` finds. A disabled locus counts only by state."""
+
+    states: Counter[GateState]
+    errors: tuple[float, ...]
+    durations_ns: tuple[float, ...]
+
+    @property
+    def median_error(self) -> float | None:
+        return _median(self.errors)
+
+    @property
+    def median_duration_ns(self) -> float | None:
+        return _median(self.durations_ns)
+
+
+def gate_stats(profile: Profile, name: str) -> GateStats:
+    """Gate ``name`` across the device, as ``summary()`` and ``nv show`` print it."""
+    found = gate_loci(profile, name)
+    usable = [g for g in found if g.state != "disabled"]
+    return GateStats(
+        states=Counter(g.state for g in found),
+        errors=tuple(g.avg_infidelity for g in usable if g.avg_infidelity is not None),
+        durations_ns=tuple(g.duration_ns for g in usable if g.duration_ns is not None),
+    )
+
+
 _STATE_WORDS = {"ideal": "virtual", "uncalibrated": "no error metric", "disabled": "disabled"}
 
 
-def _describe_loci(found: list[GateNoise]) -> str:
+def _describe_loci(stats: GateStats) -> str:
     """One gate's resolved loci in words: its calibrated error, then each other state's count."""
-    if not found:
+    states, errors, total = stats.states, stats.errors, stats.states.total()
+    if not total:
         return "usable on no locus"
-    states = Counter(noise.state for noise in found)
-    errors = [noise.avg_infidelity for noise in found if noise.avg_infidelity is not None]
     parts = []
-    if errors and states["calibrated"] == len(found) and len(set(errors)) == 1:
+    if errors and states["calibrated"] == total and len(set(errors)) == 1:
         parts.append(f"avg infidelity {errors[0]:.3g} everywhere")
     elif errors:
-        parts.append(f"median avg infidelity {_median(errors):.3g} over {_loci(len(errors))}")
+        parts.append(f"median avg infidelity {stats.median_error:.3g} over {_loci(len(errors))}")
     for state, word in _STATE_WORDS.items():
         if states[state]:
-            parts.append(
-                word if states[state] == len(found) else f"{word} on {_loci(states[state])}"
-            )
+            parts.append(word if states[state] == total else f"{word} on {_loci(states[state])}")
     return ", ".join(parts)
 
 
@@ -871,10 +926,8 @@ def _sha256(data: Any) -> str:
     return hashlib.sha256(canonical_json(data).encode("utf-8")).hexdigest()
 
 
-def _median(values: list[float]) -> float:
-    ordered = sorted(values)
-    mid = len(ordered) // 2
-    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+def _median(values: Sequence[float]) -> float | None:
+    return statistics.median(values) if values else None
 
 
 def profile_id(vendor: str | None, name: str) -> str:
