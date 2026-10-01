@@ -36,7 +36,7 @@ from pennylane.measurements import (
     VarianceMP,
 )
 from pennylane.operation import Channel, Operation, Operator, StatePrepBase
-from pennylane.ops.op_math import Adjoint, CompositeOp, Conditional, SymbolicOp
+from pennylane.ops.op_math import Adjoint, CompositeOp, Conditional, ControlledOp, SymbolicOp
 
 from .. import gates
 from ..channels import readout_matrix
@@ -297,9 +297,12 @@ def to_pennylane(
     ``qml.add_noise`` at its default ``level="user"`` decomposes ``qml.adjoint`` gates and
     templates first, so they are noised gate by gate; pass ``level="top"`` to noise
     ``Adjoint(SX)``, ``Adjoint(S)`` and ``Adjoint(T)`` as the profile's sxdg, sdg and tdg.
-    Operator arithmetic, such as ``qml.prod`` or ``@``, gets the noise of the gates it
-    decomposes into, after the whole operator. Arithmetic with no such decomposition, such as
-    ``qml.sum``, raises ValueError.
+    Operator arithmetic, such as ``qml.prod``, ``@``, ``qml.pow``, ``qml.exp`` or ``qml.ctrl``,
+    gets the noise of the gates it decomposes into, after the whole operator.
+    ``qml.pow(qml.RX(0.3, 0), 2)`` gets the noise of ``rx``. An operator with its own gate name,
+    such as ``qml.CNOT`` or ``qml.CRX``, is noised as one gate. Arithmetic with no decomposition
+    into gates, such as ``qml.sum``, raises ValueError. State preparation, such as
+    ``qml.StatePrep`` or ``qml.QubitDensityMatrix``, is noiseless.
 
     ``qml.IsingZZ(pi/2)`` gets the noise of a profile's ``zz``, ``qml.IsingXX(+-pi/2)`` and
     ``qml.IsingYY(+-pi/2)`` that of its ``ms``, and ``qml.Rot(a, theta, -a)`` that of its ``r``
@@ -365,7 +368,7 @@ def _describe(report: Report, readout: bool) -> None:
     report.approximate(
         "initial state",
         "ideal |0...0>",
-        "state preparation operations (BasisState, StatePrep) are noiseless",
+        "state preparation operations (BasisState, StatePrep, QubitDensityMatrix) are noiseless",
     )
     report.omit("idle time between gates (PennyLane circuits are not scheduled)")
     report.omit("readout on mid-circuit measurements")
@@ -419,14 +422,16 @@ def _is_gate(op: Operator) -> bool:
     op = _unconditional(op)
     return (
         isinstance(op, Operation | CompositeOp | SymbolicOp)
-        and not isinstance(op, Channel | StatePrepBase)
+        and not isinstance(op, Channel | StatePrepBase | qml.QubitDensityMatrix)
         and op.name not in _NOT_GATES
     )
 
 
 def _is_arithmetic(op: Operator) -> bool:
-    """Operator arithmetic such as ``qml.prod``; a symbolic Operation such as CNOT is a gate."""
-    return isinstance(op, CompositeOp | SymbolicOp) and not isinstance(op, Operation)
+    """Operator arithmetic, such as ``qml.prod``, ``qml.pow`` or ``qml.ctrl``, that is not a
+    registry gate (``CNOT``, ``Adjoint(SX)``) or a named controlled gate (``CRX``)."""
+    named = op.name in _CANONICAL or (isinstance(op, ControlledOp) and type(op) is not ControlledOp)
+    return isinstance(op, CompositeOp | SymbolicOp) and not named
 
 
 def _charges(op: Operator, defined: Container[str]) -> list[Charge]:

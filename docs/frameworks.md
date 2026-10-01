@@ -184,11 +184,15 @@ What the report can list:
 
 - **Exact.** Gate errors. Readout errors, applied before each measurement in its measured
   basis.
-- **Approximated.** The initial state is ideal, and state preparation templates are noiseless.
-  `qml.add_noise` at its default `level="user"` noises `qml.adjoint` gates and templates through
-  their decomposition; pass `level="top"` to noise `Adjoint(SX)`, `Adjoint(S)` and `Adjoint(T)`
-  as the profile's `sxdg`, `sdg` and `tdg`. Operator arithmetic, such as `qml.prod` or `@`,
-  gets the noise of the gates it decomposes into, after the whole operator. The basis rotation
+- **Approximated.** The initial state is ideal. State preparation with `BasisState`,
+  `StatePrep`, `QubitDensityMatrix`, `AmplitudeEmbedding` or `BasisEmbedding` is noiseless.
+  Templates that prepare a state with gates, such as `MottonenStatePreparation`, get noise like
+  other templates. `qml.add_noise` at its default `level="user"` noises `qml.adjoint` gates and
+  templates through their decomposition; pass `level="top"` to noise `Adjoint(SX)`, `Adjoint(S)`
+  and `Adjoint(T)` as the profile's `sxdg`, `sdg` and `tdg`. Operator arithmetic, such as
+  `qml.prod`, `@`, `qml.pow`, `qml.exp` or `qml.ctrl`, gets the noise of the gates it
+  decomposes into, after the whole operator. An operator with its own gate name, such as
+  `qml.CNOT` or `qml.CRX`, is noised as one gate. The basis rotation
   before a Pauli measurement is ideal. Gates conditioned on mid-circuit measurements get their
   noise whether or not the condition holds. A measurement without wires gets readout error on
   the wires that the circuit's operations and measurements use.
@@ -196,7 +200,9 @@ What the report can list:
   measurements. Readout on observables not measured in one product basis. Effects.
 
 Operator arithmetic with no decomposition into gates, such as `qml.sum`, raises an error. It
-has no gate noise, and `default.mixed` cannot run it.
+has no gate noise, and `default.mixed` cannot run it. Before PennyLane 0.45, a QNode leaves
+`qml.sum`, `qml.Hamiltonian` and `qml.s_prod` off its tape, so the circuit runs without them
+and the model never sees them.
 
 `qml.add_noise` keeps only part of a shot vector's results (`shots=[100, 200]`) when readout
 noise is on, so the model raises an error for shot vectors instead of returning wrong numbers.
