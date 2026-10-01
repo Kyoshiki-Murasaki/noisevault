@@ -40,7 +40,7 @@ profile files still load.
 - **No typical noise for gates that need a decomposition.** A gate that needs several native
   entanglers, such as `swap` or `ccx`, or acts on more than two qubits, never takes the typical
   native gate's noise. If the profile does not calibrate it, the export raises
-  `MissingCalibrationError` and asks you to decompose it, with either `unknown_gates` value.
+  `MissingCalibrationError` with either `unknown_gates` value and asks you to decompose it.
 - **Readable reports.** Approximation warnings point at your own line of code, and
   `report.summary()` states counts as sentences, such as "cx took the typical native gate's
   noise 40 times".

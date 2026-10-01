@@ -475,7 +475,7 @@ def test_shadow_measurements_are_reported_and_warned_without_readout(qml, measur
     model = to_pennylane(profile)
     with pytest.warns(NoiseApproximationWarning, match="random measurement basis"):
         got = run(model)
-        assert "readout on classical shadow measurements" in model.report.omitted
+    assert "readout on classical shadow measurements" in model.report.omitted
     np.testing.assert_array_equal(got, run(to_pennylane(profile, readout=False)))
 
 

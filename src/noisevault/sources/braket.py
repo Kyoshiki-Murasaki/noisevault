@@ -262,8 +262,9 @@ def _layout(
 
     When every id is an integer the id is the index, so a Braket circuit's qubit numbers are the
     profile's physical qubits; indices with no id (IQM counts from 1) are disabled by the caller.
-    Unless the paradigm is fully connected, the edges are exactly its connectivity graph's, even
-    none; with no graph they come from the calibrated ``pairs``, and with neither, all to all.
+    A fully connected paradigm is all to all. Otherwise the edges are those of its connectivity
+    graph, even when the graph has none. With no graph they are the calibrated ``pairs``, and
+    with no pairs either the device is all to all.
     """
     connectivity = paradigm.get("connectivity") or {}
     graph: Mapping[str, list[str]] | None = connectivity.get("connectivityGraph")

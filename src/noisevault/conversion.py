@@ -70,9 +70,9 @@ def resolve_op(
     DisabledGateError. A gate with no calibration there (not defined, not a native, no error
     metric, or a pair the profile does not allow) raises MissingCalibrationError when
     ``unknown_gates`` is ``"error"``; with ``"typical"`` it gets the noise of the typical native
-    gate of its arity, reported and warned about once per gate name. Gates that need several
-    native entanglers, or act on more than two qubits, must be decomposed first under either
-    setting.
+    gate of its arity, reported and warned about once per gate name. Under either setting, a
+    gate with no calibration there raises MissingCalibrationError if it needs several native
+    entanglers or acts on more than two qubits.
     """
     if unknown_gates not in ("typical", "error"):
         raise ValueError(f"unknown_gates={unknown_gates!r}: choose 'typical' or 'error'")

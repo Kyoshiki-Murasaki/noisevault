@@ -220,10 +220,9 @@ def check(
     """Run the check circuits through every installed export (or ``frameworks``).
 
     ``layout`` gives the chain of physical qubits to use (1 to 4 qubits, neighbors connected);
-    by default ``profile.suggest_layout(n)`` for the largest such ``n`` whose chain it can
-    connect and build check circuits on. ``shots`` and ``seed`` apply to sampled frameworks
-    (Stim). A framework that is not installed, or cannot express any check circuit, is listed
-    in ``skipped`` with the reason.
+    by default ``profile.suggest_layout(n)`` for the largest such ``n`` with a check circuit on
+    its chain. ``shots`` and ``seed`` apply to sampled frameworks (Stim). A framework that is not
+    installed, or cannot express any check circuit, is listed in ``skipped`` with the reason.
     """
     names = list(FRAMEWORKS if frameworks is None else frameworks)
     unknown = [n for n in names if n not in FRAMEWORKS]
