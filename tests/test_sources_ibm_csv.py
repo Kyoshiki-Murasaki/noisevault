@@ -177,7 +177,7 @@ def test_qubit_without_t1_takes_the_median_and_says_so(tmp_path: Path) -> None:
 
 
 def test_a_blank_gate_error_takes_the_device_median_and_says_so(tmp_path: Path) -> None:
-    row_0 = '"0","0.00015","0.00015","1:0.0013"'  # rz, sx, x and CZ errors of qubit 0
+    row_0 = '"0","0.00015","0.00015","1:0.0013"'
     path = _edited(tmp_path, HERON, row_0, '"0","","0.00015","1:0.0013"')
     profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     sx = profile.table.gate("sx", (0,))

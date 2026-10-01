@@ -347,7 +347,7 @@ def test_a_gate_the_properties_omit_on_a_configured_qubit_takes_the_median() -> 
     props = backend.properties().to_dict()
     props["gates"] = [e for e in props["gates"] if (e["gate"], e["qubits"]) != ("sx", [0])]
     backend._props_dict = props
-    assert backend.target["sx"][(0,)] is None  # the configuration still lists it
+    assert backend.target["sx"][(0,)] is None
     errors = [
         p["value"]
         for e in props["gates"]

@@ -145,7 +145,6 @@ def from_qiskit_backend(backend: Any) -> Profile:
     if properties is not None:
         from_props = calibration_from_properties(properties.to_dict())
         # IBM's Target converter drops non-operational gates and every gate on a faulty qubit.
-        # Their entries keep a dropped pair in the connectivity, so it shows as disabled.
         names = {_QISKIT_TO_CANONICAL.get(n, n) for n in target.operation_names}
         in_target = {(i.name, i.qubits) for i in cal.instructions}
         dropped = tuple(
@@ -655,7 +654,6 @@ def _gate(
 
 
 def _both_ways(name: str, arity: int, loci: Iterable[tuple[int, ...]]) -> set[tuple[int, ...]]:
-    """``loci``, with each pair of a symmetric gate in both orders."""
     out = set(loci)
     if arity == 2 and gates.is_symmetric(name):
         out |= {qubits[::-1] for qubits in out}
@@ -668,7 +666,6 @@ def _unlisted(
     num_qubits: int,
     connectivity: Mapping[str, Any],
 ) -> list[tuple[int, ...]]:
-    """The loci the gate's device default would cover that ``listed`` leaves out."""
     if arity == 1:
         loci = [(q,) for q in range(num_qubits)]
     elif arity == 2:
@@ -685,7 +682,6 @@ def _unpublished_note(
     definition: Mapping[str, Any],
     disabled_qubits: set[int],
 ) -> str | None:
-    """The note naming the working loci the gate's device median stands in for."""
     if "avg_infidelity" not in definition:
         return None
     if arity == 2 and gates.is_symmetric(name):
