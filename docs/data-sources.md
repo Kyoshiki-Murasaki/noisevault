@@ -10,7 +10,9 @@ NoiseVault gets calibrations three ways:
   CSV, saved Amazon Braket device properties, or a calibration that cirq-google ships.
 
 `nv list` shows the vault first, then the bundled set. A vault profile with the same id,
-calibration time and fingerprint as a bundled one hides it.
+calibration time and fingerprint as a bundled one hides it. When one device has several
+calibrations on the same date, `nv list` adds the UTC time under the date, and a ref with the
+full time, such as `ibm_fez@2025-02-26T20:16:25Z`, loads that one.
 
 ## Licensing policy
 

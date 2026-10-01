@@ -832,8 +832,9 @@ def test_a_usage_mistake_is_one_line(args: list[str], error: str) -> None:
 def test_nv_alone_prints_the_help_and_no_error() -> None:
     result = runner.invoke(app, [], env={"COLUMNS": "80"}, prog_name="nv")
     assert result.exit_code == 0, result.output
-    assert "Usage: nv" in result.output and "list" in result.output
-    assert "error" not in result.output
+    text = re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # typer forces color on CI runners
+    assert "Usage: nv" in text and "list" in text
+    assert "error" not in text
 
 
 def test_an_unexpected_failure_is_one_line_unless_debugging(monkeypatch) -> None:
