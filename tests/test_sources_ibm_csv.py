@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import statistics
 from pathlib import Path
 
 import pytest
@@ -207,10 +208,10 @@ def test_a_pair_with_a_gate_length_and_no_error_keeps_both(tmp_path: Path) -> No
     path = _edited(tmp_path, row_0, '"2:0.0016;0:0.0013","2:68;0:68"', '"2:0.0016","2:68;0:100"')
     profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     assert set(profile.connectivity.edges) == {(0, 1), (1, 2), (2, 3)}
-    # working cz: 0.0016 and 0.0017 at 68 ns on (1, 2) and (2, 1); 100 ns both ways on (0, 1)
     cz = profile.table.gate("cz", (0, 1))
-    assert (cz.state, cz.avg_infidelity, cz.duration_ns) == ("calibrated", 0.00165, 100)
-    assert profile.gates["cz"].duration_ns == 84
+    median_error = statistics.median([0.0016, 0.0017])
+    assert (cz.state, cz.avg_infidelity, cz.duration_ns) == ("calibrated", median_error, 100)
+    assert profile.gates["cz"].duration_ns == statistics.median([68, 68, 100, 100])
     assert profile.provenance.notes == (
         "Pairs [(0, 1)] have no cz error; the device median applies to them.",
     )

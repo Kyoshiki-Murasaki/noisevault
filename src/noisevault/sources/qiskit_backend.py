@@ -23,7 +23,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from .. import __version__, gates, metrics, units
 from ..profile import FORMAT_VERSION, Profile, Technology
@@ -540,7 +540,9 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     notes += gate_notes
     for key, label in _COHERENCE.items():
         if invalid[key] and not any(key in q for q in working):
-            index, value = min(invalid[key], key=lambda found: found[0] in disabled_qubits)
+            index, value = next(
+                (r for r in invalid[key] if r.index not in disabled_qubits), invalid[key][0]
+            )
             raise ValueError(
                 f"{cal.name} reports no valid {label} on any working qubit (e.g. qubit {index}:"
                 f" {label} = {value:g} us); {label} must be a positive number of microseconds"
@@ -599,20 +601,25 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
 _COHERENCE = {"t1_us": "T1", "t2_us": "T2"}
 
 
+class _Reading(NamedTuple):
+    index: int
+    value: float
+
+
 def _without_invalid_coherence(
     cal: Calibration,
-) -> tuple[dict[int, QubitCalibration], dict[str, list[tuple[int, float]]]]:
+) -> tuple[dict[int, QubitCalibration], dict[str, list[_Reading]]]:
     """The qubits with nonpositive or nonfinite T1/T2 cleared, and what each cleared one said.
 
     A dead qubit can report T1 = 0; treating it as missing keeps the rest of the device usable.
     """
     qubits = dict(cal.qubits)
-    invalid: dict[str, list[tuple[int, float]]] = {key: [] for key in _COHERENCE}
+    invalid: dict[str, list[_Reading]] = {key: [] for key in _COHERENCE}
     for index, qubit in sorted(cal.qubits.items()):
         for key in _COHERENCE:
             value = getattr(qubit, key)
             if value is not None and not (math.isfinite(value) and value > 0):
-                invalid[key].append((index, value))
+                invalid[key].append(_Reading(index, value))
                 qubits[index] = replace(qubits[index], **{key: None})
     return qubits, invalid
 
