@@ -300,3 +300,46 @@ def test_a_pair_calibrated_outside_the_connectivity_is_compared() -> None:
     medians = {c.metric: c for c in result.medians}
     assert medians["error_2q"].before == pytest.approx(0.015)
     assert medians["error_2q"].after == pytest.approx(0.105)
+
+
+def _both_orders(record_01: dict, record_10: dict) -> Profile:
+    """All-to-all, cz defaulting to 0.01, and a separate cz record for each order of (0, 1)."""
+    gates = {
+        "rz": {"virtual": True},
+        "sx": {"avg_infidelity": 1e-3},
+        "cz": {"avg_infidelity": 0.01},
+    }
+    records = [
+        {"gate": "cz", "qubits": [0, 1], **record_01},
+        {"gate": "cz", "qubits": [1, 0], **record_10},
+    ]
+    return Profile.model_validate(toy(connectivity="all_to_all", gates=gates, calibrations=records))
+
+
+ON, OFF = {"avg_infidelity": 0.01}, {"disabled": True}
+
+
+def test_each_order_of_a_symmetric_pair_with_its_own_record_is_compared() -> None:
+    calibrated, reverse_off = _both_orders(ON, {"avg_infidelity": 0.02}), _both_orders(ON, OFF)
+    assert reverse_off.table.gate("cz", (1, 0)).state == "disabled"
+    assert reverse_off.table.gate("cz", (0, 1)).state == "calibrated"
+    there, back = diff(calibrated, reverse_off), diff(reverse_off, calibrated)
+    assert [(r.newly_disabled, r.reenabled) for r in (there, back)] == [
+        (("cz 1-0",), ()),
+        ((), ("cz 1-0",)),
+    ]
+    assert there.pairs == ()
+
+    swapped = diff(_both_orders(ON, OFF), _both_orders(OFF, ON))
+    assert (swapped.newly_disabled, swapped.reenabled) == (("cz 0-1",), ("cz 1-0",))
+
+    drifted = diff(calibrated, _both_orders(ON, {"avg_infidelity": 0.05}))
+    assert [(c.where, c.before, c.after) for c in drifted.pairs] == [("1-0", 0.02, 0.05)]
+
+
+def test_both_orders_of_a_symmetric_pair_moving_together_are_one_entry() -> None:
+    on, off = _both_orders(ON, ON), _both_orders(OFF, OFF)
+    assert diff(on, off).newly_disabled == ("cz 0-1",)
+    assert diff(off, on).reenabled == ("cz 0-1",)
+    drifted = diff(on, _both_orders({"avg_infidelity": 0.03}, {"avg_infidelity": 0.03}))
+    assert [(c.where, c.before, c.after) for c in drifted.pairs] == [("0-1", 0.01, 0.03)]

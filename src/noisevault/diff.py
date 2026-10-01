@@ -344,28 +344,43 @@ def _availability(a: Profile, b: Profile) -> tuple[tuple[str, ...], tuple[str, .
     Every locus a record names in either profile is compared, so removing an override that
     enabled a pair under a disabled definition counts. A locus that one profile does not have at
     all (a directed gate calibrated in the other direction, a qubit past the end) is neither: it
-    was not usable before, or is not now.
+    was not usable before, or is not now. Both orders of a symmetric gate's pair are compared,
+    and they are one entry, under the lower qubit first, when they move the same way.
     """
-    loci = sorted({*_loci(a), *_loci(b)})
-    state_a, state_b = [_state(a, k) for k in loci], [_state(b, k) for k in loci]
+    moves = {k: (_state(a, k), _state(b, k)) for k in sorted({*_loci(a), *_loci(b)})}
     labels = [
-        f"{gate or 'qubit'} {'-'.join(map(str, qubits)) if qubits else DEFAULT}"
-        for gate, qubits in loci
+        (f"{gate or 'qubit'} {'-'.join(map(str, qubits)) if qubits else DEFAULT}", move)
+        for (gate, qubits), move in moves.items()
+        if not _same_as_lower_order(gate, qubits, moves, a, b)
     ]
-    pairs = list(zip(labels, state_a, state_b, strict=True))
     return (
-        tuple(label for label, x, y in pairs if x == "usable" and y == "disabled"),
-        tuple(label for label, x, y in pairs if x == "disabled" and y == "usable"),
+        tuple(label for label, move in labels if move == ("usable", "disabled")),
+        tuple(label for label, move in labels if move == ("disabled", "usable")),
     )
 
 
+def _same_as_lower_order(
+    gate: str,
+    qubits: tuple[int, ...],
+    moves: dict[tuple[str, tuple[int, ...]], tuple[str | None, str | None]],
+    a: Profile,
+    b: Profile,
+) -> bool:
+    if len(qubits) != 2 or qubits[0] < qubits[1]:
+        return False
+    symmetric = a.table.symmetric(gate) and b.table.symmetric(gate)
+    return symmetric and moves.get((gate, qubits[::-1])) == moves[gate, qubits]
+
+
 def _loci(profile: Profile) -> set[tuple[str, tuple[int, ...]]]:
-    """Recorded gate loci as (gate, qubits), one order for a symmetric pair; disabled gate
+    """Recorded gate loci as (gate, qubits), both orders for a symmetric pair; disabled gate
     definitions as (gate, ()); disabled qubits as ("", (index,))."""
     table = profile.table
-    gates = {
-        (r.gate, tuple(sorted(r.qubits)) if table.symmetric(r.gate) else r.qubits)
+    gates = {(r.gate, r.qubits) for r in profile.calibrations}
+    gates |= {
+        (r.gate, r.qubits[::-1])
         for r in profile.calibrations
+        if len(r.qubits) == 2 and table.symmetric(r.gate)
     }
     gates |= {(name, ()) for name, spec in profile.gates.items() if spec.disabled}
     return gates | {("", (q.index,)) for q in profile.qubits if q.disabled}
