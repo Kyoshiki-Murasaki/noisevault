@@ -174,6 +174,59 @@ def test_gate_superoperator_equals_core_channels(gate, targets, name, params, la
     assert np.abs(got - expected).max() < 1e-10
 
 
+def _rotations_only() -> Profile:
+    """Calibrated rotations and no fixed-angle gate (x, sx, y, s, zz) of their own."""
+    defs = {n: {"avg_infidelity": e} for n, e in (("rx", 3e-3), ("ry", 5e-3), ("rz", 7e-3))}
+    defs |= {
+        "cx": {"qubits": 2, "avg_infidelity": 0.2},
+        "rzz": {"qubits": 2, "avg_infidelity": 0.01},
+    }
+    return Profile.model_validate(toy(connectivity="all_to_all", gates=defs))
+
+
+@pytest.mark.parametrize(
+    ("gate", "name", "params"),
+    [
+        (cirq.ZZ**0.5, "rzz", (PI / 2,)),
+        (cirq.X, "rx", (PI,)),
+        (cirq.X**-0.5, "rx", (-PI / 2,)),
+        (cirq.Y, "ry", (PI,)),
+        (cirq.S, "rz", (PI / 2,)),
+    ],
+    ids=repr,
+)
+def test_fixed_angle_of_a_calibrated_rotation_gets_the_rotation_noise(gate, name, params) -> None:
+    profile = _rotations_only()
+    model = to_cirq(profile, unknown_gates="error")
+    qids = cirq.LineQubit.range(cirq.num_qubits(gate))
+    physical = tuple(range(len(qids)))
+    got, wires = _superop(
+        _ops(model.noisy_operation(gate.on(*qids))), dict(zip(qids, physical, strict=True))
+    )
+
+    core = resolve_op(
+        profile.table,
+        name,
+        physical,
+        unknown_gates="error",
+        report=Report.start(profile, "t", None),
+    )
+    ideal = ChannelSpec("unitary", physical, (gates.GATES[name].unitary(*params),))
+    assert np.abs(got - superoperator([ideal, *core.channels], wires)).max() < 1e-10
+
+
+@pytest.mark.parametrize(("zz", "angle"), [(False, PI / 2), (True, PI / 4)], ids=["rzz", "rzz+zz"])
+def test_check_runs_rzz_at_the_zz_angle_unless_the_profile_defines_zz(zz, angle) -> None:
+    profile = _rotations_only()
+    if zz:
+        data = profile.to_dict()
+        data["gates"]["zz"] = {"qubits": 2, "avg_infidelity": 0.05}
+        profile = Profile.model_validate(data)
+    result = profile.check(frameworks=["cirq"])
+    assert {op.params for c in result.circuits for op in c.ops if op.name == "rzz"} == {(angle,)}
+    assert result.passed
+
+
 def test_every_registry_cirq_class_exists() -> None:
     modules = [cirq]
     try:
@@ -420,6 +473,16 @@ def test_grid_qubits_map_through_profile_coords() -> None:
         model.noisy_operation(cirq.X(cirq.GridQubit(5, 5)))
 
 
+def test_default_placement_must_be_injective_within_a_circuit_only() -> None:
+    model = to_cirq(_with_coords())
+    line, grid = cirq.LineQubit(0), cirq.GridQubit(0, 0)  # both default to device qubit 0
+    for q in (line, grid):
+        noisy = cirq.Circuit((cirq.X**0.5)(q)).with_noise(model)
+        assert noisy.all_qubits() == {q}
+    with pytest.raises(LayoutError, match="both map to device qubit 0"):
+        cirq.Circuit((cirq.X**0.5)(line), (cirq.X**0.5)(grid)).with_noise(model)
+
+
 @pytest.mark.parametrize(
     ("profile", "qubit", "layout", "match"),
     [
@@ -563,6 +626,31 @@ def test_phased_xz_is_r_then_a_z_rotation_with_their_noise() -> None:
     ops = [Op("r", (0,), (PI * x, PI * a)), Op("rz", (0,), (PI * z,)), Op("h", (0,))]
     assert _tvd(got, reference(profile, ops, 1, readout=False)) <= 1e-9
     assert "typical_noise_used" not in model.report.events
+
+
+def test_phased_xz_calibrated_as_its_own_gate_gets_that_calibration() -> None:
+    defs = {
+        "r": {"avg_infidelity": 2e-2},
+        "rz": {"avg_infidelity": 3e-2},
+        "phased_xz": {"qubits": 1, "pauli": [0.05, 0, 0.01]},
+    }
+    profile = Profile.model_validate(toy(gates=defs))
+    model = to_cirq(profile, unknown_gates="error")
+    q = cirq.LineQubit(0)
+    gate = cirq.PhasedXZGate(x_exponent=0.3, z_exponent=0.2, axis_phase_exponent=0.4)
+    ops = _ops(model.noisy_operation(gate(q)))
+    got, _ = _superop(ops, {q: 0})
+
+    core = resolve_op(
+        profile.table,
+        "phased_xz",
+        (0,),
+        unknown_gates="error",
+        report=Report.start(profile, "t", None),
+    )
+    ideal = ChannelSpec("unitary", (0,), (cirq.unitary(gate),))
+    assert ops[0] == gate(q)
+    assert np.abs(got - superoperator([ideal, *core.channels], [0])).max() < 1e-12
 
 
 def test_google_gatesets_are_native_on_rainbow() -> None:

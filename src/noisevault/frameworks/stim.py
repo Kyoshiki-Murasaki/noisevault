@@ -143,7 +143,8 @@ def to_stim(
     if readout == "exact":
         _check_exact_readout(found)
 
-    physical = normalize_layout(sorted(found.qubits), layout, profile)
+    qubits = found.qubits | found.noise_qubits if existing_noise == "keep" else found.qubits
+    physical = normalize_layout(sorted(qubits), layout, profile)
     report = Report.start(
         profile,
         "stim",
@@ -158,11 +159,12 @@ def to_stim(
     _describe(report, found, readout, tick_ns, existing_noise)
     exporter = _Exporter(profile, physical, report, readout, tick_ns, existing_noise, unknown_gates)
     lines, _ = exporter.block(circuit, set())
+    flips = exporter.record_flips(circuit) if readout == "exact" else None
     exporter.finish()
 
     out = NoiseVaultStimCircuit("\n".join(lines))
     out.report, out.profile, out.layout = report, profile, physical
-    out.readout_flips = exporter.record_flips(circuit) if readout == "exact" else None
+    out.readout_flips = flips
     return out
 
 
@@ -234,6 +236,7 @@ def layout_from_coords(circuit: stim.Circuit | str, profile: Profile) -> dict[in
 @dataclass
 class _Scan:
     qubits: set[int] = field(default_factory=set)  # every qubit an operation touches
+    noise_qubits: set[int] = field(default_factory=set)  # qubits that noise instructions target
     pairs: set[tuple[int, int]] = field(default_factory=set)  # 2-qubit gate targets
     noise: str | None = None  # first noise instruction, as text
     herald: str | None = None  # first heralded noise instruction (it adds records)
@@ -257,6 +260,8 @@ def _scan(circuit: stim.Circuit, found: _Scan | None = None) -> _Scan:
         if item.name in _HERALDED:
             found.herald = found.herald or _short(item)
         if kind == "noise":
+            qubits = (t.qubit_value for t in item.targets_copy())
+            found.noise_qubits.update(q for q in qubits if q is not None)
             continue
         for group in item.target_groups():
             qubits = [t.qubit_value for t in group if t.qubit_value is not None]
@@ -415,28 +420,34 @@ class _Exporter:
     def _measure(self, inst: stim.CircuitInstruction, busy: set[int], lines: list[str]) -> set[int]:
         stated = inst.gate_args_copy()
         stated_flip = stated[0] if stated and self.keep_noise else 0.0
-        runs: list[tuple[float, list[list[stim.GateTarget]]]] = []
-        measured: list[int] = []
-        for group in inst.target_groups():
-            qubits = [t.qubit_value for t in group]
-            measured += qubits
-            flip = _either(stated_flip, self._readout_flip(qubits))
-            if runs and runs[-1][0] == flip:
-                runs[-1][1].append(group)
-            else:
-                runs.append((flip, [group]))
-        busy.update(measured)
-        # Runs of equal flip probability keep the targets, and so the record order, unchanged.
-        lines.extend(_text(inst, groups, [flip] if flip else []) for flip, groups in runs)
-        if inst.name in _PREP_FLIP:
-            self._prep(inst.name, measured, lines)
+        resets = inst.name in _PREP_FLIP
+        # A qubit measured and reset twice must get its preparation error between the two.
+        groups = inst.target_groups()
+        for chunk in _disjoint_chunks(groups) if resets else [groups]:
+            runs: list[tuple[float, list[list[stim.GateTarget]]]] = []
+            measured: list[int] = []
+            for group in chunk:
+                qubits = [t.qubit_value for t in group]
+                measured += qubits
+                flip = _either(stated_flip, self._readout_flip(qubits))
+                if runs and runs[-1][0] == flip:
+                    runs[-1][1].append(group)
+                else:
+                    runs.append((flip, [group]))
+            busy.update(measured)
+            # Runs of equal flip probability keep the targets, and so the record order, unchanged.
+            lines.extend(_text(inst, run, [flip] if flip else []) for flip, run in runs)
+            if resets:
+                self._prep(inst.name, measured, lines)
         return busy
 
     def _reset(self, inst: stim.CircuitInstruction, busy: set[int], lines: list[str]) -> set[int]:
-        qubits = [t.value for t in inst.targets_copy()]
-        busy.update(qubits)
-        lines.append(str(inst))
-        self._prep(inst.name, qubits, lines)
+        chunks = _disjoint_chunks(inst.target_groups())
+        for chunk in chunks:
+            qubits = [t.value for group in chunk for t in group]
+            busy.update(qubits)
+            lines.append(str(inst) if len(chunks) == 1 else _text(inst, chunk))
+            self._prep(inst.name, qubits, lines)
         return busy
 
     def _prep(self, name: str, qubits: list[int], lines: list[str]) -> None:

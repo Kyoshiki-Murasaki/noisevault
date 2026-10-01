@@ -45,8 +45,9 @@ NOTE = (
 )
 _EXTRAS = {"qiskit": "qiskit", "cirq": "cirq", "pennylane": "pennylane", "stim": "stim"}
 # Gate angles for check circuits: pi/2 unless listed. r keeps a phase off 0 so Cirq does not
-# turn it into an X rotation, and rzz stays off pi/2, which Cirq names zz.
-_ANGLES: dict[str, tuple[float, ...]] = {"r": (pi / 2, pi / 4), "rzz": (pi / 4,), "ms": (0.0, 0.0)}
+# turn it into an X rotation. rzz at pi/2 equals zz, which Cirq and PennyLane must still
+# charge rzz's noise unless the profile defines zz (see _two_qubit_ops).
+_ANGLES: dict[str, tuple[float, ...]] = {"r": (pi / 2, pi / 4), "ms": (0.0, 0.0)}
 _MAX_ORDER = 8
 
 
@@ -320,7 +321,10 @@ def _two_qubit_ops(profile: Profile, chain: Sequence[int], i: int) -> list[Op]:
         for a, b in ((i, i + 1), (i + 1, i)):
             found = table.gate(name, (chain[a], chain[b]))
             if _calibrated(found):
-                out.append(_op(name, (a, b)))
+                op = _op(name, (a, b))
+                if name == "rzz" and "zz" in profile.gates:
+                    op = Op(name, op.qubits, (pi / 4,))  # pi/2 would be the zz gate
+                out.append(op)
                 break
     return out
 

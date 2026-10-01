@@ -60,7 +60,7 @@ def normalize_layout(
             if index is None:
                 raise LayoutError(
                     f"qubit {label!r} has no integer index; pass layout={{{label!r}: <physical"
-                    " qubit>, ...}} covering every circuit qubit"
+                    " qubit>, ...} covering every circuit qubit"
                 )
             mapping[label] = index
     elif isinstance(layout, Mapping):

@@ -13,7 +13,7 @@ from __future__ import annotations
 import numbers
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, get_args
@@ -43,7 +43,8 @@ class _PowFamily:
     """Canonical names of a Cirq EigenGate class by exponent, compared modulo ``period``.
 
     Exponents that name no gate map to ``other``; when ``other`` is None the gate is unknown
-    and is reported as ``base**exponent``.
+    and is reported as ``base**exponent``. A named exponent also maps to ``other`` when
+    ``defined`` (the profile's gates) has ``other`` but not that name.
     """
 
     base: str
@@ -51,12 +52,14 @@ class _PowFamily:
     names: tuple[tuple[float, str], ...]
     other: str | None
 
-    def name_for(self, exponent: Any) -> str:
+    def name_for(self, exponent: Any, defined: Container[str]) -> str:
         if isinstance(exponent, numbers.Real):
             for value, name in self.names:
                 gap = (float(exponent) - value) % self.period
                 if min(gap, self.period - gap) < _ANGLE_TOL:
-                    return name
+                    if name in defined or self.other not in defined:
+                        return name
+                    break
         if self.other is not None:
             return self.other
         shown = f"{exponent:.6g}" if isinstance(exponent, numbers.Real) else str(exponent)
@@ -128,11 +131,14 @@ _RESOLVE_FIRST = (
 )
 
 
-def gate_name(gate: cirq.Gate) -> str:
+def gate_name(gate: cirq.Gate, defined: Container[str] = ()) -> str:
     """The canonical NoiseVault name of a Cirq unitary gate.
 
     The most specific class decides: this module's own gates (:class:`ECRGate`), an exponent
-    table for the power gates, else the gate registry's Cirq column. Any other gate is named
+    table for the power gates, else the gate registry's Cirq column. A power gate at a fixed
+    angle (``ZZ**0.5`` is ``zz``, ``X`` is ``x``) takes its rotation's name instead (``rzz``,
+    ``rx``) when ``defined``, a profile's gate names, has the rotation but not the fixed
+    gate. Any other gate is named
     after its class in snake case without the ``Gate`` suffix (``FSimGate`` -> ``fsim``,
     ``MatrixGate`` -> ``matrix``), so a profile can calibrate it under that name; otherwise it
     gets the typical-noise rule. A power gate whose name depends on an unresolved exponent
@@ -145,7 +151,7 @@ def gate_name(gate: cirq.Gate) -> str:
         if family is not None:
             if family.names and cirq.is_parameterized(gate):
                 raise ValueError(f"the gate of {gate!r} depends on its exponent; {_RESOLVE_FIRST}")
-            return family.name_for(gate.exponent)  # type: ignore[attr-defined]
+            return family.name_for(gate.exponent, defined)  # type: ignore[attr-defined]
         if cls.__name__ in _BY_CLASS:
             return _BY_CLASS[cls.__name__]
     stem = re.sub(r"(Pow)?Gate$", "", type(gate).__name__) or type(gate).__name__
@@ -164,10 +170,19 @@ class _QubitMap:
         if layout is not None:
             keyed = _keyed_layout(layout)
             self._known = dict(normalize_layout(list(keyed), keyed, profile))  # type: ignore[arg-type]
-        self._owner = {index: qid for qid, index in self._known.items()}
 
     def physical(self, qids: Sequence[cirq.Qid]) -> tuple[int, ...]:
-        return tuple(self._one(qid) for qid in qids)
+        """Device qubits of ``qids``, which must map to distinct ones."""
+        indices = tuple(self._one(qid) for qid in qids)
+        owner: dict[int, cirq.Qid] = {}
+        for qid, index in zip(qids, indices, strict=True):
+            first = owner.setdefault(index, qid)
+            if first != qid:
+                raise LayoutError(
+                    f"{first!r} and {qid!r} both map to device qubit {index}; pass layout= to"
+                    " place them explicitly"
+                )
+        return indices
 
     def _one(self, qid: cirq.Qid) -> int:
         if qid in self._known:
@@ -179,12 +194,6 @@ class _QubitMap:
         if qid.dimension != 2:
             raise LayoutError(f"{qid!r} has dimension {qid.dimension}; profiles describe qubits")
         (index,) = normalize_layout([qid], {qid: self._default_index(qid)}, self._profile).values()
-        owner = self._owner.setdefault(index, qid)
-        if owner != qid:
-            raise LayoutError(
-                f"{owner!r} and {qid!r} both map to device qubit {index}; pass layout= to place"
-                " them explicitly"
-            )
         self._known[qid] = index
         return index
 
@@ -270,6 +279,7 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
         # report events from counting shots.
         if self._last is not None and self._last[0] == moments:
             return self._last[1]
+        self._qubits.physical(system_qubits)
         later: set[cirq.Qid] = set()
         terminal: set[tuple[int, cirq.Operation]] = set()
         for i in reversed(range(len(moments))):
@@ -315,12 +325,13 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
         if isinstance(gate, cirq.IdentityGate):
             pairs = zip(operation.qubits, physical, strict=True)
             return [operation, *(op for q, p in pairs for op in self._noise("id", [q], [p]))]
-        if isinstance(gate, cirq.PhasedXZGate):
+        if isinstance(gate, cirq.PhasedXZGate) and "phased_xz" not in self.profile.gates:
             return self._phased_xz(gate, operation.qubits, physical)
         if not (cirq.has_unitary(gate) or cirq.is_parameterized(gate)):
             self.report.count("circuit_channel_kept", type(gate).__name__)
             return operation
-        return [operation, *self._noise(gate_name(gate), operation.qubits, physical)]
+        name = gate_name(gate, self.profile.gates)
+        return [operation, *self._noise(name, operation.qubits, physical)]
 
     def _noise(
         self, name: str, qids: Sequence[cirq.Qid], physical: Sequence[int]
@@ -340,6 +351,7 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
         """PhasedXZ is exactly the r gate (PhasedXPow) then a Z rotation, each with its noise.
 
         Google calibrates PhasedXZ as r with a virtual Z, so it needs no typical noise there.
+        Only a profile without its own ``phased_xz`` gets here.
         """
         x_part = cirq.PhasedXPowGate(
             phase_exponent=gate.axis_phase_exponent, exponent=gate.x_exponent

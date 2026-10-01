@@ -362,6 +362,20 @@ def test_existing_noise_keep_and_strip():
     assert "noise already in the circuit (stripped)" in stripped.report.omitted
 
 
+def test_kept_noise_targets_are_laid_out_and_idle_like_other_qubits():
+    profile = _manila()
+    with pytest.raises(LayoutError, match="qubit 7"):
+        to_stim(profile, "X_ERROR(0.1) 7\nM 0", existing_noise="keep")
+    kept = to_stim(
+        profile, "E(0.1) X2\nTICK\nM 0", existing_noise="keep", readout="none", tick_ns=200.0
+    )
+    assert kept.layout == {0: 0, 2: 2}
+    idle = str(kept).split("TICK")[0].splitlines()[1:]
+    assert sorted(int(q) for line in idle for q in line.rsplit(")", 1)[1].split()) == [0, 2]
+    stripped = to_stim(profile, "X_ERROR(0.1) 7\nM 0", existing_noise="strip")
+    assert stripped.layout == {0: 0}
+
+
 def test_noisy_padding_is_kept_or_stripped_like_other_noise():
     profile = _readout_profile()
     assert str(to_stim(profile, "MPAD(0.3) 0 1\nM 0", existing_noise="keep")).startswith(
@@ -410,6 +424,29 @@ def test_failed_reset_leaves_the_orthogonal_state_in_every_basis(prepare, measur
     assert abs(ones - 0.2) < 5 * np.sqrt(0.2 * 0.8 / shots)
 
 
+@pytest.mark.parametrize(
+    ("prepare", "measure"),
+    [("R", "M"), ("RX", "MX"), ("RY", "MY"), ("MR", "M"), ("MRX", "MX"), ("MRY", "MY")],
+)
+def test_each_repeated_reset_gets_its_own_preparation_error(prepare, measure):
+    profile = _readout_profile(prep={"error": 0.2})
+    out = to_stim(profile, f"{prepare} 0\n{prepare} 0\n{measure} 0", readout="none")
+    shots = 40_000
+    ones = out.compile_sampler(seed=4).sample(shots)[:, -1].mean()
+    assert abs(ones - 0.2) < 5 * np.sqrt(0.2 * 0.8 / shots)
+
+
+def test_a_measure_reset_reads_the_preparation_error_of_the_reset_before_it():
+    profile = _readout_profile(prep={"error": 0.003})
+    out = to_stim(profile, "MR 0\nMR 0 1")
+    assert str(out).splitlines() == [
+        "MR(0.06) 0",
+        "X_ERROR(0.003) 0",
+        "MR(0.06) 0 1",
+        "X_ERROR(0.003) 0 1",
+    ]
+
+
 def test_reset_error_is_the_physical_qubits():
     qubits = [{"index": i, "prep": {"error": e}} for i, e in enumerate([0.01, 0.02, 0.03])]
     profile = Profile.model_validate(toy(qubits=qubits))
@@ -432,6 +469,12 @@ def test_readout_none_adds_nothing_and_reports_it():
 def test_unknown_readout_is_reported_not_zeroed_silently():
     out = to_stim(Profile.model_validate(toy()), "M 0 1")
     assert str(out) == "M 0 1"
+    assert out.report.unknown == ["readout error of physical qubits 0, 1"]
+
+
+def test_unknown_readout_is_reported_for_exact_readout_too():
+    out = to_stim(Profile.model_validate(toy()), "M 0 1", readout="exact")
+    assert out.readout_flips.tolist() == [[0.0, 0.0], [0.0, 0.0]]
     assert out.report.unknown == ["readout error of physical qubits 0, 1"]
 
 
