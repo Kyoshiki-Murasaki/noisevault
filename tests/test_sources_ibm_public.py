@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import statistics
 import urllib.error
 from datetime import date
@@ -227,3 +228,37 @@ def test_invalid_coherence_in_the_response_takes_the_median(
     assert profile.table.qubit(0).t2_ns == pytest.approx(others_us * 1000)
     note = "Qubit 0 reported T2 = 0 us; treated as missing, the device median applies."
     assert note in profile.provenance.notes
+
+
+def _disabled_with_zero(disabled: int, zeroed: set[int], label: str) -> dict:
+    props = json.loads(PROPERTIES)
+    stamp = props["last_update_date"]
+    props["qubits"][disabled].append({"name": "operational", "value": 0, "unit": "", "date": stamp})
+    for index, qubit in enumerate(props["qubits"]):
+        value = next(p for p in qubit if p["name"] == label)
+        assert value["value"] > 0
+        if index in zeroed:
+            value["value"] = 0
+    return props
+
+
+@pytest.mark.parametrize("label", ["T1", "T2"])
+def test_valid_coherence_only_on_a_disabled_qubit_is_an_error(
+    monkeypatch: pytest.MonkeyPatch, label: str
+) -> None:
+    props = _disabled_with_zero(3, {0, 1, 2, 4}, label)
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
+    message = (
+        f"ibm_manila reports no valid {label} on any working qubit"
+        f" (e.g. qubit 0: {label} = 0 us); {label} must be a positive number of microseconds"
+    )
+    with pytest.raises(ValueError, match=re.escape(message)):
+        ibm_public.pull("ibm_manila")
+
+
+def test_no_valid_coherence_names_a_working_qubit(monkeypatch: pytest.MonkeyPatch) -> None:
+    props = _disabled_with_zero(0, {0, 1, 2, 3, 4}, "T1")
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
+    message = "ibm_manila reports no valid T1 on any working qubit (e.g. qubit 1: T1 = 0 us)"
+    with pytest.raises(ValueError, match=re.escape(message)):
+        ibm_public.pull("ibm_manila")

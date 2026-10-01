@@ -258,6 +258,13 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
                 f" and duration {first.duration_ns} ns"
             )
 
+    with_error = {
+        (key, pair)
+        for row in rows
+        for key, cells in row.packed.items()
+        if key != "gate_length_2q"
+        for pair in cells
+    }
     lines: dict[int, str] = {}
     qubits: dict[int, QubitCalibration] = {}
     seen_rz = False
@@ -297,6 +304,9 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
             gate = key.removeprefix("error:")
             for pair, error in cells.items():
                 add(Instruction(gate, pair, error, durations.get(pair)), row.where)
+            for pair, duration in durations.items():
+                if not {(key, pair), (key, pair[::-1])} & with_error:
+                    add(Instruction(gate, pair, None, duration), row.where)
     if not seen_rz:  # IBM's rz is always virtual; older files leave out its column
         for row in rows:
             add(Instruction("rz", (row.index,), 0.0, 0.0), row.where)

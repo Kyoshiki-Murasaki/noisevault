@@ -202,6 +202,30 @@ def test_a_blank_gate_error_keeps_the_published_gate_length(tmp_path: Path) -> N
     )
 
 
+def test_a_pair_with_a_gate_length_and_no_error_keeps_both(tmp_path: Path) -> None:
+    row_0 = _edited(tmp_path, HERON, '"1:0.0013","1:68"', '"","1:100"')
+    path = _edited(tmp_path, row_0, '"2:0.0016;0:0.0013","2:68;0:68"', '"2:0.0016","2:68;0:100"')
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert set(profile.connectivity.edges) == {(0, 1), (1, 2), (2, 3)}
+    # working cz: 0.0016 and 0.0017 at 68 ns on (1, 2) and (2, 1); 100 ns both ways on (0, 1)
+    cz = profile.table.gate("cz", (0, 1))
+    assert (cz.state, cz.avg_infidelity, cz.duration_ns) == ("calibrated", 0.00165, 100)
+    assert profile.gates["cz"].duration_ns == 84
+    assert profile.provenance.notes == (
+        "Pairs [(0, 1)] have no cz error; the device median applies to them.",
+    )
+
+
+def test_a_pair_with_an_error_one_way_only_takes_that_record(tmp_path: Path) -> None:
+    path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', '"","1:100"')
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    for pair in ((0, 1), (1, 0)):
+        cz = profile.table.gate("cz", pair)
+        assert (cz.state, cz.avg_infidelity, cz.duration_ns) == ("calibrated", 0.0013, 68)
+    assert profile.gates["cz"].duration_ns == 68
+    assert profile.provenance.notes == ()
+
+
 def test_a_disabled_qubit_stays_out_of_the_gate_medians(tmp_path: Path) -> None:
     blank_sx = _edited(tmp_path, HERON, '"0","0.00015","0.00015"', '"0","","0.00015"')
     path = _edited(tmp_path, blank_sx, '"0","1","1","2:1"', '"0","0.1","1","2:1"')

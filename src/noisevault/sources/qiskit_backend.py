@@ -495,7 +495,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     note names it.
     Records of a symmetric gate that agree in both directions are stored once. A nonpositive or
     nonfinite T1/T2 is treated as missing and named in a note; a device with no valid T1 (or T2)
-    left is an error.
+    left on a working qubit is an error.
     """
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
@@ -539,10 +539,10 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         notes.append(f"Not converted: {', '.join(cal.skipped)}.")
     notes += gate_notes
     for key, label in _COHERENCE.items():
-        if invalid[key] and not any(key in q for q in qubit_records):
-            index, value = invalid[key][0]
+        if invalid[key] and not any(key in q for q in working):
+            index, value = min(invalid[key], key=lambda found: found[0] in disabled_qubits)
             raise ValueError(
-                f"{cal.name} reports no valid {label} on any qubit (e.g. qubit {index}:"
+                f"{cal.name} reports no valid {label} on any working qubit (e.g. qubit {index}:"
                 f" {label} = {value:g} us); {label} must be a positive number of microseconds"
             )
         notes += [
