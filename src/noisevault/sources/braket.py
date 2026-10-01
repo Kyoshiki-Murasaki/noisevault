@@ -163,7 +163,7 @@ def _per_element(
     two = std.get("twoQubitProperties") or {}
     labels = {*one, *(q for key in two for q in key.split("-"))}
     pairs = [tuple(key.split("-")) for key in two]
-    index, num_qubits, connectivity = _layout(paradigm, labels, pairs)
+    index, num_qubits, connectivity = _layout(paradigm, labels, pairs, notes)
     one_natives, defs = _definitions(paradigm, notes)
     skipped: set[str] = set()
     qubits = _disabled_unnamed(index, num_qubits, notes)
@@ -214,7 +214,7 @@ def _device_level(
             " `AwsDevice(arn).properties.json()` so the qubit count and native gates are known"
         )
     one = std.get("oneQubitProperties") or {}
-    index, num_qubits, connectivity = _layout(paradigm, set(one), [])
+    index, num_qubits, connectivity = _layout(paradigm, set(one), [], notes)
     one_natives, defs = _definitions(paradigm, notes)
     qubits = _disabled_unnamed(index, num_qubits, notes)
     skipped: set[str] = set()
@@ -256,18 +256,20 @@ def _device_level(
 
 
 def _layout(
-    paradigm: Mapping[str, Any], labels: set[str], pairs: list[tuple[str, ...]]
+    paradigm: Mapping[str, Any], labels: set[str], pairs: list[tuple[str, ...]], notes: list[str]
 ) -> tuple[dict[str, int], int, str | dict[str, Any]]:
     """Braket qubit ids -> profile indices, the qubit count and the connectivity.
 
     When every id is an integer the id is the index, so a Braket circuit's qubit numbers are the
     profile's physical qubits; indices with no id (IQM counts from 1) are disabled by the caller.
-    Edges come from the paradigm's connectivity graph, else from the calibrated ``pairs``.
+    Unless the paradigm is fully connected, the edges are exactly its connectivity graph's, even
+    none; with no graph they come from the calibrated ``pairs``, and with neither, all to all.
     """
     connectivity = paradigm.get("connectivity") or {}
-    graph: Mapping[str, list[str]] = connectivity.get("connectivityGraph") or {}
-    edges_by_id = [(a, b) for a, targets in graph.items() for b in targets] or pairs
-    labels = labels | {q for edge in edges_by_id for q in edge}
+    graph: Mapping[str, list[str]] | None = connectivity.get("connectivityGraph")
+    stated = [(a, b) for a, targets in (graph or {}).items() for b in targets]
+    edges_by_id = pairs if graph is None else stated
+    labels = labels | set(graph or {}) | {q for edge in edges_by_id for q in edge}
     count = paradigm.get("qubitCount") or 0
     if all(label.isdigit() for label in labels):
         index = {label: int(label) for label in labels}
@@ -275,8 +277,13 @@ def _layout(
     else:
         index = {label: i for i, label in enumerate(sorted(labels))}
         num_qubits = max(count, len(index))
-    if connectivity.get("fullyConnected") or not edges_by_id:
+    if connectivity.get("fullyConnected") or (graph is None and not edges_by_id):
         return index, num_qubits, "all_to_all"
+    if not edges_by_id:
+        notes.append(
+            "no qubit pair is connected; Braket's connectivity graph has no edges and is not"
+            " fully connected"
+        )
     edges = {tuple(sorted((index[a], index[b]))) for a, b in edges_by_id}
     return index, num_qubits, {"edges": sorted(edges), "directed": False}
 

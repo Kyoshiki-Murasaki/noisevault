@@ -128,6 +128,63 @@ def test_v3_without_qubit_ids_numbers_the_qubits_from_zero() -> None:
     assert profile.suggest_layout(4) == {0: 0, 1: 1, 2: 2, 3: 3}
 
 
+_EDGELESS = (
+    "no qubit pair is connected; Braket's connectivity graph has no edges and is not"
+    " fully connected"
+)
+
+
+def _with_graph(path: Path, graph: dict[str, list[str]]) -> dict:
+    data = json.loads(path.read_text())
+    data["paradigm"]["connectivity"] = {"fullyConnected": False, "connectivityGraph": graph}
+    return data
+
+
+@pytest.mark.parametrize(
+    ("path", "graph"),
+    [(IONQ, {}), (IONQ, {"0": [], "1": [], "2": [], "3": []}), (IQM, {})],
+)
+def test_a_graph_with_no_edges_connects_no_pair(path: Path, graph: dict[str, list[str]]) -> None:
+    profile = from_braket(_with_graph(path, graph), device="edgeless")
+    assert profile.to_dict()["connectivity"] == {"directed": False, "edges": []}
+    assert _EDGELESS in profile.provenance.notes
+
+
+def test_v3_with_no_edges_refuses_a_two_qubit_gate() -> None:
+    profile = from_braket(_with_graph(IONQ, {"0": [], "1": [], "2": [], "3": []}), device="none")
+    with pytest.raises(nv.MissingCalibrationError, match="connectivity does not allow it"):
+        probabilities(profile, [Op("ms", (0, 1), (0.0, 0.0))], 2, layout=[0, 1])
+
+
+def test_v1_with_no_edges_keeps_the_calibrated_pairs() -> None:
+    profile = from_braket(_with_graph(IQM, {}), device="garnet")
+    cz = profile.table.gate("cz", (1, 2))
+    assert (cz.origin, cz.avg_infidelity) == ("record", 0.009)
+
+
+@pytest.mark.parametrize(
+    ("path", "graph", "count", "usable"),
+    [
+        (IONQ, {"1": ["2"], "2": [], "3": [], "4": []}, 4, [1, 2, 3, 4]),
+        (IQM, {"1": ["2"], "2": ["3"], "3": ["4"], "5": []}, 5, [1, 2, 3, 4, 5]),
+    ],
+)
+def test_graph_keys_with_no_edges_are_qubit_ids(
+    path: Path, graph: dict[str, list[str]], count: int, usable: list[int]
+) -> None:
+    data = _with_graph(path, graph)
+    data["paradigm"]["qubitCount"] = count
+    profile = from_braket(data, device="keys")
+    n = profile.device.num_qubits
+    assert [q for q in range(n) if not profile.table.qubit(q).disabled] == usable
+
+
+def test_with_no_graph_and_no_calibrated_pair_every_pair_is_allowed() -> None:
+    data = json.loads(RIGETTI.read_text())
+    data["twoQubitProperties"] = {}
+    assert from_braket(data, device="rig").connectivity == "all_to_all"
+
+
 def test_timestamp_without_time_zone_is_read_as_utc() -> None:
     require("braket.device_schema")
     from braket.device_schema.iqm.iqm_device_capabilities_v1 import IqmDeviceCapabilities
