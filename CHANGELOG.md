@@ -41,7 +41,8 @@ profile files still load.
   supported. Pulled profiles are saved to `~/.noisevault/profiles`.
 - **Importers**: `from_qiskit_backend`, `from_ibm_csv`, `from_braket`, `from_cirq_google`, and
   Quantinuum's dated datasets. `from_braket` maps each native to the gate with the same
-  matrix. `from_qiskit_backend` labels a fake whose snapshot is a model, such as
+  matrix. `from_qiskit_backend` allows a gate only on the qubits its `Target` lists, takes the
+  technology from the backend, and labels a fake whose snapshot is a model, such as
   `FakeNighthawk`, as `vendor_model`.
 - **Hypothetical devices** with `Profile.uniform`, and `profile.suggest_layout(n)` to pick a
   well-calibrated chain of qubits that each have every one-qubit native the device has.
@@ -49,7 +50,9 @@ profile files still load.
   `validate`, `doctor` and `schema`.
   - A bare `nv` prints the help. A usage mistake prints one line with the closest match.
   - `nv check` lists missing frameworks with one install command, and counts a circuit that
-    ran with gates removed as reduced.
+    ran with gates removed as reduced. It also samples a measurement-only circuit through each
+    framework's own readout. Each row shows the worst circuit's distance beside that circuit's
+    own tolerance, and `--json` names it as `worst`.
   - `nv list` shows the time when two calibrations share a date.
   - `nv diff` marks values as new or gone and compares both orders of a symmetric pair.
   - A damaged or unreadable file in the vault is skipped with a warning, and the other
