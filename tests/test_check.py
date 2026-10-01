@@ -411,3 +411,19 @@ def test_a_profile_with_only_rotations_passes_every_framework() -> None:
     assert result.passed, result
     assert [f.framework for f in result.frameworks] == ["qiskit", "cirq", "pennylane", "stim"]
     assert all(not f.not_run for f in result.frameworks), result
+
+
+def test_a_one_qubit_uniform_profile_runs_in_every_framework() -> None:
+    profile = Profile.uniform(
+        "u",
+        technology="superconducting",
+        num_qubits=1,
+        one_qubit_error=1e-2,
+        two_qubit_error=2e-2,
+        readout_error=0.02,
+    )
+    result = check(profile)
+    assert result.passed, result
+    assert [f.framework for f in result.frameworks] == ["qiskit", "cirq", "pennylane", "stim"]
+    assert not result.skipped
+    assert {c.num_qubits for c in result.circuits} == {1}

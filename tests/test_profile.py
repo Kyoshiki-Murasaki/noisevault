@@ -381,6 +381,8 @@ def test_free_form_data_refuses_nonfinite_numbers(tmp_path: Path, where: str, ba
         ({"runs": [{"seeds": {1, 2}}]}, r"runs\[0\]\.seeds: a set is not JSON data"),
         ({"when": datetime(2025, 1, 1, tzinfo=UTC)}, "when: a datetime is not JSON data"),
         ({"raw": b"\x00"}, "raw: a bytes is not JSON data"),
+        ({b"runs": 0.8, "runs": 0.9}, "the key b'runs' is not a string"),
+        ({0: 0.8}, "the key 0 is not a string"),
     ],
 )
 @pytest.mark.parametrize("where", ["benchmarks", "extensions", "provenance.extra"])
@@ -561,6 +563,16 @@ def test_uniform_profile() -> None:
     assert "swap" not in profile.gates
 
 
+def test_a_one_qubit_uniform_profile_defines_only_one_qubit_gates() -> None:
+    profile = Profile.uniform(
+        "u", technology="superconducting", num_qubits=1, one_qubit_error=1e-2, two_qubit_error=2e-2
+    )
+    table = profile.table
+    assert {table.arity(name) for name in profile.gates} == {1}
+    assert table.gate("h", (0,)).avg_infidelity == 1e-2
+    assert table.edges() == []
+
+
 @pytest.mark.parametrize("coherence", [{"t1_us": 0}, {"t2_us": 0}])
 def test_uniform_rejects_zero_coherence_times(coherence: dict) -> None:
     with pytest.raises(ValidationError, match="must be positive"):
@@ -642,6 +654,24 @@ def test_summary_shows_a_noisy_override_of_a_virtual_gate() -> None:
         ),
         ({}, [], "rz", "rz 1q virtual"),
         ({}, [], "cz", "cz 2q avg infidelity 0.01 everywhere"),
+        (
+            {},
+            [
+                {"gate": "cz", "qubits": [0, 1], "avg_infidelity": 1e-2},
+                {"gate": "cz", "qubits": [1, 0], "disabled": True},
+            ],
+            "cz",
+            "cz 2q median avg infidelity 0.01 over 2 loci, disabled on 1 locus",
+        ),
+        (
+            {},
+            [
+                {"gate": "cz", "qubits": [0, 1], "avg_infidelity": 1e-2},
+                {"gate": "cz", "qubits": [1, 0], "avg_infidelity": 1e-2},
+            ],
+            "cz",
+            "cz 2q avg infidelity 0.01 everywhere",
+        ),
     ],
 )
 def test_summary_describes_each_gate_as_resolved(
@@ -650,3 +680,21 @@ def test_summary_describes_each_gate_as_resolved(
     data = toy(calibrations=calibrations)
     data["gates"].update(gates)
     assert _summary_line(Profile.from_dict(data), gate) == line
+
+
+@pytest.mark.parametrize(
+    ("reverse", "line"),
+    [
+        ({"disabled": True}, "cz 2q median avg infidelity 0.01 over 1 locus, disabled on 1 locus"),
+        ({"avg_infidelity": 0.2}, "cz 2q median avg infidelity 0.105 over 2 loci"),
+        ({"avg_infidelity": 0.01}, "cz 2q avg infidelity 0.01 everywhere"),
+        ({}, "cz 2q avg infidelity 0.01 everywhere"),
+    ],
+)
+def test_summary_keeps_a_reverse_order_that_resolves_differently(reverse: dict, line: str) -> None:
+    calibrations = [{"gate": "cz", "qubits": [0, 1], "avg_infidelity": 1e-2}]
+    if reverse:
+        calibrations.append({"gate": "cz", "qubits": [1, 0], **reverse})
+    data = toy(connectivity="all_to_all", calibrations=calibrations)
+    data["device"]["num_qubits"] = 2
+    assert _summary_line(Profile.from_dict(data), "cz") == line

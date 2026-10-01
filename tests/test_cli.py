@@ -712,6 +712,20 @@ def test_show_natives_as_resolved_not_as_defined(tmp_path: Path) -> None:
     assert rows["cz"] == ["(2q)", "-", "-", "device-wide", "(2", "disabled)"]
 
 
+def test_show_counts_a_disabled_reverse_order_of_a_symmetric_gate(tmp_path: Path) -> None:
+    calibrations = [
+        {"gate": "cz", "qubits": [0, 1], "avg_infidelity": 1e-2},
+        {"gate": "cz", "qubits": [1, 0], "disabled": True},
+    ]
+    data = toy(connectivity="all_to_all", calibrations=calibrations)
+    data["device"]["num_qubits"] = 2
+    path = tmp_path / "toy.json"
+    path.write_text(json.dumps(data))
+    natives = json.loads(runner.invoke(app, ["show", str(path), "--json"]).stdout)["natives"]
+    cz = next(native for native in natives if native["gate"] == "cz")
+    assert cz["loci"] == {"calibrated": 1, "ideal": 0, "uncalibrated": 0, "disabled": 1}
+
+
 def test_show_groups_a_record_assumption_shared_by_many_loci(tmp_path: Path) -> None:
     calibrations = [
         {"gate": "cz", "qubits": list(pair), "avg_infidelity": 0.02, "assumption": "From XEB"}

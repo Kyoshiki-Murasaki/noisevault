@@ -853,3 +853,20 @@ def test_the_target_holds_every_pair_the_table_allows_off_the_connectivity(direc
         p for p in pairs if profile.table.allowed("cz", p)
     ]
     assert (1, 2) in target["cz"]
+
+
+def test_a_one_qubit_uniform_profile_runs_a_one_qubit_circuit() -> None:
+    profile = Profile.uniform(
+        "u",
+        technology="superconducting",
+        num_qubits=1,
+        one_qubit_error=1e-2,
+        two_qubit_error=2e-2,
+        readout_error=0.05,
+    )
+    sim = profile.to_qiskit()
+    qc = QuantumCircuit(1, 1)
+    qc.x(0)
+    qc.measure(0, 0)
+    counts = sim.run(transpile(qc, sim), shots=4000, seed_simulator=1).result().get_counts()
+    assert 0.03 < counts.get("0", 0) / 4000 < 0.09

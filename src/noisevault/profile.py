@@ -26,6 +26,7 @@ from pydantic import (
     AfterValidator,
     AwareDatetime,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     PlainSerializer,
@@ -123,7 +124,16 @@ def _freeze(value: Any, where: str = "") -> Any:
     return value
 
 
-JsonObject = Annotated[dict[str, Any], AfterValidator(_freeze)]
+def _string_keys(value: Any) -> Any:
+    """Refuse a non-string top-level key before ``dict[str, Any]`` decodes a bytes key to str."""
+    if isinstance(value, Mapping):
+        for key in value:
+            if not isinstance(key, str):
+                raise ValueError(f"the key {key!r} is not a string")
+    return value
+
+
+JsonObject = Annotated[dict[str, Any], BeforeValidator(_string_keys), AfterValidator(_freeze)]
 
 
 class Device(_Model):
@@ -534,9 +544,11 @@ class Profile(_Model):
     ) -> Profile:
         """A hypothetical device where every gate of an arity has the same error.
 
-        Every registry 1-qubit and 2-qubit unitary gate is defined (except z-family gates, free
-        through a virtual ``rz``, and multi-entangler gates, which must be decomposed), so any
-        circuit of such gates resolves to calibrated noise without approximation.
+        Every registry 1-qubit unitary gate, and on two or more qubits every 2-qubit one, is
+        defined (except z-family gates, free through a virtual ``rz``, and multi-entangler gates,
+        which must be decomposed), so any circuit of such gates resolves to calibrated noise
+        without approximation. A one-qubit device ignores ``two_qubit_error`` and
+        ``two_qubit_ns``.
         """
         defs: dict[str, dict[str, Any]] = {"rz": {"virtual": True}}
         for info in gates.GATES.values():
@@ -544,7 +556,7 @@ class Profile(_Model):
                 continue
             if info.arity == 1:
                 defs[info.name] = {"avg_infidelity": one_qubit_error, "duration_ns": one_qubit_ns}
-            elif info.arity == 2:
+            elif info.arity == 2 and num_qubits >= 2:
                 defs[info.name] = {"avg_infidelity": two_qubit_error, "duration_ns": two_qubit_ns}
         return cls.model_validate(
             {
@@ -695,8 +707,10 @@ class Profile(_Model):
 def gate_loci(profile: Profile, name: str) -> list[GateNoise]:
     """Gate ``name`` resolved on every locus it can run on, as the exports resolve it.
 
-    The candidates are each enabled qubit or connected pair and each recorded locus; one order
-    stands for both of a symmetric gate's pair. A locus the table refuses is left out.
+    The candidates are each enabled qubit or connected pair (in both orders) and each recorded
+    locus. A symmetric gate's pair counts once when both orders resolve to the same state, error
+    and duration, and twice when a record makes them differ. A locus the table refuses is left
+    out.
     """
     from .table import GateNoise
 
@@ -714,13 +728,20 @@ def gate_loci(profile: Profile, name: str) -> list[GateNoise]:
         candidates = sorted({*recorded, *(p for a, b in pairs for p in ((a, b), (b, a)))})
     symmetric = arity == 2 and table.symmetric(name)
     found: list[GateNoise] = []
-    seen: set[Hashable] = set()
     for qubits in candidates:
-        key = frozenset(qubits) if symmetric else qubits
-        if key not in seen and isinstance(noise := table.gate(name, qubits), GateNoise):
-            seen.add(key)
-            found.append(noise)
+        noise = table.gate(name, qubits)
+        if not isinstance(noise, GateNoise):
+            continue
+        if symmetric and qubits[0] > qubits[1]:
+            lower = table.gate(name, qubits[::-1])
+            if isinstance(lower, GateNoise) and _resolved_alike(lower, noise):
+                continue
+        found.append(noise)
     return found
+
+
+def _resolved_alike(a: GateNoise, b: GateNoise) -> bool:
+    return (a.state, a.avg_infidelity, a.duration_ns) == (b.state, b.avg_infidelity, b.duration_ns)
 
 
 _STATE_WORDS = {"ideal": "virtual", "uncalibrated": "no error metric", "disabled": "disabled"}
