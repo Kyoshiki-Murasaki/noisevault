@@ -9,11 +9,13 @@ output it shows. The drift recipe needs the network, and the Mitiq recipe needs 
 A result simulated under device noise is reproducible only if readers can get the same noise.
 Pin the calibration by its fingerprint and publish both.
 
-1. Pull the calibration you want, or pick a bundled one with `nv list`:
+1. Choose the calibration. This recipe uses the bundled `ibm_fez@2025-02-26`, which loads
+   offline and is the same on every machine. `nv list` shows the other bundled profiles.
 
-   ```bash
-   nv pull ibm_fez
-   ```
+   To use the newest calibration instead, run `nv pull ibm_fez`. The first line of its output
+   is the saved ref and fingerprint, such as `ibm_fez@2026-10-01T20:14:09Z` and
+   `nv:d9067e68adc2`. In steps 2 and 3, use that ref and fingerprint in place of
+   `ibm_fez@2025-02-26` and `nv:06404cefa54f`.
 
 2. Print the citation. It names the source, the calibration time and the full fingerprint:
 

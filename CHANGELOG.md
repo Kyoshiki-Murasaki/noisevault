@@ -43,7 +43,8 @@ profile files still load.
   `MissingCalibrationError` with either `unknown_gates` value and asks you to decompose it.
 - **Readable reports.** Approximation warnings point at your own line of code, and
   `report.summary()` states counts as sentences, such as "cx took the typical native gate's
-  noise 40 times".
+  noise 40 times". The report's usage counts print on one line that starts with `used:`, and
+  the summary names included errors in plain words, such as "single-qubit gate error".
 - **Live pulls without an account**: IBM's public calibration endpoint, with history through
   `--at`, and IonQ's published characterizations. Pulls through an IBM account are also
   supported. Pulled profiles are saved to `~/.noisevault/profiles`.

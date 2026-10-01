@@ -23,15 +23,21 @@ if TYPE_CHECKING:
     from .profile import Effect, GateSpec, Profile
 
 HONESTY = "Calibration-derived models approximate the hardware; they are not a digital twin."
-_INCLUDES = {  # includes item -> what the model does with it
-    "1q_dressing": "explicit single-qubit gates in the circuit add their own error on top",
-    "leakage": "applied as depolarizing noise; no population leaves the qubit",
-    "spam": "readout and preparation noise, where applied, count state prep and measurement again",
+_INCLUDES = {
+    "1q_dressing": (
+        "single-qubit gate error",
+        "explicit single-qubit gates in the circuit add their own error on top",
+    ),
+    "leakage": ("leakage", "applied as depolarizing noise; no population leaves the qubit"),
+    "spam": (
+        "state preparation and measurement error",
+        "readout and preparation noise, where applied, add their own error on top",
+    ),
 }
 _EVENTS = {  # event -> how summary() states one key's count
     "typical_noise_used": "{key} took the typical native gate's noise {times}",
     "reversed_record_used": (
-        "{key} used the calibration recorded for the opposite qubit order {times}"
+        "{key} took the calibration recorded for the opposite qubit order {times}"
     ),
     "circuit_channel_kept": (
         "the circuit's own {key} was kept as written, with no noise added, {times}"
@@ -129,7 +135,8 @@ class Report:
                 "it also counts the surrounding layer",
             )
         for item in spec.includes or ():
-            self.approximate(what, f"the stated error includes {item}", _INCLUDES[item])
+            name, effect = _INCLUDES[item]
+            self.approximate(what, f"the stated error already includes {name}", effect)
         if spec.statistic in ("median", "mean"):
             self.approximate(what, f"a device {spec.statistic} applied to every locus")
         if spec.assumption:
@@ -210,7 +217,7 @@ class Report:
             )
         if self.events:
             lines.append(
-                "counts: "
+                "used: "
                 + "; ".join(
                     _count_sentence(name, key, n)
                     for name, counts in self.events.items()

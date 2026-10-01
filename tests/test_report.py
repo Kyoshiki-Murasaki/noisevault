@@ -57,7 +57,7 @@ def test_report_serializes_and_summarizes() -> None:
     assert len(data["approximated"]) == 1
     text = report.summary()
     assert profile.id in text and text.endswith(HONESTY)
-    assert "counts: h took the typical native gate's noise 4 times" in text
+    assert "used: h took the typical native gate's noise 4 times" in text
 
 
 def test_summary_states_each_count_as_a_sentence() -> None:
@@ -67,15 +67,15 @@ def test_summary_states_each_count_as_a_sentence() -> None:
     report.count("reversed_record_used", "cz", 20)
     report.count("circuit_channel_kept", "BitFlipChannel", 2)
     report.count("future_event", "q3", 5)
-    counts = [line for line in report.summary().splitlines() if line.startswith("counts:")]
-    assert counts == [
-        "counts: cx took the typical native gate's noise 40 times;"
+    used = [line for line in report.summary().splitlines() if line.startswith("used:")]
+    assert used == [
+        "used: cx took the typical native gate's noise 40 times;"
         " h took the typical native gate's noise once;"
-        " cz used the calibration recorded for the opposite qubit order 20 times;"
+        " cz took the calibration recorded for the opposite qubit order 20 times;"
         " the circuit's own BitFlipChannel was kept as written, with no noise added, 2 times;"
         " future event: q3 5 times"
     ]
-    assert "=" not in counts[0]
+    assert "=" not in used[0]
     assert report.to_dict()["events"]["reversed_record_used"] == {"cz": 20}
 
 
@@ -98,9 +98,29 @@ def test_calibration_qualifiers_of_used_gates_are_reported() -> None:
     data = report.to_dict()
     assert {a["what"] for a in data["approximated"]} == {"x error"}
     text = json.dumps(data["approximated"])
-    for expected in ("cycle", "spam", "leakage", "median", "read as average gate fidelity"):
+    for expected in ("cycle", "measurement", "leakage", "median", "read as average gate fidelity"):
         assert expected in text
     assert "x error" in report.summary()
+
+
+def test_included_errors_are_named_in_plain_words() -> None:
+    from noisevault.channels import gate_channels
+
+    gates = toy()["gates"] | {
+        "x": {"avg_infidelity": 1e-3, "includes": ["spam", "leakage", "1q_dressing"]}
+    }
+    profile, report = _report(gates=gates)
+    report.record_channels(gate_channels(profile.table.gate("x", (0,)), [profile.table.qubit(0)]))
+    approximated = [line for line in report.summary().splitlines() if "x error" in line]
+    assert approximated == [
+        "approximated: x error: the stated error already includes single-qubit gate error"
+        " (explicit single-qubit gates in the circuit add their own error on top)",
+        "approximated: x error: the stated error already includes leakage"
+        " (applied as depolarizing noise; no population leaves the qubit)",
+        "approximated: x error: the stated error already includes state preparation and"
+        " measurement error (readout and preparation noise, where applied, add their own error"
+        " on top)",
+    ]
 
 
 def _options(**options) -> dict:

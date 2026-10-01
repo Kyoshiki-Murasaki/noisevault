@@ -181,7 +181,7 @@ A definition and a calibration record share these fields:
 | `measured` | `isolated` or `simultaneous`. |
 | `statistic` | `individual`, `median` or `mean`. |
 | `scope` | `gate` or `cycle`. A cycle error includes the surrounding layer. |
-| `includes` | What the number contains: `1q_dressing`, `leakage`, `spam`. |
+| `includes` | What the number already contains: `1q_dressing` (single-qubit gate error), `leakage`, `spam` (state preparation and measurement error). |
 | `stderr` | Standard error of the metric. |
 | `assumption` | How an importer read a vendor number, in words. `nv show` prints it. |
 
@@ -209,8 +209,8 @@ has the stated error. A `pauli` spec is the whole channel, and no relaxation is 
 
 The qualifiers (`method` through `assumption`) do not change the conversion. They record what
 the number is, so a reader can judge it. An export's report lists, under approximated, each gate
-it used whose number is a per-cycle value, includes SPAM or leakage, is a device median or mean,
-or carries an assumption. `nv validate` warns about calibration records with `scope: cycle`.
+it used whose number is a per-cycle value, has `includes`, is a device median or mean, or
+carries an assumption. `nv validate` warns about calibration records with `scope: cycle`.
 
 ### Gate states
 

@@ -19,8 +19,10 @@ from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 import noisevault as nv
+from noisevault.cli import app
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
@@ -42,6 +44,7 @@ OTHER_EXAMPLES = {"compare_devices.py", "drift.py", "mitigation_zne.py"}
 
 FENCE = re.compile(r"^```(\w*)[^\n]*\n(.*?)^```", re.S | re.M)
 NOT_RUN = re.compile(r"<!--\s*not-run:[^>]*-->\s*$")
+INDENTED_FENCE = re.compile(r"^ *```(\w*)\n(.*?)^ *```", re.S | re.M)
 
 
 def run(
@@ -179,6 +182,27 @@ def test_doc_profiles_are_valid(name: str) -> None:
     for block in fenced(DOCS / name, "json"):
         if '"noisevault"' in block.code:
             nv.Profile.from_dict(json.loads(block.code))
+
+
+def test_pin_and_cite_commands_cite_the_calibration_the_code_pins() -> None:
+    text = (DOCS / "recipes.md").read_text(encoding="utf-8")
+    start = text.index("## Pin and cite")
+    blocks = INDENTED_FENCE.findall(text[start : text.index("\n## ", start + 1)])
+    code = "".join(body for language, body in blocks if language == "python")
+    ref, expect = re.search(r'nv\.load\("([^"]+)", expect="([^"]+)"\)', code).groups()
+    commands = [
+        line.split()[1:]
+        for language, body in blocks
+        if language == "bash"
+        for line in body.splitlines()
+        if line.strip().startswith("nv ")
+    ]
+    assert [args[:2] for args in commands] == [["cite", ref]] * len(commands)
+    fingerprint = nv.load(ref, expect=expect).fingerprint
+    for args in commands:
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 0, result.output
+        assert fingerprint in result.output
 
 
 def test_schema_file_is_current() -> None:
