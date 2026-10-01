@@ -199,6 +199,10 @@ elements, so the model raises an error when its angles call for different gates'
 `qml.IsingXX` over `[pi/2, 0.4]`. Expand the broadcast before adding noise:
 `qml.add_noise(qml.transforms.broadcast_expand(qnode), model)`.
 
+Every wire a circuit uses, including wires it only measures, is checked against the layout and
+the profile, also with `readout=False`. A model built by adding or subtracting noise models
+checks only the wires its operations or readout reach.
+
 ## Stim
 
 `to_stim(circuit)` returns a copy of a Stim circuit with each gate followed by the Pauli twirl

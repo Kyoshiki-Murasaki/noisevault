@@ -276,6 +276,38 @@ def test_measured_wires_are_checked_against_the_layout(qml, measure, readout) ->
         qml.add_noise(circuit, to_pennylane(_one_disabled(), readout=readout))()
 
 
+_NOT_A_PRODUCT_BASIS = np.array([[1, 0, 0, 0.5], [0, -1, 0, 0], [0, 0, -1, 0], [0.5, 0, 0, 1]])
+
+
+@pytest.mark.parametrize("readout", [True, False])
+@pytest.mark.parametrize("measure", ["probs", "density_matrix", "hermitian"])
+@pytest.mark.parametrize(
+    ("wire", "layout", "match"),
+    [
+        (1, None, "marks disabled"),
+        (3, None, "has qubits 0..2"),
+        ("anc", None, r"'anc' has no integer index; pass layout="),
+        ("b", {"a": 0}, r"wire 'b' is not in the layout; add it"),
+    ],
+)
+def test_measurement_only_circuits_are_checked_against_the_layout(
+    qml, wire, layout, match, measure, readout
+) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    other = 0 if layout is None else "a"
+
+    @qml.qnode(qml.device("default.mixed", wires=[other, wire]))
+    def circuit():
+        if measure == "hermitian":
+            return qml.expval(qml.Hermitian(_NOT_A_PRODUCT_BASIS, wires=[other, wire]))
+        return getattr(qml, measure)(wires=[wire])
+
+    model = to_pennylane(_one_disabled(), layout=layout, readout=readout)
+    with pytest.raises(LayoutError, match=match):
+        qml.add_noise(circuit, model)()
+
+
 # readout -------------------------------------------------------------------------------------
 
 

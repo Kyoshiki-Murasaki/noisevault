@@ -15,6 +15,7 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Container, Hashable, Mapping, Sequence
 from math import pi
+from types import FrameType
 from typing import Any
 
 import numpy as np
@@ -118,6 +119,14 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         meas_map = {qml.BooleanFn(_reads_out, "NoiseVaultReadout"): self._readout_noise}
         super().__init__(gate_map, meas_map=meas_map if readout else None)
 
+    @property
+    def model_map(self) -> dict:
+        # add_noise reads this for every tape, so a tape with no operation and no readout
+        # callback (measurements only, or readout=False) still has its wires checked.
+        if _add_noise_frame() is not None:
+            self._noised_tape()
+        return super().model_map
+
     def _noised_tape(self) -> qml.tape.QuantumScript:
         """The tape qml.add_noise is noising, after checking every wire it uses against the layout.
 
@@ -125,9 +134,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         add_noise's frame holds it. Each call finds it there instead of keeping it on the model,
         because a composed model is a new plain qml.NoiseModel that shares only these functions.
         """
-        frame = sys._getframe(1)
-        while frame and (frame.f_globals.get("__name__"), frame.f_code.co_name) != _ADD_NOISE:
-            frame = frame.f_back
+        frame = _add_noise_frame()
         if frame is None:
             raise RuntimeError(
                 f"NoiseVault noise ran outside qml.add_noise (PennyLane {qml.__version__}),"
@@ -363,6 +370,13 @@ def _natives_at_angle(op: Operator) -> set[str | None]:
 def _same_angle(a: float, b: float) -> bool:
     gap = (float(a) - b) % (2 * pi)
     return min(gap, 2 * pi - gap) < _ANGLE_TOL
+
+
+def _add_noise_frame() -> FrameType | None:
+    frame = sys._getframe(1)
+    while frame and (frame.f_globals.get("__name__"), frame.f_code.co_name) != _ADD_NOISE:
+        frame = frame.f_back
+    return frame
 
 
 def _labels(layout: Layout) -> list[Hashable]:
