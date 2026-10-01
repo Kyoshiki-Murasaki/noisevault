@@ -221,6 +221,41 @@ def test_fixed_angle_of_a_calibrated_rotation_gets_the_rotation_noise(gate, name
     assert np.abs(got - superoperator([ideal, *core.channels], wires)).max() < 1e-10
 
 
+@pytest.mark.parametrize(
+    ("defined", "exponent", "charged"),
+    [
+        (("p",), 0.4, "p"),
+        (("p", "rz"), 0.4, "p"),
+        (("rz",), 0.4, "rz"),
+        (("p",), 0.5, "p"),
+        (("p", "rz"), 0.5, "p"),
+        (("s", "p"), 0.5, "s"),
+        (("rz",), -0.5, "rz"),
+    ],
+)
+def test_z_power_takes_the_calibration_of_a_gate_it_equals(defined, exponent, charged) -> None:
+    errors = {"p": 0.2, "rz": 0.1, "s": 0.05}
+    defs = {"h": {"avg_infidelity": 0.01}} | {n: {"avg_infidelity": errors[n]} for n in defined}
+    profile = Profile.model_validate(toy(connectivity="all_to_all", gates=defs))
+    q = cirq.LineQubit(0)
+    model = to_cirq(profile, unknown_gates="error")
+    got, wires = _superop(_ops(model.noisy_operation(cirq.ZPowGate(exponent=exponent)(q))), {q: 0})
+
+    core = resolve_op(
+        profile.table, charged, (0,), unknown_gates="error", report=Report.start(profile, "t", None)
+    )
+    ideal = ChannelSpec("unitary", (0,), (cirq.unitary(cirq.ZPowGate(exponent=exponent)),))
+    assert np.abs(got - superoperator([ideal, *core.channels], wires)).max() < 1e-10
+
+
+def test_check_runs_p_at_an_angle_no_fixed_gate_has() -> None:
+    defs = {n: {"avg_infidelity": e} for n, e in (("h", 0.01), ("p", 0.2), ("s", 0.05))}
+    defs["cz"] = {"qubits": 2, "avg_infidelity": 0.02}
+    (result,) = Profile.model_validate(toy(gates=defs)).check(frameworks=["cirq"]).frameworks
+    assert result.passed and not result.not_run
+    assert "p" in {g for c in result.circuits for g in c.gates}
+
+
 @pytest.mark.parametrize(("zz", "angle"), [(False, PI / 2), (True, PI / 4)], ids=["rzz", "rzz+zz"])
 def test_check_runs_rzz_at_the_zz_angle_unless_the_profile_defines_zz(zz, angle) -> None:
     profile = _rotations_only()

@@ -481,6 +481,41 @@ def test_symmetrized_readout_and_reset_errors_in_each_basis():
 
 
 @pytest.mark.parametrize(
+    ("circuit", "flips"),
+    [
+        ("MPP Z0*Z1*Z0", {"MPP(0.06) Z0*Z1*Z0": 0.06}),
+        ("MPP Y0*Z1*Y0*Z2*Z2", {"MPP(0.06) Y0*Z1*Y0*Z2*Z2": 0.06}),
+        ("MPP Z0*Z0", {"MPP Z0*Z0": 0.0}),
+        ("MPP Z0*Z0 Z1*Z2", {"MPP Z0*Z0": 0.0, "MPP(0.1128) Z1*Z2": 0.1128}),
+    ],
+)
+def test_a_pauli_product_reads_out_only_the_qubits_left_after_reducing_it(circuit, flips):
+    out = to_stim(_readout_profile(), circuit)
+    assert str(out).splitlines() == list(flips)
+    shots = 100_000
+    rate = out.compile_sampler(seed=7).sample(shots).mean(axis=0)
+    want = np.array(list(flips.values()))
+    assert np.all(np.abs(rate - want) <= 5 * np.sqrt(want * (1 - want) / shots) + 5 / shots)
+
+
+def test_cancelled_pauli_factors_leave_their_qubit_idle():
+    out = to_stim(_manila(), "MPP Z0*Z1*Z0\nSPP X2*X2\nTICK", readout="none", tick_ns=200.0)
+    before_tick = str(out).split("TICK")[0].splitlines()
+    assert before_tick[:2] == ["MPP Z0*Z1*Z0", "SPP X2*X2"]
+    assert [line.rsplit(" ", 1)[1] for line in before_tick[2:]] == ["0", "2"]
+
+
+def test_a_pauli_product_gate_is_noised_on_the_qubits_left_after_reducing_it():
+    out = to_stim(_manila(), "SPP Z0*Z1*Z0\nSPP_DAG X2*X2")
+    lines = [line.split("(")[0] for line in str(out).splitlines()]
+    assert lines == ["SPP Z0*Z1*Z0", "PAULI_CHANNEL_1", "SPP_DAG X2*X2"]
+    assert str(out).splitlines()[1].endswith(") 1")
+    assert out.report.events["typical_noise_used"] == {"spp": 1}
+    placed = "QUBIT_COORDS(0, 0) 0\nQUBIT_COORDS(0, 1) 1\nSPP X0*X0\nCZ 0 1"
+    assert layout_from_coords(placed, _grid(3)) == {0: 0, 1: 1}
+
+
+@pytest.mark.parametrize(
     ("prepare", "measure"),
     [("R", "M"), ("RX", "MX"), ("RY", "MY"), ("MR", "M"), ("MRX", "MX"), ("MRY", "MY")],
 )

@@ -5,7 +5,8 @@ calibrated chain of qubits, computes their outcome probabilities (readout includ
 framework-free reference simulator, and runs the same circuits through each installed export
 with that framework's own simulator and readout mechanism. Qiskit, Cirq and PennyLane are
 compared exactly; Stim is sampled and compared against the Pauli-twirled reference, which is
-the model it implements.
+the model it implements, with exact readout and, on the widest circuit, also through the
+export's default symmetrized readout.
 
 A pass certifies that the exports implement the same noise model as the reference on these
 circuits. It says nothing about how closely that model matches the hardware.
@@ -45,8 +46,13 @@ NOTE = (
 )
 _EXTRAS = {"qiskit": "qiskit", "cirq": "cirq", "pennylane": "pennylane", "stim": "stim"}
 # Gate angles for check circuits: pi/2 unless listed. r keeps a phase off 0 so Cirq does not
-# turn it into an X rotation.
-_ANGLES: dict[str, tuple[float, ...]] = {"r": (pi / 2, pi / 4), "ms": (0.0, 0.0)}
+# turn it into an X rotation. p takes an angle no fixed gate has: Cirq cannot tell p(pi/2)
+# from S and charges a profile's s for it.
+_ANGLES: dict[str, tuple[float, ...]] = {
+    "r": (pi / 2, pi / 4),
+    "p": (2 * pi / 3,),
+    "ms": (0.0, 0.0),
+}
 # Rotations that at pi/2 equal a fixed native, whose noise the exports then charge when the
 # profile defines it; the check runs them at pi/4 instead (see _two_qubit_ops).
 _FIXED_AT_HALF_PI = {"rzz": "zz", "rxx": "ms", "ryy": "ms"}
@@ -386,19 +392,23 @@ def _inverse(op: Op) -> list[Op] | None:
 
 
 class _Expected:
-    """Reference probabilities per circuit, plain and Pauli-twirled, computed once each."""
+    """Reference probabilities per circuit, plain and Pauli-twirled, computed once each.
+
+    ``symmetrized`` gives the twirled reference each qubit's mean readout error in both
+    directions, as Stim's default export flips results.
+    """
 
     def __init__(self, profile: Profile, chain: Sequence[int]) -> None:
         self.profile = profile
         self.chain = list(chain)
-        self._cache: dict[tuple[int, tuple[Op, ...], bool], np.ndarray] = {}
+        self._cache: dict[tuple[int, tuple[Op, ...], bool, bool], np.ndarray] = {}
 
-    def __call__(self, circuit: Circuit, *, twirled: bool) -> np.ndarray:
-        key = (circuit.num_qubits, circuit.ops, twirled)
+    def __call__(self, circuit: Circuit, *, twirled: bool, symmetrized: bool = False) -> np.ndarray:
+        key = (circuit.num_qubits, circuit.ops, twirled, symmetrized)
         if key not in self._cache:
             layout = self.chain[: circuit.num_qubits]
             if twirled:
-                self._cache[key] = _twirled(self.profile, circuit, layout)
+                self._cache[key] = _twirled(self.profile, circuit, layout, symmetrized)
             else:
                 self._cache[key] = reference_probabilities(
                     self.profile, circuit.ops, circuit.num_qubits, layout=layout, readout=True
@@ -406,7 +416,9 @@ class _Expected:
         return self._cache[key]
 
 
-def _twirled(profile: Profile, circuit: Circuit, layout: list[int]) -> np.ndarray:
+def _twirled(
+    profile: Profile, circuit: Circuit, layout: list[int], symmetrized: bool
+) -> np.ndarray:
     """The reference with each gate's channel replaced by its Pauli twirl (Stim's model)."""
     n, table = circuit.num_qubits, profile.table
     report = Report.start(profile, "reference", None)
@@ -421,7 +433,10 @@ def _twirled(profile: Profile, circuit: Circuit, layout: list[int]) -> np.ndarra
         if built.channels:
             rho = _apply(rho, pauli_kraus(pauli_twirl(built.channels, wires)), op.qubits, n)
     probs = np.real(np.diagonal(rho.reshape(2**n, 2**n)))
-    probs = _with_readout(probs, [readout_matrix(table.qubit(q)) for q in layout])
+    matrices = [readout_matrix(table.qubit(q)) for q in layout]
+    if symmetrized:
+        matrices = [None if m is None else (m + m[::-1, ::-1]) / 2 for m in matrices]
+    probs = _with_readout(probs, matrices)
     # Rounding can leave a certain outcome at 1 + 1e-16, whose sampling variance is negative.
     probs = np.clip(probs, 0.0, None)
     return probs / probs.sum()
@@ -450,6 +465,7 @@ class _Runner:
     version: str
     sampled = False
     twirled = False
+    symmetrized = False  # sample_measured flips each bit with the qubit's mean readout error
 
     def __init__(self, profile: Profile, chain: list[int]) -> None:
         self.profile = profile
@@ -507,20 +523,25 @@ def _run(
     widest = max(circuits, key=lambda c: c.num_qubits)
     measured = runner.sample_measured(widest, shots, seed)
     if measured is not None:
-        checks.append(_compare(widest, measured, expected(widest, twirled=False), shots, True))
+        want = expected(widest, twirled=runner.twirled, symmetrized=runner.symmetrized)
+        checks.append(_compare(widest, measured, want, shots, True))
     reports = runner.reports()
 
     def count(attr: str) -> int:
         return len({str(item) for r in reports for item in getattr(r, attr)})
 
-    method = (
-        f"sampled {shots} shots vs the twirled reference, {SIGMAS:g} sigma"
-        if runner.sampled
-        else "exact"
-        if measured is None
-        else f"exact, and {widest.name} sampled {shots} shots through the framework's"
-        f" measurement, {SIGMAS:g} sigma"
-    )
+    if runner.sampled:
+        method = f"sampled {shots} shots vs the twirled reference"
+        if measured is not None:
+            method += f", and {widest.name} with the export's default symmetrized readout"
+        method += f", {SIGMAS:g} sigma"
+    elif measured is None:
+        method = "exact"
+    else:
+        method = (
+            f"exact, and {widest.name} sampled {shots} shots through the framework's"
+            f" measurement, {SIGMAS:g} sigma"
+        )
     return FrameworkCheck(
         framework=runner.framework,
         version=runner.version,
@@ -652,6 +673,7 @@ class _Cirq(_Runner):
             "rx": c.rx,
             "ry": c.ry,
             "rz": c.rz,
+            "p": lambda lam: c.ZPowGate(exponent=lam / pi),
             "r": lambda t, p: c.PhasedXPowGate(phase_exponent=p / pi, exponent=t / pi),
             "cx": lambda: c.CNOT,
             "cz": lambda: c.CZ,
@@ -731,6 +753,7 @@ class _Stim(_Runner):
     framework = "stim"
     sampled = True
     twirled = True
+    symmetrized = True
 
     def __init__(self, profile: Profile, chain: list[int]) -> None:
         super().__init__(profile, chain)
@@ -777,14 +800,25 @@ class _Stim(_Runner):
         return f"Stim has no {op.name} instruction"
 
     def run(self, circuit: Circuit, shots: int, seed: int | None) -> np.ndarray:
+        return self._frequencies(circuit, shots, seed, "exact")
+
+    def sample_measured(self, circuit: Circuit, shots: int, seed: int | None) -> np.ndarray:
+        return self._frequencies(circuit, shots, seed, "symmetrize")
+
+    def _frequencies(
+        self, circuit: Circuit, shots: int, seed: int | None, readout: str
+    ) -> np.ndarray:
         n = circuit.num_qubits
         lines = [f"{self._instruction(op)} {' '.join(map(str, op.qubits))}" for op in circuit.ops]
         lines.append("M " + " ".join(map(str, range(n))))
         noisy = self._to_stim(
-            self.profile, "\n".join(lines), layout=dict(enumerate(self.chain)), readout="exact"
+            self.profile, "\n".join(lines), layout=dict(enumerate(self.chain)), readout=readout
         )
         self._reports.append(noisy.report)
-        bits = self._sample(noisy, shots, seed=seed)
+        if readout == "exact":
+            bits = self._sample(noisy, shots, seed=seed)
+        else:
+            bits = noisy.compile_sampler(seed=seed).sample(shots)
         index = bits.astype(int) @ (1 << np.arange(n)[::-1])
         return np.bincount(index, minlength=2**n) / shots
 

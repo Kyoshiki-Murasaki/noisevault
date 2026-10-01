@@ -271,8 +271,8 @@ def _scan(circuit: stim.Circuit, found: _Scan | None = None) -> _Scan:
             found.qubits.update(qubits)
             if any(t.is_measurement_record_target for t in group):
                 found.feedback = found.feedback or _short(item)
-            elif kind == "gate" and len(qubits) == 2:
-                found.pairs.add((qubits[0], qubits[1]))
+            elif kind == "gate" and len(acted := _acted_on(item.name, group)) == 2:
+                found.pairs.add((acted[0], acted[1]))
             if kind == "measure" and len(qubits) > 1:
                 found.product = found.product or _short(item)
     return found
@@ -413,7 +413,9 @@ class _Exporter:
                         "classically controlled Paulis", "no gate noise", "Pauli-frame updates"
                     )
                     continue
-                qubits = tuple(t.value for t in group)
+                qubits = tuple(_acted_on(inst.name, group))
+                if not qubits:
+                    continue
                 busy.update(qubits)
                 channel = self._gate_channel(inst.name, qubits)
                 if channel:
@@ -431,7 +433,7 @@ class _Exporter:
             runs: list[tuple[float, list[list[stim.GateTarget]]]] = []
             measured: list[int] = []
             for group in chunk:
-                qubits = [t.qubit_value for t in group]
+                qubits = _acted_on(inst.name, group)
                 measured += qubits
                 flip = _either(stated_flip, self._readout_flip(qubits))
                 if runs and runs[-1][0] == flip:
@@ -686,6 +688,19 @@ def _disjoint_chunks(groups: list[list[stim.GateTarget]]) -> list[list[list[stim
         chunks[-1].append(group)
         used |= qubits
     return chunks
+
+
+def _acted_on(name: str, group: Sequence[stim.GateTarget]) -> list[int]:
+    """Qubits a target group of instruction ``name`` acts on. A Pauli product is reduced first:
+    factors on one qubit multiply (X*Z is Y up to phase), and a qubit whose factors cancel is
+    not acted on."""
+    if name not in _COMBINED:
+        return [t.value for t in group]
+    bits: dict[int, int] = {}
+    for t in group:
+        x, z = t.is_x_target or t.is_y_target, t.is_z_target or t.is_y_target
+        bits[t.value] = bits.get(t.value, 0) ^ (x + 2 * z)
+    return [q for q, b in bits.items() if b]
 
 
 def _text(

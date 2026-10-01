@@ -42,26 +42,39 @@ _ANGLE_TOL = 1e-9
 class _PowFamily:
     """Canonical names of a Cirq EigenGate class by exponent, compared modulo ``period``.
 
-    Exponents that name no gate map to ``other``; when ``other`` is None the gate is unknown
-    and is reported as ``base**exponent``. A named exponent takes its name under
-    :func:`~noisevault.conversion.native_name`, with ``other`` as the rotation it equals.
+    ``names`` are the fixed gates at their exponents, ``exact`` the registry gate with a
+    parameter that equals the class at every exponent (``p`` for ``ZPowGate``), and ``other``
+    the rotation it equals up to global phase. An exponent takes the first of its fixed gate,
+    ``exact`` and ``other`` that a profile defines, under
+    :func:`~noisevault.conversion.native_name`; with none defined, the fixed gate, else
+    ``other``. When ``other`` is None too the gate is unknown and is reported as
+    ``base**exponent``.
     """
 
     base: str
     period: float
     names: tuple[tuple[float, str], ...]
     other: str | None
+    exact: str | None = None
 
     def name_for(self, exponent: Any, defined: Container[str]) -> str:
-        if isinstance(exponent, numbers.Real):
-            for value, name in self.names:
-                gap = (float(exponent) - value) % self.period
-                if min(gap, self.period - gap) < _ANGLE_TOL:
-                    return native_name(name, defined, self.other)
+        fixed = self._fixed(exponent)
+        if fixed is not None and (fixed in defined or self.exact not in defined):
+            return native_name(fixed, defined, self.other)
+        if self.exact is not None:
+            return native_name(self.exact, defined, self.other)
         if self.other is not None:
             return self.other
         shown = f"{exponent:.6g}" if isinstance(exponent, numbers.Real) else str(exponent)
         return f"{self.base}**{shown}"
+
+    def _fixed(self, exponent: Any) -> str | None:
+        if isinstance(exponent, numbers.Real):
+            for value, name in self.names:
+                gap = (float(exponent) - value) % self.period
+                if min(gap, self.period - gap) < _ANGLE_TOL:
+                    return name
+        return None
 
 
 # Up to a global phase these gates repeat with period 2 in the exponent (iSWAP with 4), so
@@ -73,7 +86,7 @@ _POW: dict[type, _PowFamily] = {
     cirq.XPowGate: _PowFamily("x", 2, ((1, "x"), (0.5, "sx"), (-0.5, "sxdg")), "rx"),
     cirq.YPowGate: _PowFamily("y", 2, ((1, "y"),), "ry"),
     cirq.ZPowGate: _PowFamily(
-        "z", 2, ((1, "z"), (0.5, "s"), (-0.5, "sdg"), (0.25, "t"), (-0.25, "tdg")), "rz"
+        "z", 2, ((1, "z"), (0.5, "s"), (-0.5, "sdg"), (0.25, "t"), (-0.25, "tdg")), "rz", "p"
     ),
     cirq.HPowGate: _PowFamily("h", 2, ((1, "h"),), None),
     cirq.CXPowGate: _PowFamily("cx", 2, ((1, "cx"),), None),
@@ -141,11 +154,12 @@ def gate_name(gate: cirq.Gate, defined: Container[str] = ()) -> str:
     angle (``ZZ**0.5`` is ``zz``, ``X`` is ``x``, ``XX**0.5`` and ``YY**0.5`` are ``ms``) takes
     its rotation's name instead (``rzz``, ``rx``, ``rxx``, ``ryy``) when ``defined``, a
     profile's gate names, has the rotation but not the fixed gate (see
-    :func:`~noisevault.conversion.native_name`). Any other gate is named after its class in
-    snake case without the ``Gate`` suffix (``FSimGate`` -> ``fsim``, ``MatrixGate`` ->
-    ``matrix``), so a profile can calibrate it under that name; otherwise it gets the
-    typical-noise rule. A power gate whose name depends on an unresolved exponent
-    (``X**t`` is ``x`` at t=1) raises ValueError.
+    :func:`~noisevault.conversion.native_name`). ``Z**t`` is exactly ``p(pi t)``, so a profile's
+    ``p`` comes before ``rz`` at every exponent, after the fixed gate (``s``, ``t``, ...) at
+    its own. Any other gate is named after its class in snake case without the ``Gate`` suffix
+    (``FSimGate`` -> ``fsim``, ``MatrixGate`` -> ``matrix``), so a profile can calibrate it
+    under that name; otherwise it gets the typical-noise rule. A power gate whose name depends
+    on an unresolved exponent (``X**t`` is ``x`` at t=1) raises ValueError.
     """
     for cls in type(gate).__mro__:
         if cls in _OWN_GATES:

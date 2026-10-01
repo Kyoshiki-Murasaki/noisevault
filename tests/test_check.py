@@ -88,7 +88,8 @@ def test_stim_is_compared_with_the_twirled_reference() -> None:
     profile, shots = _relaxing(), 50_000
     result = check(profile, frameworks=["stim"], shots=shots, seed=3)
     (stim,) = result.frameworks
-    assert stim.passed and len(stim.circuits) == len(result.circuits)
+    assert stim.passed and len({c.circuit for c in stim.circuits}) == len(result.circuits)
+    assert len(stim.circuits) == len(result.circuits) + 1
     # On this profile the same samples are far outside 5 sigma of the untwirled channel.
     chain = [result.layout[i] for i in range(len(result.layout))]
     ghz = next(c for c in result.circuits if c.name == "ghz_chain")
@@ -106,6 +107,17 @@ def test_stim_without_its_readout_flips_fails(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(nv_stim, "sample_with_readout", perfect_readout)
     (stim,) = check(_relaxing(readout_error=0.05), frameworks=["stim"]).frameworks
+    assert not stim.passed
+
+
+def test_stim_without_its_default_symmetrized_readout_fails(monkeypatch) -> None:
+    from noisevault.frameworks import stim as nv_stim
+
+    profile = _relaxing(readout_error=0.05)
+    (good,) = check(profile, frameworks=["stim"], layout=[0, 1]).frameworks
+    assert good.passed
+    monkeypatch.setattr(nv_stim._Exporter, "_readout_flip", lambda self, qubits: 0.0)
+    (stim,) = check(profile, frameworks=["stim"], layout=[0, 1]).frameworks
     assert not stim.passed
 
 

@@ -126,7 +126,9 @@ Qubits map this way: `LineQubit(i)` is device qubit i, and `GridQubit(r, c)` is 
 `coords` are `[r, c]` (Google profiles record them). Other qubit types need
 `layout={qubit: index, ...}`. Gates match by Cirq class and exponent. `cirq.X**0.5` is `sx`,
 `cirq.ZZ**0.5` is `zz`, `cirq.PhasedXZGate` is split into the `r` gate and a Z rotation, each
-with its own noise.
+with its own noise. `cirq.Z**t` is exactly the phase gate `p`, so it takes a profile's `p`
+calibration ahead of `rz`. At the exponents of `s`, `t` and their inverses, a profile's own
+fixed gate comes first.
 
 What the report can list:
 
@@ -227,6 +229,10 @@ print(noisy.report.summary())
 and the report says so. For a grid device, `noisevault.stim.layout_from_coords(circuit, profile)`
 places a circuit by matching its `QUBIT_COORDS` to the profile's qubit coords.
 
+In `MPP` and `SPP`, a Pauli product is reduced first. Factors on one qubit multiply, a qubit
+whose factors cancel is neither read out nor busy, and a product that reduces to the identity
+gets no readout flip.
+
 Options:
 
 - `readout="symmetrize"` (default) flips each result with the mean of P(1|0) and P(0|1).
@@ -254,6 +260,9 @@ frameworks.
 
 `nv check REF` runs small circuits through each installed export and compares them with
 NoiseVault's own density-matrix reference simulator. Use it after changing a profile by hand.
+Stim is sampled with exact readout and compared with the reference after each gate's Pauli
+twirl. Its widest circuit is also sampled with the default symmetrized readout and compared
+with a reference that uses each qubit's mean readout error.
 
 A framework that cannot express one of a circuit's gates runs the circuit without it, or skips
 the circuit when nothing useful is left. The `circuits` column counts only circuits that ran
