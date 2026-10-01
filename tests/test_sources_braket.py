@@ -82,6 +82,52 @@ def test_v3_device_level_values() -> None:
     assert any("standardized updatedAt" in note for note in profile.provenance.notes)
 
 
+def _ionq_with_ids(ids: list[int], *, graph: bool = False) -> dict:
+    data = json.loads(IONQ.read_text())
+    if graph:
+        edges = {str(a): [str(b)] for a, b in zip(ids, ids[1:], strict=False)}
+        data["paradigm"]["connectivity"] = {"fullyConnected": False, "connectivityGraph": edges}
+    else:
+        rb = {"name": "RANDOMIZED_BENCHMARKING"}
+        entry = {"oneQubitFidelity": [{"fidelityType": rb, "fidelity": 0.9991, "unit": "fraction"}]}
+        data["standardized"]["oneQubitProperties"] = {str(i): entry for i in ids}
+    return data
+
+
+@pytest.mark.parametrize(
+    ("ids", "graph", "num_qubits", "disabled"),
+    [
+        ([1, 2, 3, 4], False, 5, [0]),
+        ([1, 2, 3, 4], True, 5, [0]),
+        ([0, 1, 3], False, 4, [2]),
+        ([0, 1, 2, 3], False, 4, []),
+    ],
+)
+def test_v3_indices_with_no_braket_id_are_disabled(
+    ids: list[int], graph: bool, num_qubits: int, disabled: list[int]
+) -> None:
+    profile = from_braket(_ionq_with_ids(ids, graph=graph), device="ids")
+    assert profile.device.num_qubits == num_qubits
+    assert [q.index for q in profile.qubits if q.disabled] == disabled
+    usable = [q for q in range(num_qubits) if not profile.table.qubit(q).disabled]
+    assert usable == ids
+    notes = [n for n in profile.provenance.notes if "no Braket id" in n]
+    assert notes == ([f"qubits {disabled} have no Braket id and are disabled"] if disabled else [])
+
+
+def test_v3_from_one_never_places_a_circuit_on_index_zero() -> None:
+    profile = from_braket(_ionq_with_ids([1, 2, 3, 4], graph=True), device="from_one")
+    assert profile.suggest_layout(1) == {0: 1}
+    with pytest.raises(nv.LayoutError, match="qubit 0, which ionq_from_one marks disabled"):
+        probabilities(profile, [Op("r", (0,), (np.pi / 2, 0.0))], 1, layout=[0])
+
+
+def test_v3_without_qubit_ids_numbers_the_qubits_from_zero() -> None:
+    profile = from_braket(IONQ)
+    assert profile.qubits == ()
+    assert profile.suggest_layout(4) == {0: 0, 1: 1, 2: 2, 3: 3}
+
+
 def test_timestamp_without_time_zone_is_read_as_utc() -> None:
     require("braket.device_schema")
     from braket.device_schema.iqm.iqm_device_capabilities_v1 import IqmDeviceCapabilities
