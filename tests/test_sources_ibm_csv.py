@@ -176,6 +176,17 @@ def test_qubit_without_t1_takes_the_median_and_says_so(tmp_path: Path) -> None:
     assert any("Qubits [0] have no T1" in note for note in profile.provenance.notes)
 
 
+def test_a_blank_gate_error_takes_the_device_median_and_says_so(tmp_path: Path) -> None:
+    row_0 = '"0","0.00015","0.00015","1:0.0013"'  # rz, sx, x and CZ errors of qubit 0
+    path = _edited(tmp_path, HERON, row_0, '"0","","0.00015","1:0.0013"')
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    sx = profile.table.gate("sx", (0,))
+    assert (sx.state, sx.origin, sx.avg_infidelity) == ("calibrated", "default", 0.000185)
+    assert profile.provenance.notes == (
+        "Qubits [0] have no sx error; the device median applies to them.",
+    )
+
+
 @pytest.mark.parametrize(
     ("cells", "label", "shown", "median_ns"),
     [

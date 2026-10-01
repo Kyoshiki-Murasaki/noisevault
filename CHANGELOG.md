@@ -44,7 +44,8 @@ profile files still load.
   Quantinuum's dated datasets. `from_braket` maps each native to the gate with the same
   matrix. `from_qiskit_backend` allows a gate only on the qubits its `Target` lists, takes the
   technology from the backend, and labels a fake whose snapshot is a model, such as
-  `FakeNighthawk`, as `vendor_model`.
+  `FakeNighthawk`, as `vendor_model`. An IBM gate error missing from a CSV or a pull takes the
+  device median, and `provenance.notes` names those qubits and pairs.
 - **Hypothetical devices** with `Profile.uniform`, and `profile.suggest_layout(n)` to pick a
   well-calibrated chain of qubits that each have every one-qubit native the device has.
 - **Command line** `nv` (also `noisevault`): `list`, `show`, `pull`, `diff`, `check`, `cite`,

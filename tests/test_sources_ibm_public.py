@@ -155,6 +155,32 @@ def test_live_pull_of_ibm_fez(vault: Path) -> None:
     assert len(list(vault.glob("ibm_fez@*.json.gz"))) == 2
 
 
+def test_a_gate_the_response_omits_on_a_qubit_takes_the_median_and_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    props = json.loads(PROPERTIES)
+    props["gates"] = [e for e in props["gates"] if (e["gate"], e["qubits"]) != ("sx", [0])]
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
+    errors = [
+        p["value"]
+        for e in props["gates"]
+        if e["gate"] == "sx"
+        for p in e["parameters"]
+        if p["name"] == "gate_error"
+    ]
+    assert len(errors) == 4
+    profile = ibm_public.pull("ibm_manila")
+    sx = profile.table.gate("sx", (0,))
+    assert (sx.state, sx.origin, sx.avg_infidelity) == (
+        "calibrated",
+        "default",
+        statistics.median(errors),
+    )
+    assert profile.provenance.notes == (
+        "Qubits [0] have no sx error; the device median applies to them.",
+    )
+
+
 def test_invalid_coherence_in_the_response_takes_the_median(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from itertools import permutations
+from pathlib import Path
 
 from conftest import require
 
@@ -21,15 +23,22 @@ from qiskit.circuit.library import (  # noqa: E402
 from qiskit.providers import BackendV2, Options  # noqa: E402
 from qiskit.transpiler import InstructionProperties, Target  # noqa: E402
 
+MANILA_PROPERTIES = Path(__file__).parent / "fixtures" / "ibm" / "manila_properties.json"
+MANILA_EDGES = ((0, 1), (1, 0), (1, 2), (2, 1), (2, 3), (3, 2), (3, 4), (4, 3))
+
 
 class _Backend(BackendV2):
-    def __init__(self, target: Target, name: str = "toy") -> None:
+    def __init__(self, target: Target, name: str = "toy", properties=None) -> None:
         super().__init__(name=name)
         self._target = target
+        self._properties = properties
 
     @property
     def target(self) -> Target:
         return self._target
+
+    def properties(self):
+        return self._properties
 
     @property
     def max_circuits(self) -> None:
@@ -84,6 +93,26 @@ def test_a_one_qubit_gate_on_some_qubits_is_disabled_on_the_others() -> None:
     require("qiskit_aer")
     exported = profile.to_qiskit().target
     assert set(exported["sx"]) == {(0,)}
+
+
+def test_properties_do_not_enable_a_gate_on_qubits_the_target_leaves_out() -> None:
+    models = require("qiskit_ibm_runtime.models")
+    properties = models.BackendProperties.from_dict(json.loads(MANILA_PROPERTIES.read_bytes()))
+    assert {tuple(g.qubits) for g in properties.gates if g.gate == "sx"} == {(q,) for q in range(5)}
+    target = _target(
+        5,
+        (SXGate(), {(0,): _props(0.001, 35e-9)}),
+        (XGate(), {(q,): _props(0.002, 35e-9) for q in range(5)}),
+        (CXGate(), {edge: _props(0.01, 300e-9) for edge in MANILA_EDGES}),
+    )
+    profile = nv.from_qiskit_backend(_Backend(target, properties=properties))
+    states = [profile.table.gate("sx", (q,)).state for q in range(5)]
+    assert states == ["calibrated", "disabled", "disabled", "disabled", "disabled"]
+    assert profile.table.gate("sx", (0,)).avg_infidelity == 0.001
+    assert profile.device.calibrated_at.isoformat() == "2024-05-27T18:27:23+00:00"
+    _assert_allows_exactly_what_the_target_allows(target, profile)
+    require("qiskit_aer")
+    assert set(profile.to_qiskit().target["sx"]) == {(0,)}
 
 
 def test_a_directed_gate_in_one_direction_of_a_pair_is_disabled_in_the_other() -> None:

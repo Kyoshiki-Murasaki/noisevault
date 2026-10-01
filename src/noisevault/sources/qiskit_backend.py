@@ -107,7 +107,8 @@ class Calibration:
     """A device calibration in IBM's shape: per-instruction errors and per-qubit properties.
 
     ``measure`` entries carry the readout duration and the symmetric readout error used when a
-    qubit has no asymmetric pair.
+    qubit has no asymmetric pair. ``supported`` maps a gate to every locus it runs on when the
+    source lists them, as a Target does. A gate it leaves out may run on any qubit or pair.
     """
 
     name: str
@@ -119,6 +120,7 @@ class Calibration:
     processor: str | None = None
     calibrated_at: datetime | None = None
     skipped: tuple[str, ...] = ()  # source instruction names deliberately not converted
+    supported: Mapping[str, frozenset[tuple[int, ...]]] = field(default_factory=dict)
 
 
 # Qiskit backends -------------------------------------------------------------------------------
@@ -142,8 +144,8 @@ def from_qiskit_backend(backend: Any) -> Profile:
     cal = calibration_from_target(target, name=_device_name(backend))
     if properties is not None:
         from_props = calibration_from_properties(properties.to_dict())
-        # IBM's Target converter drops non-operational gates and every gate on a faulty qubit;
-        # without their records those loci would resolve to the device default.
+        # IBM's Target converter drops non-operational gates and every gate on a faulty qubit.
+        # Their entries keep a dropped pair in the connectivity, so it shows as disabled.
         names = {_QISKIT_TO_CANONICAL.get(n, n) for n in target.operation_names}
         in_target = {(i.name, i.qubits) for i in cal.instructions}
         dropped = tuple(
@@ -170,13 +172,15 @@ def calibration_from_target(target: Any, *, name: str) -> Calibration:
     """Read a Qiskit Target: per-qargs error and duration, and per-qubit T1/T2."""
     from qiskit.circuit import Gate
 
-    instructions, skipped = [], set()
+    instructions, skipped, supported = [], set(), {}
     for op_name in target.operation_names:
         operation = target.operation_from_name(op_name)
         keep = isinstance(operation, Gate) or op_name in ("measure", "reset")
         if op_name in _NOT_GATES or not keep:
             skipped.add(op_name)
             continue
+        if None not in target[op_name]:  # a global instruction runs on any qubits
+            supported[_QISKIT_TO_CANONICAL.get(op_name, op_name)] = frozenset(target[op_name])
         for qargs, props in target[op_name].items():
             if qargs is None:  # an ideal global instruction: nothing per qubit to record
                 continue
@@ -201,6 +205,7 @@ def calibration_from_target(target: Any, *, name: str) -> Calibration:
         instructions=tuple(instructions),
         qubits=qubits,
         skipped=tuple(sorted(skipped - control_flow - {"delay"})),
+        supported=supported,
     )
 
 
@@ -483,7 +488,9 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     sentinel (an error at or above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and
     ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration on
     every working locus (IBM's ``rz``) is virtual, and its disabled loci keep their records.
-    A qubit or connected pair that the source does not list for a gate gets ``disabled: true``.
+    When the source lists where a gate runs, a qubit or connected pair off that list gets
+    ``disabled: true``. A working locus with no error of its own takes the device median, and a
+    note names it.
     Records of a symmetric gate that agree in both directions are stored once. A nonpositive or
     nonfinite T1/T2 is treated as missing and named in a note; a device with no valid T1 (or T2)
     left is an error.
@@ -494,15 +501,29 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         by_name.setdefault(inst.name, []).append(inst)
     measure = {inst.qubits[0]: inst for inst in by_name.pop("measure", [])}
     connectivity = _connectivity(cal.instructions)
+    disabled_qubits = {i for i, q in cal.qubits.items() if not q.operational}
 
     definitions: dict[str, dict[str, Any]] = {}
     records: list[dict[str, Any]] = []
+    gate_notes: list[str] = []
     for name, entries in by_name.items():
         arity = len(entries[0].qubits)
-        unlisted = _unlisted(name, arity, entries, cal.num_qubits, connectivity)
-        definition, gate_records = _gate(name, arity, entries + unlisted, ibm)
+        listed = _both_ways(name, arity, (e.qubits for e in entries))
+        unlisted = _unlisted(arity, listed, cal.num_qubits, connectivity)
+        support = cal.supported.get(name)
+        if support is None:
+            unpublished = unlisted
+        else:
+            runs_on = _both_ways(name, arity, support)
+            entries = [e if e.qubits in runs_on else replace(e, operational=False) for e in entries]
+            entries += [Instruction(name, locus, operational=False) for locus in unlisted]
+            unpublished = []
+        definition, gate_records = _gate(name, arity, entries, ibm)
         definitions[name] = definition
         records += gate_records
+        unpublished += [e.qubits for e in entries if e.operational and e.error is None]
+        note = _unpublished_note(name, arity, unpublished, definition, disabled_qubits)
+        gate_notes += [note] if note else []
 
     qubits, invalid = _without_invalid_coherence(cal)
     qubit_records = [
@@ -514,6 +535,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     notes = list(provenance.get("notes", ()))
     if cal.skipped:
         notes.append(f"Not converted: {', '.join(cal.skipped)}.")
+    notes += gate_notes
     for key, label in _COHERENCE.items():
         if invalid[key] and not any(key in q for q in qubit_records):
             index, value = invalid[key][0]
@@ -632,23 +654,48 @@ def _gate(
     return definition, records
 
 
+def _both_ways(name: str, arity: int, loci: Iterable[tuple[int, ...]]) -> set[tuple[int, ...]]:
+    """``loci``, with each pair of a symmetric gate in both orders."""
+    out = set(loci)
+    if arity == 2 and gates.is_symmetric(name):
+        out |= {qubits[::-1] for qubits in out}
+    return out
+
+
 def _unlisted(
-    name: str,
     arity: int,
-    entries: Sequence[Instruction],
+    listed: set[tuple[int, ...]],
     num_qubits: int,
     connectivity: Mapping[str, Any],
-) -> list[Instruction]:
+) -> list[tuple[int, ...]]:
+    """The loci the gate's device default would cover that ``listed`` leaves out."""
     if arity == 1:
         loci = [(q,) for q in range(num_qubits)]
     elif arity == 2:
         loci = [tuple(edge) for edge in connectivity["edges"]]
     else:
         return []
-    listed = {e.qubits for e in entries}
+    return [locus for locus in loci if locus not in listed]
+
+
+def _unpublished_note(
+    name: str,
+    arity: int,
+    loci: Iterable[tuple[int, ...]],
+    definition: Mapping[str, Any],
+    disabled_qubits: set[int],
+) -> str | None:
+    """The note naming the working loci the gate's device median stands in for."""
+    if "avg_infidelity" not in definition:
+        return None
     if arity == 2 and gates.is_symmetric(name):
-        listed |= {qubits[::-1] for qubits in listed}
-    return [Instruction(name, locus, operational=False) for locus in loci if locus not in listed]
+        loci = (tuple(sorted(qubits)) for qubits in loci)
+    shown = sorted({qubits for qubits in loci if not disabled_qubits.intersection(qubits)})
+    if not shown:
+        return None
+    listed = [q for (q,) in shown] if arity == 1 else shown
+    label = {1: "Qubits", 2: "Pairs"}.get(arity, "Qubit sets")
+    return f"{label} {listed} have no {name} error; the device median applies to them."
 
 
 def _is_sentinel(error: float | None, arity: int) -> bool:

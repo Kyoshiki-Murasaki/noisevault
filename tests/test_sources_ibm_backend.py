@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import shutil
+import statistics
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
@@ -339,6 +340,26 @@ def test_virtual_gate_the_target_drops_as_non_operational_stays_disabled() -> No
     assert profile.table.gate("rz", (3,)).state == "disabled"
     assert profile.table.gate("rz", (2,)).state == "ideal"
     assert not profile.table.qubit(3).disabled
+
+
+def test_a_gate_the_properties_omit_on_a_configured_qubit_takes_the_median() -> None:
+    backend = _backend("FakeManilaV2")
+    props = backend.properties().to_dict()
+    props["gates"] = [e for e in props["gates"] if (e["gate"], e["qubits"]) != ("sx", [0])]
+    backend._props_dict = props
+    assert backend.target["sx"][(0,)] is None  # the configuration still lists it
+    errors = [
+        p["value"]
+        for e in props["gates"]
+        if e["gate"] == "sx"
+        for p in e["parameters"]
+        if p["name"] == "gate_error"
+    ]
+    profile = nv.from_qiskit_backend(backend)
+    sx = profile.table.gate("sx", (0,))
+    assert (sx.state, sx.avg_infidelity) == ("calibrated", statistics.median(errors))
+    note = "Qubits [0] have no sx error; the device median applies to them."
+    assert note in profile.provenance.notes
 
 
 def test_each_pair_of_a_mixed_cx_and_ecr_device_allows_only_its_own_gate() -> None:

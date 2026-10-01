@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import statistics
 import sys
 import warnings
 from datetime import UTC, datetime
@@ -59,6 +60,34 @@ def test_pull_reads_the_account_snapshot(calls: list[Any]) -> None:
     prov = profile.provenance
     assert (prov.source_kind, prov.redistributable) == ("account_api", "unknown")
     assert prov.source_hash.startswith("sha256:") and prov.retrieved_at is not None
+
+
+def test_a_gate_the_snapshot_omits_on_a_qubit_takes_the_median_and_says_so(
+    calls: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = require("qiskit_ibm_runtime")
+    props = _Backend(calls)._fake.properties().to_dict()
+    props["gates"] = [e for e in props["gates"] if (e["gate"], e["qubits"]) != ("sx", [0])]
+    snapshot = runtime.models.BackendProperties.from_dict(props)
+    monkeypatch.setattr(_Backend, "properties", lambda self, **_: snapshot)
+    errors = [
+        p["value"]
+        for e in props["gates"]
+        if e["gate"] == "sx"
+        for p in e["parameters"]
+        if p["name"] == "gate_error"
+    ]
+    assert len(errors) == 4
+    profile = ibm_account.pull("ibm_manila")
+    sx = profile.table.gate("sx", (0,))
+    assert (sx.state, sx.origin, sx.avg_infidelity) == (
+        "calibrated",
+        "default",
+        statistics.median(errors),
+    )
+    assert profile.provenance.notes == (
+        "Qubits [0] have no sx error; the device median applies to them.",
+    )
 
 
 def test_token_from_the_environment(calls: list[Any], monkeypatch: pytest.MonkeyPatch) -> None:
