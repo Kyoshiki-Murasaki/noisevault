@@ -69,11 +69,12 @@ _HEADER = re.compile(r"^(?P<stem>.*?)\s*(?:\((?P<unit>[^()]*)\))?$")
 _UNITS = {"µs": "us", "μs": "us"}
 _SHOWN_HEADERS = 12  # an error message lists at most this many of the headers it found
 _SUPPORTED = "this reader imports only the 2023 to 2026 formats"
+_ZERO_PADDED_TWO_FIELDS = r"(?:\d+:0\d|0\d:[0-5]\d)(?:\.\d+)?"
+_THREE_FIELDS = r"\d+:[0-5]\d:[0-5]\d(?:\.\d+)?"
+_AM_PM = r"\d+(?::[0-5]\d){1,2}(?:\.\d+)?\s*[ap]m"
+_DAY_FRACTION = r"\d*\.?\d+(?:e[-+]?\d+)?"
 _SPREADSHEET_TIME = re.compile(
-    r"(?:\d+:0\d|0\d:[0-5]\d|\d+:[0-5]\d:[0-5]\d)(?:\.\d+)?"
-    r"|\d+(?::[0-5]\d){1,2}(?:\.\d+)?\s*[ap]m"
-    r"|\d*\.?\d+(?:e[-+]?\d+)?",
-    re.IGNORECASE,
+    "|".join((_ZERO_PADDED_TWO_FIELDS, _THREE_FIELDS, _AM_PM, _DAY_FRACTION)), re.IGNORECASE
 )
 
 
