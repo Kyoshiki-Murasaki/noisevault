@@ -11,8 +11,8 @@ import noisevault as nv
 from noisevault.table import GateNoise, Unavailable
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ibm"
-EAGLE = FIXTURES / "synthetic_eagle_2024.csv"  # 2023-2025 layout: a_b pairs, trailing spaces
-HERON = FIXTURES / "synthetic_heron_2026.csv"  # 2026 layout: quoted, partner pairs, Yes/No
+EAGLE = FIXTURES / "synthetic_eagle_2024.csv"
+HERON = FIXTURES / "synthetic_heron_2026.csv"
 FALCON = FIXTURES / "synthetic_falcon_2023.csv"
 
 
