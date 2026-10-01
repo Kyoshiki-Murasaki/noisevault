@@ -782,6 +782,71 @@ def test_unknown_gates_error_refuses_when_no_entangler_is_calibrated() -> None:
         to_qiskit(profile, unknown_gates="error")
 
 
+_ONE_QUBIT_NATIVES = {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}}
+_NO_EDGES = {"edges": []}
+
+
+@pytest.mark.parametrize(
+    ("sections", "unknown_gates", "ending"),
+    [
+        (
+            {
+                "gates": {**_ONE_QUBIT_NATIVES, "ms": {"avg_infidelity": 1e-2}},
+                "connectivity": _NO_EDGES,
+            },
+            "typical",
+            "compile to: its connectivity allows no pair of enabled qubits, so profile.to_cirq()"
+            " cannot run a two-qubit gate either",
+        ),
+        (
+            {
+                "gates": {
+                    **_ONE_QUBIT_NATIVES,
+                    "cz": {"avg_infidelity": 1e-2},
+                    "ms": {"avg_infidelity": 1e-2},
+                },
+                "calibrations": [{"gate": "cz", "qubits": [0, 1], "disabled": True}],
+                "connectivity": _NO_EDGES,
+            },
+            "typical",
+            "compile to (cz: disabled on every locus; ms: ms has no calibration on (0, 1) and"
+            " connectivity does not allow it). The profile allows no two-qubit native on any pair"
+            " of enabled qubits, so profile.to_cirq() cannot run one either",
+        ),
+        (
+            {"gates": {"sx": {"disabled": True}, "cz": {"avg_infidelity": 1e-2}}},
+            "typical",
+            "compile to (sx: disabled on every locus). The profile allows no one-qubit native on"
+            " any enabled qubit, so profile.to_cirq() cannot run one either",
+        ),
+        (
+            {"gates": {**_ONE_QUBIT_NATIVES, "cz": {}}},
+            "error",
+            ". Simulate it with profile.to_cirq() instead, or give the profile a calibrated"
+            " two-qubit native that Qiskit provides",
+        ),
+    ],
+    ids=["no pair", "disabled or unconnected", "one-qubit disabled", "uncalibrated"],
+)
+def test_a_refusal_says_why_and_whether_cirq_can_run_the_gate(
+    sections, unknown_gates, ending
+) -> None:
+    with pytest.raises(UnsupportedDevice) as refused:
+        to_qiskit(Profile.model_validate(toy(**sections)), unknown_gates=unknown_gates)
+    message = str(refused.value)
+    assert message.endswith(ending), message
+
+
+def test_the_report_names_a_native_that_no_listed_pair_allows() -> None:
+    gates = {**_ONE_QUBIT_NATIVES, "cz": {}, "ms": {"avg_infidelity": 1e-2}}
+    cz = [{"gate": "cz", "qubits": [0, 1], "avg_infidelity": 2e-2}]
+    profile = Profile.model_validate(toy(gates=gates, calibrations=cz, connectivity=_NO_EDGES))
+    sim = to_qiskit(profile)
+    assert sorted(sim.target.operation_names) == ["cz", "delay", "measure", "reset", "rz", "sx"]
+    omission = "native ms: ms has no calibration on (0, 1) and connectivity does not allow it"
+    assert omission in sim.report.omitted
+
+
 def test_readout_must_be_a_bool() -> None:
     with pytest.raises(ValueError, match="readout='symmetrize': pass True or False"):
         to_qiskit(ring(), readout="symmetrize")  # type: ignore[arg-type]

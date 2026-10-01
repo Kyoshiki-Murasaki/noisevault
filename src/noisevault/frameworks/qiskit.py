@@ -64,7 +64,7 @@ from .. import gates
 from ..channels import ChannelSpec, GateChannels, readout_matrix, thermal_relaxation_kraus
 from ..conversion import UnknownGates, resolve_op
 from ..report import Report
-from ..table import GateNoise, NoiseTable, QubitNoise
+from ..table import GateNoise, NoiseTable, QubitNoise, Unavailable
 
 if TYPE_CHECKING:
     from ..profile import Profile
@@ -365,14 +365,18 @@ def _placements(
     omitted: dict[str, str],
 ) -> list[Placement]:
     """Every native on every locus that gets noise; uncalibrated loci drop out in error mode."""
-    loci = {1: [(q,) for q in enabled], 2: _pairs(table, enabled)}
+    loci = _loci(table, enabled)
     memo: dict[tuple, Placement] = {}
     out = []
     for export in exports:
-        uncalibrated = []
-        for qargs in loci[export.gate.num_qubits]:
+        candidates = loci[export.gate.num_qubits]
+        uncalibrated, unavailable = [], []
+        for qargs in candidates:
             found = table.gate(export.canonical, qargs)
-            if not isinstance(found, GateNoise) or found.state == "disabled":
+            if isinstance(found, Unavailable):
+                unavailable.append(found.reason)
+                continue
+            if found.state == "disabled":
                 continue
             if found.state == "uncalibrated" and unknown_gates == "error":
                 uncalibrated.append(qargs)
@@ -385,6 +389,8 @@ def _placements(
                 " transpile does not use it there (unknown_gates='typical' gives it the"
                 " typical native's noise)"
             )
+        elif unavailable and len(unavailable) == len(candidates):
+            omitted[export.canonical] = unavailable[0]
     return out
 
 
@@ -452,12 +458,30 @@ def _require_natives(
             continue
         if any(p.export.gate.num_qubits == arity for p in placements):
             continue
+        loci = _loci(table, enabled)[arity]
+        refusal = f"{profile.id} has no {word}-qubit native gate this Qiskit export can compile to"
+        if not loci:
+            raise UnsupportedDevice(
+                f"{refusal}: its connectivity allows no pair of enabled qubits, so"
+                f" profile.to_cirq() cannot run a {word}-qubit gate either"
+            )
         why = "; ".join(f"{n}: {omitted.get(n, 'disabled on every locus')}" for n in defined)
-        raise UnsupportedDevice(
-            f"{profile.id} has no {word}-qubit native gate this Qiskit export can compile to"
-            f" ({why}). Simulate it with profile.to_cirq() instead, or give the profile a"
-            f" calibrated {word}-qubit native that Qiskit provides"
-        )
+        if any(table.allowed(n, qargs) for n in defined for qargs in loci):
+            advice = (
+                "Simulate it with profile.to_cirq() instead, or give the profile a calibrated"
+                f" {word}-qubit native that Qiskit provides"
+            )
+        else:
+            unit = "enabled qubit" if arity == 1 else "pair of enabled qubits"
+            advice = (
+                f"The profile allows no {word}-qubit native on any {unit}, so profile.to_cirq()"
+                " cannot run one either"
+            )
+        raise UnsupportedDevice(f"{refusal} ({why}). {advice}")
+
+
+def _loci(table: NoiseTable, enabled: Sequence[int]) -> dict[int, Sequence[tuple[int, ...]]]:
+    return {1: [(q,) for q in enabled], 2: _pairs(table, enabled)}
 
 
 def _pairs(table: NoiseTable, enabled: Sequence[int]) -> list[tuple[int, int]]:
