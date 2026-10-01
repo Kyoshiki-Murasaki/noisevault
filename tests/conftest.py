@@ -8,9 +8,11 @@ silently skip coverage.
 from __future__ import annotations
 
 import copy
+import gc
 import importlib
 import os
 import warnings
+from collections.abc import Iterator
 from importlib.metadata import version
 from pathlib import Path
 from types import ModuleType
@@ -75,6 +77,20 @@ def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "nv_home"
     monkeypatch.setenv("NOISEVAULT_HOME", str(home))
     return home / "profiles"
+
+
+@pytest.fixture(autouse=True)
+def _no_gc_pauses_in_time_budgets(request: pytest.FixtureRequest) -> Iterator[None]:
+    """A budget measures the code, not a collection of garbage other tests left on the heap."""
+    if "timing" not in request.keywords:
+        yield
+        return
+    gc.collect()
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
 
 
 def pytest_configure(config: pytest.Config) -> None:
