@@ -363,7 +363,6 @@ def _connectivity(profile: Profile) -> dict[str, Any]:
 
 
 def _native(profile: Profile, name: str) -> dict[str, Any]:
-    """Median error and duration over the loci where the gate runs, and its loci by state."""
     found = gate_loci(profile, name)
     states = Counter(g.state for g in found)
     usable = [g for g in found if g.state != "disabled"]
@@ -456,8 +455,6 @@ def _natives_table(natives: list[dict[str, Any]]) -> Table:
             table.add_row(f"{n['gate']}{arity}", "virtual", "-", "-")
             continue
         records = str(n["records"]) if n["records"] else "device-wide"
-        total = sum(n["loci"].values())
-        # a state on every locus already shows as the error column's "-", except disabled
         notes = [
             f"{count} {word}"
             for state, word in (
@@ -465,7 +462,7 @@ def _natives_table(natives: list[dict[str, Any]]) -> Table:
                 ("uncalibrated", "no metric"),
                 ("disabled", "disabled"),
             )
-            if (count := n["loci"][state]) and (count < total or state == "disabled")
+            if (count := n["loci"][state])
         ]
         if notes:
             records += f" ({', '.join(notes)})"
