@@ -9,8 +9,10 @@ import math
 import os
 import re
 import shutil
+import struct
 import tempfile
 import warnings
+import zlib
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from functools import cached_property
@@ -483,7 +485,7 @@ class Profile(_Model):
         path = Path(path)
         if path.suffix == ".gz":
             text = json.dumps(self.to_dict(), separators=(",", ":"), ensure_ascii=False)
-            data = gzip.compress(text.encode("utf-8"), mtime=0)
+            data = gzip_reproducibly(text.encode("utf-8"))
         else:
             data = (self.to_json() + "\n").encode("utf-8")
         write_atomically(path, data)
@@ -808,6 +810,18 @@ def profile_id(vendor: str | None, name: str) -> str:
         return name
     vendor = re.sub(r"\s+", "-", vendor.lower())
     return name if name.startswith(vendor + "_") else f"{vendor}_{name}"
+
+
+# No file name, mtime 0, best compression, OS "unknown". gzip.compress(mtime=0) before Python
+# 3.13 lets zlib write its platform's OS byte instead, so the same profile got other bytes.
+_GZIP_HEADER = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff"
+
+
+def gzip_reproducibly(data: bytes) -> bytes:
+    """``data`` as gzip whose bytes depend only on ``data``, not on the Python that wrote it."""
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS)
+    body = deflate.compress(data) + deflate.flush()
+    return _GZIP_HEADER + body + struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
 
 
 def write_atomically(path: Path, data: bytes) -> None:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import gzip
 import json
 import re
+import runpy
+import zlib
 from importlib.resources import files
 from pathlib import Path
 
@@ -83,3 +85,19 @@ def test_bundled_ibm_files_are_what_the_source_produces_today() -> None:
     for profile in fresh:
         assert raw[profile.id] == canonical_json(profile.to_dict()).encode("utf-8"), profile.id
         assert by_id[profile.id]["fingerprint"] == profile.fingerprint
+
+
+def _gzip_of_python_3_12(data: bytes, level: int = 9, *, mtime: float | None = None) -> bytes:
+    """gzip.compress(data, mtime=0) before Python 3.13: zlib's header, whose OS byte names the
+    platform zlib was built for instead of 255."""
+    return zlib.compress(data, level, wbits=31)
+
+
+def test_bundle_bytes_do_not_depend_on_the_pythons_gzip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build = runpy.run_path(str(ROOT / "scripts" / "build_catalog.py"), run_name="build_catalog")
+    committed = (DATA / "ibm_manila@2024-05-27.json.gz").read_bytes()
+    monkeypatch.setattr(gzip, "compress", _gzip_of_python_3_12)
+    built = build["write_bundle"]([load_bytes(committed)], tmp_path)
+    assert built["ibm_manila@2024-05-27.json.gz"] == committed

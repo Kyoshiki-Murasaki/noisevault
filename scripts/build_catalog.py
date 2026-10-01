@@ -1,7 +1,7 @@
 """Rebuild the bundled profiles in src/noisevault/data/profiles/ and the NOTICE data section.
 
-Deterministic: the same installed source packages give byte-identical files (gzip with mtime 0,
-sorted keys, names ``<id>@<YYYY-MM-DD>.json.gz``). Run from the repository root:
+Deterministic: the same installed source packages give byte-identical files (gzip with a fixed
+header, sorted keys, names ``<id>@<YYYY-MM-DD>.json.gz``). Run from the repository root:
 
     python scripts/build_catalog.py           # rewrite the bundle and NOTICE
     python scripts/build_catalog.py --check   # exit 1 if the committed bundle is out of date
@@ -10,7 +10,6 @@ sorted keys, names ``<id>@<YYYY-MM-DD>.json.gz``). Run from the repository root:
 from __future__ import annotations
 
 import argparse
-import gzip
 import importlib
 import json
 import sys
@@ -22,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from noisevault.catalog import index_entry  # noqa: E402
-from noisevault.profile import Profile, canonical_json  # noqa: E402
+from noisevault.profile import Profile, canonical_json, gzip_reproducibly  # noqa: E402
 
 DATA = ROOT / "src" / "noisevault" / "data" / "profiles"
 NOTICE = ROOT / "NOTICE"
@@ -93,7 +92,7 @@ def write_bundle(profiles: list[Profile], folder: Path) -> dict[str, bytes]:
         name = file_name(profile)
         if name in files:
             raise SystemExit(f"two bundled profiles would share the file name {name}")
-        files[name] = gzip.compress(canonical_json(profile.to_dict()).encode("utf-8"), mtime=0)
+        files[name] = gzip_reproducibly(canonical_json(profile.to_dict()).encode("utf-8"))
         entries.append(
             {**index_entry(profile), "file": name, "artifact_hash": profile.artifact_hash}
         )

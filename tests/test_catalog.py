@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import errno
+import gzip
 import json
 import os
 import re
 import subprocess
 import sys
 import threading
+import time
 import warnings
+import zlib
 from pathlib import Path
 
 import pytest
@@ -391,6 +394,102 @@ def test_a_link_to_an_unreadable_file_is_skipped_and_the_rest_still_list(
     assert result.exit_code == 0, result.output
     assert "test_toy" in result.stdout and "ibm_manila" in result.stdout
     assert f"warning: skipped {link}: {os.strerror(errno.EACCES)}" in result.stderr
+
+
+def _lock(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
+    """What ``chmod a-r`` does to an indexed file, also as root: the inode change time moves
+    (size and modification time stay) and reading it fails."""
+    before = path.stat().st_ctime_ns
+    deadline = time.monotonic() + 5
+    while path.stat().st_ctime_ns == before:  # file systems with a coarse clock need a retry
+        assert time.monotonic() < deadline, "chmod never moved the change time"
+        time.sleep(0.01)
+        path.chmod(path.stat().st_mode)
+    real_read = Path.read_bytes
+
+    def denied(self: Path) -> bytes:
+        if self == path:
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self))
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", denied)
+
+
+def test_an_indexed_file_made_unreadable_is_skipped_and_the_rest_still_list(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    path = profile.save(vault_path(profile))
+    catalog.vault_profiles()
+    _lock(monkeypatch, path)
+    skipped = f"skipped {path}: {os.strerror(errno.EACCES)}"
+    with pytest.warns(nv.NoiseVaultWarning) as caught:
+        found = {i.id for i in nv.profiles()}
+    assert "ibm_manila" in found and "test_toy" not in found
+    assert {str(w.message) for w in caught} == {skipped}
+
+    result = CliRunner().invoke(app, ["list"], env={"COLUMNS": "120"})
+    assert result.exit_code == 0, result.output
+    assert "ibm_manila" in result.stdout and "test_toy" not in result.stdout
+    assert f"warning: {skipped}" in result.stderr
+
+
+def test_a_pull_onto_an_unreadable_vault_file_does_not_call_it_saved(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    path = profile.save(vault_path(profile))
+    before = path.read_bytes()
+    catalog.vault_profiles()
+    _serve(monkeypatch, profile)
+    _lock(monkeypatch, path)
+    with pytest.warns(nv.NoiseVaultWarning, match="skipped"):
+        with pytest.raises(FileExistsError, match="exists but cannot be read"):
+            catalog.pull_and_save("ibm_toy", source="ibm")
+    monkeypatch.undo()
+    assert path.read_bytes() == before
+
+
+def test_listing_reads_no_profile_once_the_vault_is_indexed(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    profile.save(vault_path(profile))
+    catalog.vault_profiles()
+    manila = nv.load("ibm_manila")
+    expected = {
+        "test_toy": (None, None, "unknown"),
+        "ibm_manila": ("Falcon r5.11", "package_snapshot", "yes"),
+    }
+    assert manila.device.processor == "Falcon r5.11"
+
+    def no_parse(*args: object) -> None:
+        raise AssertionError("listing parsed a profile file")
+
+    monkeypatch.setattr(catalog, "load_file", no_parse)
+    monkeypatch.setattr(catalog, "load_bytes", no_parse)
+    runner = CliRunner()
+    assert runner.invoke(app, ["list"]).exit_code == 0
+    result = runner.invoke(app, ["list", "--json"])
+    assert result.exit_code == 0, result.output
+    rows = {row["id"]: row for row in json.loads(result.stdout)}
+    for name, values in expected.items():
+        row = rows[name]
+        assert (row["processor"], row["source_kind"], row["redistributable"]) == values
+    assert rows["ibm_manila"]["calibrated_at"] == "2024-05-27T18:27:23Z"
+
+
+def test_vault_files_have_one_gzip_header_on_every_python(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    """Before Python 3.13, gzip.compress(mtime=0) let zlib write its platform's OS byte."""
+    monkeypatch.setattr(
+        gzip, "compress", lambda data, level=9, *, mtime=None: zlib.compress(data, level, wbits=31)
+    )
+    profile = _dated("2025-01-01T00:00:00Z")
+    raw = profile.save(vault_path(profile)).read_bytes()
+    assert raw[:10] == b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff"  # no time, no name, OS 255
+    assert nv.load("test_toy") == profile
 
 
 def test_concurrent_pulls_of_one_calibration_both_succeed(

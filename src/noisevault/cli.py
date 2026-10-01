@@ -248,20 +248,19 @@ def _when(stamp: datetime, same_day: list[datetime]) -> str:
 
 
 def _list_row(info: catalog.ProfileInfo) -> dict[str, Any]:
-    profile = info.load()
     return {
         "ref": info.ref,
         "id": info.id,
         "date": info.calibrated_at.date().isoformat() if info.calibrated_at else None,
-        "calibrated_at": _iso(profile),
+        "calibrated_at": _iso(info.calibrated_at),
         "technology": info.technology,
         "vendor": info.vendor,
         "num_qubits": info.num_qubits,
-        "processor": profile.device.processor,
-        "source_kind": profile.provenance.source_kind,
+        "processor": info.processor,
+        "source_kind": info.source_kind,
         "data_kind": info.data_kind,
         "license": info.license,
-        "redistributable": profile.provenance.redistributable,
+        "redistributable": info.redistributable,
         "location": info.location,
         "fingerprint": info.fingerprint,
     }
@@ -299,9 +298,9 @@ def card(profile: Profile) -> dict[str, Any]:
     enabled = [table.qubit(i) for i in range(dev.num_qubits) if not table.qubit(i).disabled]
     readout = [q.readout for q in enabled if q.readout is not None]
     return {
-        "ref": f"{profile.id}@{_iso(profile)}" if dev.calibrated_at else profile.id,
+        "ref": f"{profile.id}@{_iso(dev.calibrated_at)}" if dev.calibrated_at else profile.id,
         "id": profile.id,
-        "calibrated_at": _iso(profile),
+        "calibrated_at": _iso(dev.calibrated_at),
         "vendor": dev.vendor,
         "processor": dev.processor,
         "technology": dev.technology,
@@ -671,7 +670,7 @@ def _diff_title(first: Profile, second: Profile) -> str:
         return f"[bold]{_ref_on_day(first)}[/bold] -> [bold]{_ref_on_day(second)}[/bold]"
     a, b = first.device.calibrated_at, second.device.calibrated_at
     if a and b and a.date() == b.date() and a != b:
-        when = (_iso(first), _iso(second))
+        when = (_iso(a), _iso(b))
     else:
         when = tuple(t.date().isoformat() if t else "undated" for t in (a, b))
     return f"[bold]{first.id}[/bold] {when[0]} -> {when[1]}"
@@ -984,8 +983,7 @@ def _echo_json(data: Any) -> None:
     typer.echo(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def _iso(profile: Profile) -> str | None:
-    when = profile.device.calibrated_at
+def _iso(when: datetime | None) -> str | None:
     return when.isoformat().replace("+00:00", "Z") if when else None
 
 

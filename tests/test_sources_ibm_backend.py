@@ -253,6 +253,30 @@ def test_matches_aer_from_backend_noise_model(class_name: str) -> None:
     assert 0.5 * np.abs(ours - aer).sum() < 1e-12
 
 
+@pytest.mark.parametrize(
+    ("class_name", "caveat"),
+    [
+        ("FakeFractionalBackend", "modeled based on FakeLima"),
+        ("FakeNighthawk", "not intended to represent typical Nighthawk error values"),
+    ],
+)
+def test_a_modeled_fake_is_a_vendor_model_with_the_package_caveat(
+    class_name: str, caveat: str
+) -> None:
+    fake_provider = require("qiskit_ibm_runtime.fake_provider")
+    if not hasattr(fake_provider, class_name):
+        pytest.skip(f"this qiskit-ibm-runtime has no {class_name}")
+    prov = _profile(class_name)[1].provenance
+    assert prov.data_kind == "vendor_model"
+    assert any(caveat in note for note in prov.notes), prov.notes
+
+
+def test_a_device_snapshot_is_measured_without_a_model_caveat() -> None:
+    prov = _profile("FakeManilaV2")[1].provenance
+    assert prov.data_kind == "measured"
+    assert not any("model" in note for note in prov.notes), prov.notes
+
+
 def test_bundle_curation() -> None:
     assert "FakeNighthawk" not in BUNDLED_FAKES and "FakeFractionalBackend" not in BUNDLED_FAKES
     assert "FakeManilaV2" in BUNDLED_FAKES and len(BUNDLED_FAKES) == 18

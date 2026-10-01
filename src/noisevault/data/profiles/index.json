@@ -12,6 +12,8 @@
       "license": "Apache-2.0",
       "num_qubits": 23,
       "processor": "Sycamore",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "google"
     },
@@ -26,6 +28,8 @@
       "license": "Apache-2.0",
       "num_qubits": 53,
       "processor": "Sycamore",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "google"
     },
@@ -40,6 +44,8 @@
       "license": "Apache-2.0",
       "num_qubits": 156,
       "processor": "Heron r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -54,6 +60,8 @@
       "license": "Apache-2.0",
       "num_qubits": 120,
       "processor": "Nighthawk r1",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -68,6 +76,8 @@
       "license": "Apache-2.0",
       "num_qubits": 156,
       "processor": "Heron r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -82,6 +92,8 @@
       "license": "Apache-2.0",
       "num_qubits": 127,
       "processor": "Eagle r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -96,6 +108,8 @@
       "license": "Apache-2.0",
       "num_qubits": 127,
       "processor": "Eagle r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -110,6 +124,8 @@
       "license": "Apache-2.0",
       "num_qubits": 127,
       "processor": "Eagle r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -124,6 +140,8 @@
       "license": "Apache-2.0",
       "num_qubits": 156,
       "processor": "Heron r2",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -138,6 +156,8 @@
       "license": "Apache-2.0",
       "num_qubits": 127,
       "processor": "Eagle r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -152,6 +172,8 @@
       "license": "Apache-2.0",
       "num_qubits": 156,
       "processor": "Heron r2",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -166,6 +188,8 @@
       "license": "Apache-2.0",
       "num_qubits": 127,
       "processor": "Eagle r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -180,6 +204,8 @@
       "license": "Apache-2.0",
       "num_qubits": 5,
       "processor": "Falcon r5.11",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -194,6 +220,8 @@
       "license": "Apache-2.0",
       "num_qubits": 156,
       "processor": "Heron r2",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -208,6 +236,8 @@
       "license": "Apache-2.0",
       "num_qubits": 120,
       "processor": "Nighthawk r1",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -222,6 +252,8 @@
       "license": "Apache-2.0",
       "num_qubits": 156,
       "processor": "Heron r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -236,6 +268,8 @@
       "license": "Apache-2.0",
       "num_qubits": 127,
       "processor": "Eagle r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -250,6 +284,8 @@
       "license": "Apache-2.0",
       "num_qubits": 127,
       "processor": "Eagle r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -264,6 +300,8 @@
       "license": "Apache-2.0",
       "num_qubits": 127,
       "processor": "Eagle r3",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -278,6 +316,8 @@
       "license": "Apache-2.0",
       "num_qubits": 133,
       "processor": "Heron r1",
+      "redistributable": "yes",
+      "source_kind": "package_snapshot",
       "technology": "superconducting",
       "vendor": "ibm"
     },
@@ -292,6 +332,8 @@
       "license": "Apache-2.0",
       "num_qubits": 20,
       "processor": "System Model H1",
+      "redistributable": "yes",
+      "source_kind": "published_data",
       "technology": "trapped_ion",
       "vendor": "quantinuum"
     },
@@ -306,6 +348,8 @@
       "license": "Apache-2.0",
       "num_qubits": 20,
       "processor": "System Model H1",
+      "redistributable": "yes",
+      "source_kind": "published_data",
       "technology": "trapped_ion",
       "vendor": "quantinuum"
     },
@@ -320,6 +364,8 @@
       "license": "Apache-2.0",
       "num_qubits": 56,
       "processor": "System Model H2",
+      "redistributable": "yes",
+      "source_kind": "published_data",
       "technology": "trapped_ion",
       "vendor": "quantinuum"
     },
@@ -334,6 +380,8 @@
       "license": "Apache-2.0",
       "num_qubits": 56,
       "processor": "System Model H2",
+      "redistributable": "yes",
+      "source_kind": "published_data",
       "technology": "trapped_ion",
       "vendor": "quantinuum"
     },
@@ -348,6 +396,8 @@
       "license": "Apache-2.0",
       "num_qubits": 20,
       "processor": "System Model H1",
+      "redistributable": "yes",
+      "source_kind": "published_data",
       "technology": "trapped_ion",
       "vendor": "quantinuum"
     }

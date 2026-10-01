@@ -121,6 +121,12 @@ print(torino.id, torino.short_fingerprint, torino.provenance.license)
 that is resolved, the importer reads them as per-gate errors and says so in the gate's
 `assumption`.
 
+Some qiskit-ibm-runtime fake backends are models, not snapshots of a device: `FakeNighthawk`,
+whose package says its error values are not typical of Nighthawk, and `FakeFractionalBackend`,
+modeled on `FakeLima`. Their snapshots name themselves (`fake_nighthawk`) instead of a device,
+so their profiles get `data_kind` `vendor_model` and a note in `provenance.notes` that quotes
+the package. None of them is bundled.
+
 Imported profiles are not saved anywhere until you call `profile.save(path)`.
 
 ## How each source's numbers are read

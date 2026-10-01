@@ -315,8 +315,9 @@ def _backend_provenance(backend: Any) -> dict[str, Any]:
         version = importlib.import_module("qiskit_ibm_runtime").__version__
         shipped = _shipped_props(backend)
         if shipped is not None:
+            caveat = _model_caveat(backend, shipped, version)
             return {
-                "data_kind": "measured",
+                "data_kind": "measured" if caveat is None else "vendor_model",
                 "source_kind": "package_snapshot",
                 "source": f"qiskit-ibm-runtime {version} {class_name}",
                 "source_url": RUNTIME_REPO,
@@ -324,6 +325,7 @@ def _backend_provenance(backend: Any) -> dict[str, Any]:
                 "attribution": IBM_ATTRIBUTION,
                 "redistributable": "yes",
                 "source_hash": sha256_bytes(shipped),
+                "notes": [] if caveat is None else [caveat],
             }
         props = backend.properties().to_dict()
         return {
@@ -350,6 +352,27 @@ def _backend_provenance(backend: Any) -> dict[str, Any]:
             "retrieved_at": now_utc(),
         }
     return {"source_kind": "other", "source": f"Qiskit backend {backend.name} ({class_name})"}
+
+
+def _model_caveat(backend: Any, shipped: bytes, version: str) -> str | None:
+    """A note when a fake's snapshot is a model rather than a device's calibration, else None.
+
+    A snapshot taken from a device carries its name (``ibm_fez``, ``ibmq_manila``); the
+    package's modeled backends name themselves (``fake_nighthawk``, ``fake_fractional``).
+    """
+    name = json.loads(shipped).get("backend_name") or ""
+    if not name.startswith("fake_"):
+        return None
+    note = (
+        f"qiskit-ibm-runtime {version} {type(backend).__name__} is a model, not a calibration"
+        f" of an IBM device: its snapshot names the backend {name}."
+    )
+    # The package's own words on what the model is and is not, from the class docstring's
+    # prose (examples, lists and directives follow it).
+    prose = re.split(r"\n\s*(?:#|\*|\.\.|```)", type(backend).__doc__ or "")[0]
+    sentences = re.split(r"(?<=\.)\s+", " ".join(prose.split()))
+    said = " ".join(s for s in sentences if re.search(r"model|represent", s, re.IGNORECASE))
+    return f'{note} The package says: "{said}"' if said else note
 
 
 # BackendProperties JSON ------------------------------------------------------------------------

@@ -49,6 +49,9 @@ _ENTRY_TYPES: dict[str, Any] = {
     "fingerprint": str,
     "data_kind": str,
     "license": str | None,
+    "processor": str | None,
+    "source_kind": str | None,
+    "redistributable": str,
 }
 
 
@@ -64,6 +67,9 @@ class ProfileInfo:
     path: Path | Traversable
     data_kind: str = "unknown"
     license: str | None = None
+    processor: str | None = None
+    source_kind: str | None = None
+    redistributable: str = "unknown"
 
     @property
     def ref(self) -> str:
@@ -81,7 +87,14 @@ class ProfileInfo:
         cls, entry: dict[str, Any], location: Literal["vault", "bundled"], path: Path | Traversable
     ) -> ProfileInfo:
         """From a line of a catalog index (see :func:`index_entry`); ValueError if it is damaged."""
-        fields = {"calibrated_at": None, "vendor": None, "data_kind": "unknown", "license": None}
+        fields = {
+            "calibrated_at": None,
+            "vendor": None,
+            "data_kind": "unknown",
+            "license": None,
+            "processor": None,
+            "source_kind": None,
+        }
         fields |= {key: entry[key] for key in _ENTRY_TYPES if key in entry}
         for key, kind in _ENTRY_TYPES.items():
             value = fields.get(key)
@@ -108,7 +121,9 @@ def index_entry(profile: Profile) -> dict[str, Any]:
         "num_qubits": dev.num_qubits,
         "processor": dev.processor,
         "data_kind": prov.data_kind,
+        "source_kind": prov.source_kind,
         "license": prov.license,
+        "redistributable": prov.redistributable,
         "fingerprint": profile.fingerprint,
     }
 
@@ -150,7 +165,8 @@ def vault_profiles() -> list[ProfileInfo]:
     """Profiles in the vault, indexed by file name so unchanged files are not parsed again.
 
     The index (``.index.json`` in the vault) is only a cache: it is rebuilt from the files
-    whenever a file's size or modification time changes, and losing it costs one re-read.
+    whenever a file's size, modification time or change time (moved by chmod and chown, which
+    can make it unreadable) changes, and losing it costs one re-read.
     """
     folder = vault_dir()
     cached = _read_vault_index(folder)
@@ -176,7 +192,7 @@ def _vault_entry(path: Path, cached: Any) -> tuple[dict[str, Any], ProfileInfo]:
     stat = path.stat()
     if not S_ISREG(stat.st_mode):  # opening a pipe would block the listing
         raise OSError("not a regular file")
-    signature = [stat.st_size, stat.st_mtime_ns]
+    signature = [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
     if isinstance(cached, dict) and cached.get("signature") == signature:
         try:
             return cached, ProfileInfo.from_entry(cached, "vault", path)
@@ -359,7 +375,12 @@ def pull_and_save(
     else:
         path = vault_path(profile)
         if path.exists():
-            occupant = next((i.ref for i in listed if i.path == path), "an unreadable profile")
+            occupant = next((i.ref for i in listed if i.path == path), None)
+            if occupant is None:  # skipped by the listing, with a warning saying why
+                raise FileExistsError(
+                    f"{path} exists but cannot be read; make it readable or move it out of"
+                    f" {path.parent}, then pull again"
+                )
             raise FileExistsError(
                 f"{path} already holds {occupant}, another calibration; move that file out of"
                 f" {path.parent} and pull again"
