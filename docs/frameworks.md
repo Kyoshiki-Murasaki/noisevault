@@ -165,13 +165,18 @@ What the report can list:
   their decomposition; pass `level="top"` to noise `Adjoint(SX)`, `Adjoint(S)` and `Adjoint(T)`
   as the profile's `sxdg`, `sdg` and `tdg`. The basis rotation before a Pauli measurement is
   ideal. Gates conditioned on mid-circuit measurements get their noise whether or not the
-  condition holds. A measurement without wires gets readout error only on the wires that the
-  circuit's operations touch.
+  condition holds. A measurement without wires gets readout error on the wires that the
+  circuit's operations and measurements use.
 - **Omitted.** Idle time, because PennyLane circuits have no timing. Readout on mid-circuit
   measurements. Readout on observables not measured in one product basis. Effects.
 
-PennyLane has no operation for the `r`, `zz` and `ms` natives of trapped-ion profiles, so
-circuits there get typical noise for the gates you write. The report counts each use.
+`qml.add_noise` keeps only part of a shot vector's results (`shots=[100, 200]`) when readout
+noise is on, so the model raises an error for shot vectors instead of returning wrong numbers.
+Run each shot count separately, or pass `readout=False`.
+
+PennyLane has no operation named after the `r` and `zz` natives of trapped-ion profiles. A
+`qml.Rot(a, theta, -a)` gets the profile's `r` noise and `qml.IsingZZ(pi/2)` its `zz` noise;
+other angles, and `ms`, get typical noise. The report counts each use.
 
 ## Stim
 

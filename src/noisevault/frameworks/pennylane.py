@@ -3,14 +3,15 @@
 Use it with ``qml.add_noise(qnode, model)`` on ``default.mixed``. Every gate gets the channels the
 shared conversion rules assign to it on its physical qubits, as ``qml.QubitChannel`` operations
 after the gate. Readout confusion goes right before each computational-basis measurement, on every
-wire the circuit touches so that all such measurements share one simulation, and before each
-Pauli measurement in its measured basis. A measurement without wires (``qml.probs()``,
-``qml.sample()``, ``qml.counts()``) reads every device wire; it gets readout confusion on the
-wires the circuit's operations touch, because a noise model never sees the device's wires.
+wire the circuit's operations or measurements use so that all such measurements share one
+simulation, and before each Pauli measurement in its measured basis. A measurement without wires
+(``qml.probs()``, ``qml.sample()``, ``qml.counts()``) reads every device wire; it gets readout
+confusion on the wires the circuit uses, because a noise model never sees the device's wires.
 """
 
 from __future__ import annotations
 
+import sys
 from collections import Counter
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from math import pi
@@ -65,6 +66,9 @@ _ANGLE_TOL = 1e-9
 _NOT_GATES = frozenset({"Barrier", "Snapshot", "GlobalPhase", "WireCut"})
 _READOUT_MEASUREMENTS = (ExpectationMP, VarianceMP, ProbabilityMP, SampleMP, CountsMP)
 _ROTATED_PAULIS = {"X": qml.PauliX, "Y": qml.PauliY}
+# qml.add_noise shows a noise model each operation and measurement but never the tape; its frame
+# holds the tape when it reads model_map, once per tape and before any noise function runs.
+_ADD_NOISE = ("add_noise", sys.modules["pennylane.noise.add_noise"].__file__)
 _NO_BASIS_FIX = (
     "measure Pauli words or computational-basis probabilities; for a Hamiltonian, wrap the"
     " QNode in qml.transforms.split_non_commuting before qml.add_noise"
@@ -108,7 +112,6 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         self._cache: dict[tuple[str, tuple[int, ...]], CacheEntry] = {}
         self._tape_wires: dict[Hashable, None] = {}  # ordered set of wires the current tape uses
         gate_map = {
-            qml.BooleanFn(_any_op, "NoiseVaultWires"): self._touch,
             qml.BooleanFn(_is_gate, "NoiseVaultGate"): self._gate_noise,
             qml.BooleanFn(_is_reset, "NoiseVaultReset"): self._reset_noise,
         }
@@ -117,10 +120,22 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
 
     @property
     def model_map(self) -> dict:
-        # qml.add_noise reads model_map once at the start of every tape, before any noise function
-        # runs: the one point where the wires of the previous tape can be forgotten.
-        self._tape_wires = {}
+        caller = sys._getframe(1)
+        if (caller.f_code.co_name, caller.f_code.co_filename) == _ADD_NOISE:
+            self._start_tape(caller.f_locals["tape"])
         return super().model_map
+
+    def _start_tape(self, tape: qml.tape.QuantumScript) -> None:
+        """Check every wire the tape uses and fix the wires that read out, so readout does not
+        depend on the order of the measurements."""
+        if self.meas_map and tape.shots.has_partitioned_shots:
+            raise ValueError(
+                "qml.add_noise keeps only part of a shot vector's results when readout noise is"
+                " on; run each shot count separately or pass readout=False"
+            )
+        for wire in tape.wires:
+            self.physical_qubit(wire)
+        self._tape_wires = dict.fromkeys(tape.wires)
 
     def physical_qubit(self, wire: Hashable) -> int:
         """The device qubit a circuit wire maps to; integer wire ``i`` is qubit ``i`` by default."""
@@ -134,10 +149,6 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         if self._list_layout:
             return f"a list layout covers wires 0 to {len(self._layout) - 1}; extend the list"
         return f"add it: layout={{..., {wire!r}: <physical qubit>}}"
-
-    def _touch(self, op: Operator, **_: Any) -> None:
-        """Record the wires of every operation; add_noise runs this before any measurement."""
-        self._tape_wires.update(dict.fromkeys(op.wires))
 
     def _gate_noise(self, op: Operator, **_: Any) -> None:
         gate = _unconditional(op)
@@ -194,11 +205,10 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         if not mp.wires:
             self.report.approximate(
                 "readout of measurements without wires",
-                "applied to every wire the circuit's operations touch",
-                "a device wire no operation touches reads out without error; pass wires="
+                "applied to every wire the circuit's operations or measurements use",
+                "a device wire the circuit never uses reads out without error; pass wires="
                 " to give it readout error",
             )
-        self._tape_wires.update(dict.fromkeys(mp.wires))
         basis = _measured_basis(mp.obs)
         if basis is None:
             self.report.omit("readout on observables not measured in one product basis")
@@ -227,7 +237,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         for wire in wires:
             matrix = self._readout_matrix(wire)
             if matrix is not None and not np.array_equal(matrix, np.eye(2)):
-                qml.QubitChannel(confusion_kraus(matrix), wires=wire)
+                qml.QubitChannel(confusion_kraus(matrix), wires=[wire])
         for gate in undo:
             qml.apply(gate)
 
@@ -324,10 +334,6 @@ def _unconditional(op: Operator) -> Operator:
     return op.base if isinstance(op, Conditional) else op
 
 
-def _any_op(op: Operator) -> bool:
-    return True
-
-
 def _is_gate(op: Operator) -> bool:
     op = _unconditional(op)
     return (
@@ -377,7 +383,7 @@ def _pauli_basis(words: qml.pauli.PauliSentence) -> tuple[Operator, ...] | None:
             gate
             for wire, letter in letters.items()
             if letter != "Z"
-            for gate in _ROTATED_PAULIS[letter](wire).diagonalizing_gates()
+            for gate in _ROTATED_PAULIS[letter]([wire]).diagonalizing_gates()
         )
 
 

@@ -239,6 +239,42 @@ def test_wires_the_layout_cannot_place_are_layout_errors(qml, manila) -> None:
         to_pennylane(manila, layout={"a": 0, "b": 0})
 
 
+def _one_disabled() -> Profile:
+    return Profile.model_validate(toy(qubits=[{"index": 1, "disabled": True}]))
+
+
+@pytest.mark.parametrize(
+    ("wire", "match"),
+    [(1, "marks disabled"), (3, "has qubits 0..2"), ("anc", "layout=")],
+)
+def test_noiseless_operations_are_checked_against_the_layout(qml, wire, match) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    @qml.qnode(qml.device("default.mixed", wires=[0, wire]))
+    def circuit():
+        qml.BasisState(np.array([1]), wires=[wire])
+        return qml.probs(wires=[0])
+
+    with pytest.raises(LayoutError, match=match):
+        qml.add_noise(circuit, to_pennylane(_one_disabled(), readout=False))()
+
+
+@pytest.mark.parametrize(
+    ("measure", "readout"),
+    [("density_matrix", True), ("density_matrix", False), ("probs", False)],
+)
+def test_measured_wires_are_checked_against_the_layout(qml, measure, readout) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit():
+        qml.PauliX(0)
+        return getattr(qml, measure)(wires=[1])
+
+    with pytest.raises(LayoutError, match="marks disabled"):
+        qml.add_noise(circuit, to_pennylane(_one_disabled(), readout=readout))()
+
+
 # readout -------------------------------------------------------------------------------------
 
 
@@ -255,6 +291,26 @@ def test_asymmetric_readout_follows_the_profile_convention(qml) -> None:
     # both qubits in |0>: qubit 0 reads 1 with P(1|0) = 0.02, qubit 1 with 0.07
     got = np.asarray(qml.add_noise(prepared_01, model)())
     assert got == pytest.approx(np.kron([0.98, 0.02], [0.93, 0.07]), abs=1e-12)
+
+
+def test_tuple_wire_labels_get_their_readout(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    profile = _asymmetric_toy()
+    results = []
+    for a, b in ((0, 1), (("reg", 0), ("reg", 1))):
+
+        @qml.qnode(qml.device("default.mixed", wires=[a, b]))
+        def circuit(a=a, b=b):
+            qml.SX(wires=[a])
+            qml.CZ(wires=[a, b])
+            qml.SX(wires=[b])
+            return qml.probs(wires=[a, b]), qml.probs(), qml.expval(qml.X([a]) @ qml.Y([b]))
+
+        model = to_pennylane(profile, layout={a: 0, b: 1})
+        results.append([np.asarray(r) for r in qml.add_noise(circuit, model)()])
+    for by_index, by_tuple in zip(*results, strict=True):
+        assert by_tuple == pytest.approx(by_index, abs=1e-12)
 
 
 @pytest.mark.parametrize(("a", "b"), [(0.0, 0.0), (0.7, 0.6), (0.3, 0.0)])
@@ -433,6 +489,42 @@ def test_sampled_measurements_without_wires_include_readout(qml, manila, measure
         assert np.all(np.abs(got - expected) <= 5 * sigma + 5 / shots)
         assert _tvd(got, without_readout) > 0.02
     assert results["None"] == pytest.approx(results["[0, 1, 2]"], abs=1e-12)
+
+
+@pytest.mark.parametrize("wireless_first", [True, False])
+def test_readout_without_wires_does_not_depend_on_measurement_order(qml, wireless_first) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    profile = _asymmetric_toy()
+
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit():
+        qml.SX(0)
+        if wireless_first:
+            return qml.probs(), qml.probs(wires=[1])
+        return qml.probs(wires=[1]), qml.probs()
+
+    out = [np.asarray(r) for r in qml.add_noise(circuit, to_pennylane(profile))()]
+    every_wire, wire_1 = out if wireless_first else out[::-1]
+    expected = probabilities(profile, [Op("sx", (0,))], 2)
+    assert every_wire == pytest.approx(expected, abs=1e-12)
+    assert wire_1 == pytest.approx(expected.reshape(2, 2).sum(axis=0), abs=1e-12)
+
+
+def test_shot_vectors_with_readout_raise_instead_of_dropping_results(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    @qml.qnode(qml.device("default.mixed", wires=1, seed=3))
+    def circuit():
+        qml.SX(0)
+        return qml.probs(wires=[0])
+
+    shot_vector = qml.set_shots(qml.add_noise(circuit, to_pennylane(_asymmetric_toy())), [100, 200])
+    with pytest.raises(ValueError, match="run each shot count separately or pass readout=False"):
+        shot_vector()
+    without_readout = to_pennylane(_asymmetric_toy(), readout=False)
+    out = qml.set_shots(qml.add_noise(circuit, without_readout), [100, 200])()
+    assert [np.asarray(r).shape for r in out] == [(2,), (2,)]
 
 
 def test_device_wires_no_operation_touches_read_out_ideally(qml, manila) -> None:
