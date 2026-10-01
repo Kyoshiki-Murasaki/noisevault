@@ -288,7 +288,6 @@ def _error(found: Any) -> float | None:
 
 
 def _medians(profile: Profile, qubits: dict[int, dict[str, float]]) -> dict[str, float | None]:
-    """The qubit medians ``nv show`` prints, and the medians of the typical gate errors."""
     shown = qubit_medians(profile)
     return {
         "t1_us": shown.t1_us,

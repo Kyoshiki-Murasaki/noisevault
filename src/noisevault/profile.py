@@ -752,12 +752,6 @@ def _resolved_alike(a: GateNoise, b: GateNoise) -> bool:
 
 @dataclass(frozen=True)
 class QubitMedians:
-    """The median of each qubit value over the qubits that are not disabled.
-
-    A value is None when no such qubit has it. ``readout_error`` is the median of each qubit's
-    mean of P(1|0) and P(0|1).
-    """
-
     t1_us: float | None
     t2_us: float | None
     readout_error: float | None
@@ -766,7 +760,6 @@ class QubitMedians:
 
 
 def qubit_medians(profile: Profile) -> QubitMedians:
-    """The device-wide qubit values that ``summary()``, ``nv show`` and ``nv diff`` print."""
     table = profile.table
     working = [q for q in map(table.qubit, range(table.num_qubits)) if not q.disabled]
     readout = [q.readout for q in working if q.readout is not None]
@@ -781,8 +774,6 @@ def qubit_medians(profile: Profile) -> QubitMedians:
 
 @dataclass(frozen=True)
 class GateStats:
-    """One gate over the loci :func:`gate_loci` finds. A disabled locus counts only by state."""
-
     states: Counter[GateState]
     errors: tuple[float, ...]
     durations_ns: tuple[float, ...]
@@ -797,7 +788,6 @@ class GateStats:
 
 
 def gate_stats(profile: Profile, name: str) -> GateStats:
-    """Gate ``name`` across the device, as ``summary()`` and ``nv show`` print it."""
     found = gate_loci(profile, name)
     usable = [g for g in found if g.state != "disabled"]
     return GateStats(
