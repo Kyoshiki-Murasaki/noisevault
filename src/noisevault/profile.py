@@ -125,7 +125,7 @@ def _freeze(value: Any, where: str = "") -> Any:
 
 
 def _string_keys(value: Any) -> Any:
-    """Refuse a non-string top-level key before ``dict[str, Any]`` decodes a bytes key to str."""
+    """Refuse a non-string key before ``dict[str, ...]`` decodes a bytes key onto a str one."""
     if isinstance(value, Mapping):
         for key in value:
             if not isinstance(key, str):
@@ -404,7 +404,7 @@ class Profile(_Model):
     noisevault: Literal["1.0"]
     device: Device
     connectivity: Literal["all_to_all"] | Connectivity
-    gates: dict[str, GateSpec]
+    gates: Annotated[dict[str, GateSpec], BeforeValidator(_string_keys)]
     readout: Readout | None = None
     prep: Prep | None = None
     idle: Idle | None = None

@@ -393,6 +393,12 @@ def test_free_form_data_must_be_json_data(where: str, free: dict, message: str) 
         Profile.from_dict(data)
 
 
+def test_a_gate_key_must_be_a_string() -> None:
+    gates = {b"x": {"avg_infidelity": 0.2}, "x": {"avg_infidelity": 0.03}}
+    with pytest.raises(ValidationError, match="the key b'x' is not a string"):
+        Profile.from_dict(toy(gates=gates))
+
+
 def test_free_form_data_is_frozen_at_every_level() -> None:
     from types import MappingProxyType
 
