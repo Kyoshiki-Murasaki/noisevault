@@ -255,8 +255,8 @@ def to_qiskit(
     ``optimization_level=0`` still puts circuit qubit i on physical qubit i, and levels 1-3 do
     not check that a chosen qubit has the 1-qubit gates a circuit needs. On a profile with
     disabled parts, transpile with ``initial_layout=list(profile.suggest_layout(n).values())``:
-    it picks connected qubits whose usable gates make every 1-qubit gate, and warns when no
-    chain of ``n`` such qubits exists.
+    it picks connected qubits that each have every 1-qubit native usable anywhere on the
+    device, and warns when no chain of ``n`` such qubits exists.
 
     ``unknown_gates`` applies to natives with no error metric on a locus: ``"typical"``
     (default) gives them the typical native's noise (reported and warned), ``"error"`` leaves

@@ -436,8 +436,53 @@ def test_suggested_layout_transpiles_around_disabled_parts_at_every_level(
     assert sim.run(compiled, shots=10).result().success
 
 
+_QUBIT_0_SHORT = {
+    "sx re-enabled elsewhere": {
+        "gates": {**_LINE_GATES, "sx": {"avg_infidelity": 2e-3, "disabled": True}},
+        "calibrations": [{"gate": "sx", "qubits": [q], "disabled": False} for q in (1, 2)],
+    },
+    "rx off, sx and ry left": {
+        "gates": {
+            "sx": {"avg_infidelity": 2e-3},
+            "ry": {"avg_infidelity": 2e-3},
+            "rx": {"avg_infidelity": 1e-3},
+            "cz": {"avg_infidelity": 1e-2},
+        },
+        "calibrations": [{"gate": "rx", "qubits": [0], "disabled": True}],
+        "qubits": [{"index": q, "readout": {"error": e}} for q, e in enumerate([1e-3, 0.2, 0.3])],
+    },
+}
+
+
 @pytest.mark.parametrize("level", [0, 1, 2, 3])
-def test_a_qubit_without_x_still_transpiles_any_circuit(level: int) -> None:
+@pytest.mark.parametrize("case", list(_QUBIT_0_SHORT))
+def test_suggested_layout_transpiles_around_a_qubit_missing_a_native(case: str, level: int) -> None:
+    profile = Profile.model_validate(
+        toy(
+            device={
+                "name": "tri",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 3,
+            },
+            connectivity="all_to_all",
+            **_QUBIT_0_SHORT[case],
+        )
+    )
+    sim = quiet_export(profile)
+    circuit = QuantumCircuit(2)
+    circuit.h([0, 1])
+    circuit.cx(0, 1)
+    circuit.measure_all()
+    layout = list(profile.suggest_layout(2).values())
+    compiled = transpile(
+        circuit, sim, initial_layout=layout, optimization_level=level, seed_transpiler=3
+    )
+    assert sim.run(compiled, shots=10).result().success
+
+
+@pytest.mark.parametrize("level", [0, 1, 2, 3])
+def test_a_qubit_without_x_is_used_only_when_needed_and_still_transpiles(level: int) -> None:
     profile = Profile.model_validate(
         toy(
             device={
@@ -453,13 +498,15 @@ def test_a_qubit_without_x_still_transpiles_any_circuit(level: int) -> None:
         )
     )
     sim = quiet_export(profile)
-    circuit = QuantumCircuit(2)
-    circuit.h([0, 1])
-    circuit.x(0)
+    assert 0 not in profile.suggest_layout(2).values()
+    with pytest.warns(nv.NoiseVaultWarning, match=r"qubit 0 \(x disabled\)"):
+        layout = list(profile.suggest_layout(3).values())
+    circuit = QuantumCircuit(3)
+    circuit.h([0, 1, 2])
+    circuit.x(range(3))
     circuit.cx(0, 1)
+    circuit.cx(1, 2)
     circuit.measure_all()
-    layout = list(profile.suggest_layout(2).values())
-    assert 0 in layout
     compiled = transpile(
         circuit, sim, initial_layout=layout, optimization_level=level, seed_transpiler=3
     )

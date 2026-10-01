@@ -44,7 +44,7 @@ profile files still load.
   matrix. `from_qiskit_backend` labels a fake whose snapshot is a model, such as
   `FakeNighthawk`, as `vendor_model`.
 - **Hypothetical devices** with `Profile.uniform`, and `profile.suggest_layout(n)` to pick a
-  well-calibrated chain of qubits that can still make every one-qubit gate.
+  well-calibrated chain of qubits that each have every one-qubit native the device has.
 - **Command line** `nv` (also `noisevault`): `list`, `show`, `pull`, `diff`, `check`, `cite`,
   `validate`, `doctor` and `schema`.
   - A bare `nv` prints the help. A usage mistake prints one line with the closest match.

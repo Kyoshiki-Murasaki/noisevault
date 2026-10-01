@@ -38,9 +38,11 @@ print(fez.suggest_layout(4))
 ```
 
 `suggest_layout(n)` returns a connected chain of n enabled qubits with low summed gate and
-readout error, preferring qubits that can still make every single-qubit gate. It is a starting
-point, not a placer. A layout onto a disabled or missing qubit raises `LayoutError` with the
-fix.
+readout error. It prefers complete qubits: qubits with every single-qubit native, other than
+the identity, that is usable on at least one qubit of the device, counting calibration records
+that enable or disable a gate.
+It is a starting point, not a placer. A layout onto a disabled or missing qubit raises
+`LayoutError` with the fix.
 
 ## Qiskit
 
@@ -91,11 +93,12 @@ What the report can list:
 On a profile with disabled qubits or gates, transpile with
 `initial_layout=list(profile.suggest_layout(n).values())`. Qiskit's `optimization_level=0`
 places circuit qubit i on physical qubit i, and levels 1 to 3 do not check that a qubit has the
-single-qubit gates a circuit needs. `suggest_layout` does check. It skips a qubit where a
-disabled single-qubit gate leaves the rest unable to make every rotation, such as an IBM qubit
-without `sx`, which keeps only `rz` and `x`. A qubit without `x` alone still qualifies, because
-`rz` and `sx` make any single-qubit gate. When no chain of n qubits avoids such qubits,
-`suggest_layout` uses as few as it can and warns, and the transpiler can fail on them.
+single-qubit gates a circuit needs. `suggest_layout` does check. It skips a qubit that lacks a
+single-qubit native other qubits have, so the chain has the same basis as the rest of the
+device. This holds even when the qubit's other gates could make the missing one: an IBM qubit
+without `x` is skipped although `rz` and `sx` can make `x`. When no chain of n complete qubits
+exists, `suggest_layout` uses as few incomplete ones as it can and warns with the qubits and
+their missing gates. The transpiler can fail on those qubits.
 
 ## Cirq
 

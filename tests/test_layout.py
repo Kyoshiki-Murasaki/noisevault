@@ -209,7 +209,7 @@ _SX_X = {
 }
 
 
-def test_suggest_layout_skips_a_qubit_that_cannot_make_every_rotation() -> None:
+def test_suggest_layout_skips_a_qubit_without_sx() -> None:
     # Without sx, qubit 0 has only rz and x: its cheap x would otherwise rank it first.
     profile = _ions(gates=_SX_X, calibrations=[{"gate": "sx", "qubits": [0], "disabled": True}])
     with warnings.catch_warnings():
@@ -219,22 +219,18 @@ def test_suggest_layout_skips_a_qubit_that_cannot_make_every_rotation() -> None:
 
 
 @pytest.mark.parametrize(
-    ("natives", "off", "complete"),
+    ("natives", "off"),
     [
-        (("sx", "x"), ["x"], True),
-        (("sx", "x", "id"), ["id"], True),
-        (("sx", "x"), ["sx"], False),
-        (("sx", "x"), ["rz"], False),
-        (("rx", "ry"), ["rx"], True),
-        (("h", "x"), ["x"], True),
-        (("h",), ["h"], False),
-        (("u", "sx"), ["u"], True),
-        (("r", "x"), ["r"], False),
+        (("sx", "x"), ["x"]),
+        (("sx", "x"), ["sx"]),
+        (("sx", "x"), ["rz"]),
+        (("rx", "ry"), ["rx"]),
+        (("h", "x"), ["x"]),
+        (("u", "sx"), ["u"]),
     ],
 )
-def test_a_qubit_is_complete_when_its_usable_gates_make_what_the_disabled_ones_did(
-    natives, off, complete
-) -> None:
+def test_a_qubit_missing_any_native_the_others_have_is_chosen_last(natives, off) -> None:
+    # Qubit 0 reads out best, and its remaining gates could make the missing one in some cases.
     gates = {"rz": {"virtual": True}, **{n: {"avg_infidelity": 1e-3} for n in natives}}
     profile = _ions(
         gates={**gates, "cz": {"avg_infidelity": 1e-2}},
@@ -242,9 +238,82 @@ def test_a_qubit_is_complete_when_its_usable_gates_make_what_the_disabled_ones_d
         qubits=[{"index": 0, "readout": {"error": 1e-4}}],
     )
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", NoiseVaultWarning)
-        chosen = suggest_layout(profile, 1)[0]
-    assert (chosen == 0) is complete
+        warnings.simplefilter("error")
+        assert suggest_layout(profile, 1)[0] != 0
+
+
+def test_a_qubit_missing_only_the_identity_is_complete() -> None:
+    gates = {"rz": {"virtual": True}, **{n: {"avg_infidelity": 1e-3} for n in ("sx", "x", "id")}}
+    profile = _ions(
+        gates={**gates, "cz": {"avg_infidelity": 1e-2}},
+        calibrations=[{"gate": "id", "qubits": [0], "disabled": True}],
+        qubits=[{"index": 0, "readout": {"error": 1e-4}}],
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert suggest_layout(profile, 1) == {0: 0}
+
+
+@pytest.mark.parametrize(
+    "x_off",
+    [
+        {"gates": {**_SX_X, "x": {"avg_infidelity": 1e-3, "disabled": True}}},
+        {"calibrations": [{"gate": "x", "qubits": [q], "disabled": True} for q in range(3)]},
+    ],
+    ids=["by default", "on every qubit"],
+)
+def test_a_gate_disabled_everywhere_is_not_required(x_off) -> None:
+    profile = _ions(**{"gates": _SX_X, **x_off}, qubits=[{"index": 0, "readout": {"error": 1e-4}}])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert suggest_layout(profile, 1) == {0: 0}
+        assert set(suggest_layout(profile, 3).values()) == {0, 1, 2}
+
+
+def test_a_qubit_where_a_record_enables_a_disabled_default_is_complete() -> None:
+    profile = _ions(
+        gates={**_SX_X, "sx": {"avg_infidelity": 2e-3, "disabled": True}},
+        calibrations=[{"gate": "sx", "qubits": [2], "disabled": False}],
+        qubits=[{"index": 0, "readout": {"error": 1e-4}}],
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert suggest_layout(profile, 1) == {0: 2}
+    with pytest.warns(NoiseVaultWarning, match=r"qubit 0 \(sx disabled\)"):
+        suggest_layout(profile, 2)
+
+
+_QUBIT_0_SHORT = {
+    "sx re-enabled elsewhere": {
+        "gates": {**_SX_X, "sx": {"avg_infidelity": 2e-3, "disabled": True}},
+        "calibrations": [{"gate": "sx", "qubits": [q], "disabled": False} for q in (1, 2)],
+    },
+    "rx off, sx and ry left": {
+        "gates": {
+            "sx": {"avg_infidelity": 2e-3},
+            "ry": {"avg_infidelity": 2e-3},
+            "rx": {"avg_infidelity": 1e-3},
+            "cz": {"avg_infidelity": 1e-2},
+        },
+        "calibrations": [{"gate": "rx", "qubits": [0], "disabled": True}],
+        "qubits": [{"index": q, "readout": {"error": e}} for q, e in enumerate([1e-3, 0.2, 0.3])],
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("case", "missing"), [("sx re-enabled elsewhere", "sx"), ("rx off, sx and ry left", "rx")]
+)
+def test_suggest_layout_avoids_a_qubit_missing_a_native_other_qubits_have(
+    case: str, missing: str
+) -> None:
+    profile = _ions(**_QUBIT_0_SHORT[case])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        layout = suggest_layout(profile, 2)
+    assert set(layout.values()) == {1, 2}
+    with pytest.warns(NoiseVaultWarning, match=rf"qubit 0 \({missing} disabled\)"):
+        assert set(suggest_layout(profile, 3).values()) == {0, 1, 2}
 
 
 def test_suggest_layout_falls_back_to_an_incomplete_qubit_and_says_so() -> None:

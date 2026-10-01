@@ -5,7 +5,6 @@ from __future__ import annotations
 import operator
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache
 from itertools import combinations
 from typing import TYPE_CHECKING
 
@@ -25,9 +24,8 @@ _BEAMS = (32, 128, 512)
 
 @dataclass(frozen=True, order=True)
 class _Cost:
-    """A chain's score: qubits lacking a 1-qubit gate their usable gates cannot make first,
-    then qubits with no usable 1-qubit gate, then qubits with unknown readout, then the summed
-    error."""
+    """A chain's score: qubits missing a 1-qubit native the device has first, then qubits with
+    no usable 1-qubit gate, then qubits with unknown readout, then the summed error."""
 
     incomplete: int
     no_gate: int
@@ -119,15 +117,15 @@ def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
     2-qubit gate is never a link; a pair with one is, whether connectivity lists it or only a
     calibration record does.
 
-    Every qubit in the chain can run what the profile's 1-qubit gates can, when such a chain
-    exists. A qubit falls short when a 1-qubit gate the profile defines is disabled on it and
-    the gates still usable there cannot make it exactly. That is judged from the registry
-    unitaries: the usable gates' continuous rotations, closed under commutators and under
-    conjugation by every usable gate, must contain the disabled gate's rotations. So rz and sx
-    make any rotation and an IBM qubit without x still qualifies, while rz and x make only z
-    rotations and flips and one without sx does not. A transpiler cannot place an arbitrary
-    1-qubit gate on such a qubit. When no chain avoids them, the chain uses as few as it can
-    and a NoiseVaultWarning names them.
+    Every qubit in the chain has every 1-qubit native the device has, when such a chain exists.
+    Those natives are the unitary 1-qubit gates other than the identity that are usable on at
+    least one qubit, after calibration records: a gate disabled by default counts when a record
+    enables it somewhere, and a gate disabled everywhere does not. A qubit missing one of them
+    is incomplete, even when its other gates could make the missing one in principle (an IBM
+    qubit without x alone), so the chain carries the same basis as the rest of the device and a
+    transpiler that compiles for the device compiles for the chain. When no chain of complete
+    qubits exists, the chain uses as few incomplete ones as it can and a NoiseVaultWarning names
+    them and their missing gates.
 
     Missing calibration ranks next: a chain with fewer qubits lacking a calibrated 1-qubit gate
     always wins, then one with fewer unknown readout errors, whatever the calibrated errors. On
@@ -141,7 +139,14 @@ def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
     usable = [q for q in range(table.num_qubits) if not table.qubit(q).disabled]
     if len(usable) < n:
         raise LayoutError(f"{profile.id} has only {len(usable)} usable qubits, not {n}")
-    lacking = {q: _lacking(table, q) for q in usable}
+    required = [
+        name
+        for name in table.profile.gates
+        if table.arity(name) == 1
+        and _needed(name)
+        and any(table.allowed(name, (q,)) for q in usable)
+    ]
+    lacking = {q: tuple(g for g in required if not table.allowed(g, (q,))) for q in usable}
     qubit_cost = {q: _qubit_cost(table, q, lacking[q]) for q in usable}
     edge_costs: dict[tuple[int, int], _Cost | None] = {}
 
@@ -160,8 +165,8 @@ def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
     short = [f"{q} ({', '.join(lacking[q])} disabled)" for q in path if lacking[q]]
     if short:
         warn_from_caller(
-            f"{profile.id} has no connected chain of {n} qubits that can each make every"
-            f" 1-qubit gate, so this one includes qubit{'s' if len(short) > 1 else ''}"
+            f"{profile.id} has no connected chain of {n} qubits that each have every 1-qubit"
+            f" native the device has, so this one includes qubit{'s' if len(short) > 1 else ''}"
             f" {', '.join(short)}; a transpiler may fail to place 1-qubit gates there",
             NoiseVaultWarning,
         )
@@ -251,87 +256,9 @@ def _neighbors(table: NoiseTable, usable: list[int]) -> dict[int, list[int]]:
     return {q: sorted(nbs) for q, nbs in out.items()}
 
 
-def _lacking(table: NoiseTable, q: int) -> tuple[str, ...]:
-    """The profile's 1-qubit gates disabled on ``q`` that its usable 1-qubit gates cannot make."""
-    defined = [
-        name
-        for name, spec in table.profile.gates.items()
-        if not spec.disabled and table.arity(name) == 1 and _maybe_unitary(name)
-    ]
-    usable = tuple(name for name in defined if table.allowed(name, (q,)))
-    off = tuple(name for name in defined if name not in usable)
-    return _unreachable(usable, off) if off else ()
-
-
-def _maybe_unitary(name: str) -> bool:
+def _needed(name: str) -> bool:
+    """A 1-qubit gate a transpiler may need: unitary and not the identity, or unknown."""
     info = gates.lookup(name)
-    return info is None or info.unitary is not None
-
-
-# One-qubit gates as rotations: su(2) is R^3 with the cross product as commutator, and
-# conjugating by a unitary rotates that space.
-_PAULI = np.array([[[0, 1], [1, 0]], [[0, -1j], [1j, 0]], [[1, 0], [0, -1]]])
-_AT = (0.7, 1.1, 1.9)  # generic parameters, where no rotation's tangent vanishes
-_STEP = 1e-6
-_TOLERANCE = 1e-6
-
-
-@cache
-def _unreachable(usable: tuple[str, ...], off: tuple[str, ...]) -> tuple[str, ...]:
-    reach = _algebra(usable)
-    return tuple(name for name in off if len(_span([*reach, *_needs(name)])) > len(reach))
-
-
-def _algebra(names: tuple[str, ...]) -> np.ndarray:
-    """The rotations the gates ``names`` make with continuous parameters, as orthonormal rows."""
-    known = [info for info in map(gates.lookup, names) if info and info.arity == 1]
-    adjoints = [_adjoint(_at(info)) for info in known]
-    basis = _span(v for info in known for v in _tangents(info))
-    while True:
-        brackets = (np.cross(a, b) for a, b in combinations(basis, 2))
-        turned = (r @ v for r in adjoints for v in basis)
-        grown = _span([*basis, *brackets, *turned])
-        if len(grown) == len(basis):
-            return grown
-        basis = grown
-
-
-def _needs(name: str) -> list[np.ndarray]:
-    """The rotations a transpiler must make to stand in for gate ``name``."""
-    info = gates.lookup(name)
-    if info is None or info.arity != 1:
-        return list(np.eye(3))
-    return [*_tangents(info), _rotation(_at(info))]
-
-
-def _at(info: gates.GateInfo) -> np.ndarray:
-    return info.unitary(*_AT[: len(info.params)])  # type: ignore[misc]
-
-
-def _tangents(info: gates.GateInfo) -> list[np.ndarray]:
-    here = _at(info).conj().T
-    out = []
-    for k in range(len(info.params)):
-        moved = list(_AT[: len(info.params)])
-        moved[k] += _STEP
-        out.append(_rotation(here @ info.unitary(*moved)) / _STEP)  # type: ignore[misc]
-    return out
-
-
-def _rotation(u: np.ndarray) -> np.ndarray:
-    """``u`` up to phase as sin(angle/2) times its rotation axis."""
-    special = u / np.sqrt(np.linalg.det(u))
-    return np.real(0.5j * np.einsum("ij,kji->k", special, _PAULI))
-
-
-def _adjoint(u: np.ndarray) -> np.ndarray:
-    """The rotation of su(2) that conjugating by ``u`` performs."""
-    return np.real(np.einsum("kij,jl,mlo,oi->km", _PAULI, u, _PAULI, u.conj().T)) / 2
-
-
-def _span(vectors: Iterable[np.ndarray]) -> np.ndarray:
-    rows = np.array(list(vectors), dtype=float).reshape(-1, 3)
-    if not len(rows):
-        return rows
-    _, sizes, directions = np.linalg.svd(rows)
-    return directions[: int((sizes > _TOLERANCE).sum())]
+    if info is None or info.params:
+        return True
+    return info.unitary is not None and not np.allclose(info.unitary(), np.eye(2))
