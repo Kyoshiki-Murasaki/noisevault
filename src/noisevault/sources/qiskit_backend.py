@@ -9,8 +9,13 @@ functions that read a backend, so the other IBM sources work on a core install.
 
 from __future__ import annotations
 
+import base64
+import functools
 import hashlib
 import importlib
+import importlib.metadata
+import json
+import math
 import re
 import statistics
 import warnings
@@ -226,6 +231,45 @@ def _overlay(base: QubitCalibration, extra: QubitCalibration | None) -> QubitCal
     )
 
 
+def _shipped_props(backend: Any) -> bytes | None:
+    """The properties file qiskit-ibm-runtime ships for this fake, or None when the backend's
+    data is not what the package ships.
+
+    ``refresh()`` overwrites the installed files with account data or reads a temporary copy,
+    so the files are checked against the wheel's RECORD and the backend against a fresh instance.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # fake backends warn about deprecations on creation
+        fresh = type(backend)()
+    folder = Path(fresh.dirname)
+    recorded = _recorded_sha256()
+    raw = {}
+    for name in (fresh.conf_filename, fresh.props_filename):
+        path = (folder / name).resolve()
+        raw[name] = path.read_bytes()
+        if recorded.get(path) != _record_digest(raw[name]):
+            return None
+    same = (
+        backend.configuration().to_dict() == fresh.configuration().to_dict()
+        and backend.properties().to_dict() == fresh.properties().to_dict()
+    )
+    return raw[fresh.props_filename] if same else None
+
+
+@functools.cache
+def _recorded_sha256() -> dict[Path, str]:
+    dist = importlib.metadata.distribution("qiskit-ibm-runtime")
+    return {
+        Path(dist.locate_file(f)).resolve(): f.hash.value
+        for f in dist.files or ()
+        if f.hash is not None and f.hash.mode == "sha256"
+    }
+
+
+def _record_digest(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).rstrip(b"=").decode()
+
+
 def _is_fake(backend: Any) -> bool:
     return type(backend).__module__.startswith("qiskit_ibm_runtime.fake_provider")
 
@@ -269,16 +313,31 @@ def _backend_provenance(backend: Any) -> dict[str, Any]:
     class_name = type(backend).__name__
     if _is_fake(backend):
         version = importlib.import_module("qiskit_ibm_runtime").__version__
-        props_file = Path(backend.dirname) / backend.props_filename
+        shipped = _shipped_props(backend)
+        if shipped is not None:
+            return {
+                "data_kind": "measured",
+                "source_kind": "package_snapshot",
+                "source": f"qiskit-ibm-runtime {version} {class_name}",
+                "source_url": RUNTIME_REPO,
+                "license": "Apache-2.0",
+                "attribution": IBM_ATTRIBUTION,
+                "redistributable": "yes",
+                "source_hash": sha256_bytes(shipped),
+            }
+        props = backend.properties().to_dict()
         return {
             "data_kind": "measured",
-            "source_kind": "package_snapshot",
-            "source": f"qiskit-ibm-runtime {version} {class_name}",
-            "source_url": RUNTIME_REPO,
-            "license": "Apache-2.0",
-            "attribution": IBM_ATTRIBUTION,
-            "redistributable": "yes",
-            "source_hash": sha256_bytes(props_file.read_bytes()) if props_file.exists() else None,
+            "source_kind": "account_api",
+            "source": f"IBM Quantum backend data in qiskit-ibm-runtime {version} {class_name}",
+            "attribution": "IBM Quantum",
+            "redistributable": "unknown",
+            "source_hash": sha256_bytes(json.dumps(props, sort_keys=True, default=str).encode()),
+            "notes": [
+                f"Not the snapshot qiskit-ibm-runtime {version} ships for {class_name}, e.g. after"
+                " refresh(), so it is IBM Quantum service data under IBM's terms and the"
+                " package's Apache-2.0 license does not cover it."
+            ],
         }
     live = type(backend).__module__.startswith("qiskit_ibm_runtime")
     if live or backend.name.startswith("ibm_"):  # not a simulator wrapping a device's numbers
@@ -376,7 +435,8 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     sentinel (an error at or above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and
     ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration
     everywhere (IBM's ``rz``) is virtual. Records of a symmetric gate that agree in both
-    directions are stored once.
+    directions are stored once. A nonpositive or nonfinite T1/T2 is treated as missing and named
+    in a note; a device with no valid T1 (or T2) left is an error.
     """
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
@@ -392,8 +452,9 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         definitions[name] = definition
         records += gate_records
 
+    qubits, invalid = _without_invalid_coherence(cal)
     qubit_records = [
-        _qubit_record(i, cal.qubits.get(i, QubitCalibration()), measure.get(i))
+        _qubit_record(i, qubits.get(i, QubitCalibration()), measure.get(i))
         for i in range(cal.num_qubits)
     ]
     working = [q for q in qubit_records if not q.get("disabled")]
@@ -401,8 +462,23 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     notes = list(provenance.get("notes", ()))
     if cal.skipped:
         notes.append(f"Not converted: {', '.join(cal.skipped)}.")
+    for key, label in _COHERENCE.items():
+        if invalid[key] and not any(key in q for q in qubit_records):
+            index, value = invalid[key][0]
+            raise ValueError(
+                f"{cal.name} reports no valid {label} on any qubit (e.g. qubit {index}:"
+                f" {label} = {value:g} us); {label} must be a positive number of microseconds"
+            )
+        notes += [
+            f"Qubit {index} reported {label} = {value:g} us; treated as missing,"
+            " the device median applies."
+            for index, value in invalid[key]
+        ]
+    explained = {key: {index for index, _ in found} for key, found in invalid.items()}
     lacking = {
-        key: [q["index"] for q in working if key not in q]
+        key: [
+            q["index"] for q in working if key not in q and q["index"] not in explained.get(key, ())
+        ]
         for key in ("readout", "prep", "t1_us", "t2_us")
     }
     readout, prep = _median_readout(qubit_records), _median_prep(qubit_records)
@@ -442,6 +518,27 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         "provenance": {"tool": f"noisevault {__version__}", **provenance, "notes": notes},
     }
     return Profile.model_validate(data)
+
+
+_COHERENCE = {"t1_us": "T1", "t2_us": "T2"}
+
+
+def _without_invalid_coherence(
+    cal: Calibration,
+) -> tuple[dict[int, QubitCalibration], dict[str, list[tuple[int, float]]]]:
+    """The qubits with nonpositive or nonfinite T1/T2 cleared, and what each cleared one said.
+
+    A dead qubit can report T1 = 0; treating it as missing keeps the rest of the device usable.
+    """
+    qubits = dict(cal.qubits)
+    invalid: dict[str, list[tuple[int, float]]] = {key: [] for key in _COHERENCE}
+    for index, qubit in sorted(cal.qubits.items()):
+        for key in _COHERENCE:
+            value = getattr(qubit, key)
+            if value is not None and not (math.isfinite(value) and value > 0):
+                invalid[key].append((index, value))
+                qubits[index] = replace(qubits[index], **{key: None})
+    return qubits, invalid
 
 
 def _gate(
@@ -500,9 +597,9 @@ def _qubit_record(
     index: int, qubit: QubitCalibration, measure: Instruction | None
 ) -> dict[str, Any]:
     record: dict[str, Any] = {"index": index}
-    if qubit.t1_us is not None and qubit.t1_us > 0:
+    if qubit.t1_us is not None:
         record["t1_us"] = _clean(qubit.t1_us)
-    if qubit.t2_us is not None and qubit.t2_us > 0:
+    if qubit.t2_us is not None:
         record["t2_us"] = _clean(qubit.t2_us)
     readout: dict[str, Any] = {}
     if qubit.p1_given_0 is not None and qubit.p0_given_1 is not None:

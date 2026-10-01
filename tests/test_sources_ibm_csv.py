@@ -173,3 +173,36 @@ def test_qubit_without_t1_takes_the_median_and_says_so(tmp_path: Path) -> None:
     profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     assert profile.table.qubit(0).t1_ns == pytest.approx(260_000)  # median of qubits 1 to 3
     assert any("Qubits [0] have no T1" in note for note in profile.provenance.notes)
+
+
+@pytest.mark.parametrize(
+    ("cells", "label", "shown", "median_ns"),
+    [
+        ('"0","-1","250"', "T1", "-1", 260_000),
+        ('"0","0","250"', "T1", "0", 260_000),
+        ('"0","nan","250"', "T1", "nan", 260_000),
+        ('"0","300","-250"', "T2", "-250", 200_000),
+    ],
+)
+def test_invalid_coherence_takes_the_median_and_names_the_value(
+    tmp_path: Path, cells: str, label: str, shown: str, median_ns: float
+) -> None:
+    path = _edited(tmp_path, HERON, '"0","300","250"', cells)
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    qubit = profile.table.qubit(0)
+    assert (qubit.t1_ns if label == "T1" else qubit.t2_ns) == pytest.approx(median_ns)
+    note = f"Qubit 0 reported {label} = {shown} us; treated as missing, the device median applies."
+    assert note in profile.provenance.notes
+    assert not any(f"have no {label}" in n for n in profile.provenance.notes)
+
+
+def test_a_device_with_no_valid_t1_is_a_one_line_error(tmp_path: Path) -> None:
+    text = HERON.read_text(encoding="utf-8")
+    for qubit, t1 in (("0", "300"), ("1", "280"), ("2", "260"), ("3", "240")):
+        assert f'"{qubit}","{t1}",' in text
+        text = text.replace(f'"{qubit}","{t1}",', f'"{qubit}","0",')
+    path = tmp_path / "dead.csv"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match=r"ibm_x reports no valid T1.*qubit 0: T1 = 0 us") as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert "\n" not in str(info.value)

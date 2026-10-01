@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import statistics
 import urllib.error
 from datetime import date
 from pathlib import Path
@@ -152,3 +153,17 @@ def test_live_pull_of_ibm_fez(vault: Path) -> None:
     assert past.device.calibrated_at.isoformat() < "2025-06-01"
     assert past.fingerprint != now.fingerprint
     assert len(list(vault.glob("ibm_fez@*.json.gz"))) == 2
+
+
+def test_invalid_coherence_in_the_response_takes_the_median(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    props = json.loads(PROPERTIES)
+    t2 = [next(p for p in q if p["name"] == "T2") for q in props["qubits"]]
+    t2[0]["value"] = 0
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
+    profile = ibm_public.pull("ibm_manila")
+    others_us = statistics.median(p["value"] for p in t2[1:])
+    assert profile.table.qubit(0).t2_ns == pytest.approx(others_us * 1000)
+    note = "Qubit 0 reported T2 = 0 us; treated as missing, the device median applies."
+    assert note in profile.provenance.notes

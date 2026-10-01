@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
+import shutil
 import warnings
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -125,7 +129,7 @@ def test_ibm_qualifiers_and_device_defaults() -> None:
 
 
 def test_fake_backend_provenance() -> None:
-    import qiskit_ibm_runtime
+    qiskit_ibm_runtime = require("qiskit_ibm_runtime")
 
     _, profile = _profile("FakeFez")
     prov = profile.provenance
@@ -139,6 +143,68 @@ def test_fake_backend_provenance() -> None:
     )
     assert prov.attribution == "IBM Quantum, via qiskit-ibm-runtime"
     assert prov.source_url == "https://github.com/Qiskit/qiskit-ibm-runtime"
+
+
+def _refresh(backend, *, persist: bool) -> None:
+    """Run the SDK's own refresh() against an IBM Quantum account serving a newer calibration."""
+    runtime = require("qiskit_ibm_runtime")
+    from qiskit_ibm_runtime.utils.backend_decoder import properties_from_server_data
+
+    folder = Path(backend.dirname)
+    props = json.loads((folder / backend.props_filename).read_text(encoding="utf-8"))
+    props["last_update_date"] = "2026-09-01T00:00:00+00:00"
+    [t1] = [p for p in props["qubits"][0] if p["name"] == "T1"]
+    t1["value"] = 123.0
+    conf = (folder / backend.conf_filename).read_text(encoding="utf-8")
+    device = SimpleNamespace(
+        properties=lambda refresh=False: properties_from_server_data(copy.deepcopy(props))
+    )
+    service = runtime.QiskitRuntimeService.__new__(runtime.QiskitRuntimeService)
+    service.backends = lambda name, **_: [device]
+    service._get_api_client = lambda: SimpleNamespace(
+        backend_configuration=lambda name, refresh=False: json.loads(conf)
+    )
+    backend.refresh(service, persist=persist)
+
+
+def _assert_account_data(profile: nv.Profile, shipped_props: Path) -> None:
+    assert profile.device.calibrated_at.isoformat() == "2026-09-01T00:00:00+00:00"
+    assert profile.qubits[0].t1_us == 123.0
+    prov = profile.provenance
+    assert (prov.source_kind, prov.license, prov.redistributable, prov.attribution) == (
+        "account_api",
+        None,
+        "unknown",
+        "IBM Quantum",
+    )
+    assert prov.source_hash not in (None, "sha256:" + _sha256(shipped_props.read_bytes()))
+
+
+def _sha256(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def test_refreshed_fake_in_memory_is_account_data_not_the_package_snapshot() -> None:
+    backend = _backend("FakeManilaV2")
+    shipped = Path(backend.dirname) / backend.props_filename
+    _refresh(backend, persist=False)
+    _assert_account_data(nv.from_qiskit_backend(backend), shipped)
+
+
+def test_refreshed_fake_on_disk_is_account_data_not_the_package_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_provider = require("qiskit_ibm_runtime.fake_provider")
+    installed = Path(fake_provider.FakeManilaV2.dirname)
+    shipped = installed / fake_provider.FakeManilaV2.props_filename
+    copied = tmp_path / installed.name
+    shutil.copytree(installed, copied)
+    # persist=True overwrites the package's own files; the copy keeps the install untouched.
+    monkeypatch.setattr(fake_provider.FakeManilaV2, "dirname", str(copied))
+    backend = _backend("FakeManilaV2")
+    _refresh(backend, persist=True)
+    _assert_account_data(nv.from_qiskit_backend(backend), shipped)
+    _assert_account_data(nv.from_qiskit_backend(_backend("FakeManilaV2")), shipped)
 
 
 def test_backend_without_properties_uses_the_symmetric_measure_error() -> None:
