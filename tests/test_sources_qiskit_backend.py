@@ -122,7 +122,7 @@ def test_properties_reach_qubits_the_target_has_no_properties_for() -> None:
     raw["qubits"][3].append({"name": "operational", "value": 0, "unit": "", "date": stamp})
     properties = models.BackendProperties.from_dict(raw)
     working = (0, 1, 2, 4)
-    target = Target(num_qubits=5)  # as IBM builds it with qubit 3 faulty, minus qubit_properties
+    target = Target(num_qubits=5)
     target.add_instruction(SXGate(), {(q,): _props(0.001, 35e-9) for q in working})
     target.add_instruction(CXGate(), {e: _props(0.01, 300e-9) for e in MANILA_EDGES if 3 not in e})
     target.add_instruction(Measure(), {(q,): _props(0.02, 1e-6) for q in working})

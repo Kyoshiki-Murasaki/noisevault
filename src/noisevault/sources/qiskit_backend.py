@@ -484,10 +484,9 @@ def _in_unit(param: Mapping[str, Any] | None, unit: str) -> float | None:
 def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     """The profile of an IBM-shaped calibration.
 
-    Device-wide defaults are medians over the working loci (``statistic: median``), which leave
-    out every locus on a disabled qubit. Every locus keeps its own record
-    (``statistic: individual``). A readout or prep default is left out when a working qubit has
-    none of its own, so that qubit's value stays unknown. IBM's dead-gate
+    Device-wide defaults are medians over the working loci (``statistic: median``); every locus
+    keeps its own record (``statistic: individual``). A readout or prep default is left out when
+    a working qubit has none of its own, so that qubit's value stays unknown. IBM's dead-gate
     sentinel (an error at or above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and
     ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration on
     every working locus (IBM's ``rz``) is virtual, and its disabled loci keep their records.

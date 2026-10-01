@@ -211,7 +211,7 @@ def test_a_qubit_that_is_not_operational_stays_out_of_the_device_medians(
         median("prob_meas1_prep0"),
         median("prob_meas0_prep1"),
     )
-    assert profile.prep.error == 0.025  # 0.02 and 0.03; qubit 3's 0.5 is left out
+    assert profile.prep.error == median("init_error")
     assert (profile.idle.t1_us, profile.idle.t2_us) == pytest.approx((median("T1"), median("T2")))
 
 

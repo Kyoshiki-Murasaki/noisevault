@@ -172,7 +172,7 @@ def test_qubit_without_readout_stays_unknown(tmp_path: Path) -> None:
 def test_qubit_without_t1_takes_the_median_and_says_so(tmp_path: Path) -> None:
     path = _edited(tmp_path, HERON, '"0","300","250"', '"0","",""')
     profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
-    assert profile.table.qubit(0).t1_ns == pytest.approx(270_000)  # qubits 1 and 2; 3 is off
+    assert profile.table.qubit(0).t1_ns == pytest.approx(270_000)
     assert any("Qubits [0] have no T1" in note for note in profile.provenance.notes)
 
 
@@ -206,12 +206,13 @@ def test_a_disabled_qubit_stays_out_of_the_gate_medians(tmp_path: Path) -> None:
     blank_sx = _edited(tmp_path, HERON, '"0","0.00015","0.00015"', '"0","","0.00015"')
     path = _edited(tmp_path, blank_sx, '"0","1","1","2:1"', '"0","0.1","1","2:1"')
     profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
-    assert profile.table.gate("sx", (0,)).avg_infidelity == 0.000185  # qubits 1 and 2
+    assert profile.table.gate("sx", (0,)).avg_infidelity == 0.000185
     assert _record(profile, "sx", (3,)).avg_infidelity == 0.1
 
 
 def test_a_disabled_qubit_stays_out_of_the_qubit_medians() -> None:
-    profile = _heron()  # qubits 0 to 2 only: T1 300, 280, 260 us; T2 250, 260, 200 us
+    profile = _heron()
+    assert profile.table.qubit(3).disabled
     assert (profile.idle.t1_us, profile.idle.t2_us) == (280, 250)
     assert (profile.readout.p1_given_0, profile.readout.p0_given_1) == (0.008, 0.016)
 
