@@ -368,15 +368,15 @@ def test_concurrent_pulls_of_one_calibration_both_succeed(
     profile = _dated("2025-01-01T00:00:00Z")
     _serve(monkeypatch, profile)
     vault.mkdir(parents=True)
-    both_written = threading.Barrier(2, timeout=10)
-    real_save = Profile.save
+    both_staged = threading.Barrier(2, timeout=10)
+    real_replace = os.replace
 
-    def save_then_wait(self: Profile, path: Path) -> Path:
-        saved = real_save(self, path)
-        both_written.wait()
-        return saved
+    def replace_once_both_are_staged(src: str | Path, dst: str | Path) -> None:
+        if Path(dst) == vault_path(profile):
+            both_staged.wait()
+        real_replace(src, dst)
 
-    monkeypatch.setattr(Profile, "save", save_then_wait)
+    monkeypatch.setattr(os, "replace", replace_once_both_are_staged)
     failures: list[BaseException] = []
 
     def pull() -> None:
