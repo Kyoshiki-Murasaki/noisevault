@@ -393,3 +393,16 @@ def test_concurrent_pulls_of_one_calibration_both_succeed(
     assert failures == []
     assert [p.name for p in vault.iterdir()] == [vault_path(profile).name]
     assert nv.load("test_toy") == profile
+
+
+@pytest.mark.parametrize("source", ["ibm", "ionq"])
+def test_an_impossible_date_is_refused_before_any_request(
+    monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    def no_request(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the source was asked before the date was checked")
+
+    for module in ("noisevault.sources.ibm_public", "noisevault.sources.ionq"):
+        monkeypatch.setattr(f"{module}.pull", no_request)
+    with pytest.raises(ValueError, match="not an ISO 8601 date"):
+        catalog.pull_and_save("ibm_fez", at="2025-02-30", source=source)

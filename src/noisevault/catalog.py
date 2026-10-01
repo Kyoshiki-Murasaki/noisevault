@@ -31,6 +31,7 @@ from .errors import (
     did_you_mean,
 )
 from .profile import Profile, Ref, load_bytes, load_file, parse_ref, write_atomically
+from .sources.qiskit_backend import as_utc
 
 _PULL_SOURCES = {
     "ibm": "noisevault.sources.ibm_public",
@@ -330,8 +331,9 @@ def pull_and_save(
     source = source.strip().lower() if source else _default_source(device)
     if source not in _PULL_SOURCES:
         raise ValueError(_unknown_source(source))
+    when = None if at is None else as_utc(at)
     module = importlib.import_module(_PULL_SOURCES[source])
-    profile = module.pull(device, at=at)
+    profile = module.pull(device, at=when)
     if output is not None:
         return Pulled(profile, profile.save(output), written=True)
     listed = vault_profiles()
