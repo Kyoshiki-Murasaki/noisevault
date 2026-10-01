@@ -166,7 +166,7 @@ def _per_element(
     index, num_qubits, connectivity = _layout(paradigm, labels, pairs)
     one_natives, defs = _definitions(paradigm, notes)
     skipped: set[str] = set()
-    qubits = _unnamed(index, num_qubits, notes)
+    qubits = _disabled_unnamed(index, num_qubits, notes)
     records = []
     for label, props in one.items():
         qubit: dict[str, Any] = {"index": index[label], "label": label}
@@ -208,10 +208,6 @@ def _per_element(
 def _device_level(
     std: Mapping[str, Any], paradigm: Mapping[str, Any], notes: list[str]
 ) -> dict[str, Any]:
-    """Standardized v3: device-level T1, T2, fidelities and durations, optional per-qubit 1Q.
-
-    A document that names no qubit leaves the qubit count to number them from 0.
-    """
     if not paradigm.get("qubitCount") or not paradigm.get("nativeGateSet"):
         raise ValueError(
             "Braket v3 properties hold device-level values only; save the whole"
@@ -220,7 +216,7 @@ def _device_level(
     one = std.get("oneQubitProperties") or {}
     index, num_qubits, connectivity = _layout(paradigm, set(one), [])
     one_natives, defs = _definitions(paradigm, notes)
-    qubits = _unnamed(index, num_qubits, notes) if index else []
+    qubits = _disabled_unnamed(index, num_qubits, notes)
     skipped: set[str] = set()
     for spec in defs.values():
         if spec.get("virtual"):
@@ -285,8 +281,11 @@ def _layout(
     return index, num_qubits, {"edges": sorted(edges), "directed": False}
 
 
-def _unnamed(index: Mapping[str, int], num_qubits: int, notes: list[str]) -> list[dict[str, Any]]:
-    """The profile indices that no Braket id names, as disabled qubits."""
+def _disabled_unnamed(
+    index: Mapping[str, int], num_qubits: int, notes: list[str]
+) -> list[dict[str, Any]]:
+    if not index:
+        return []
     named = set(index.values())
     qubits = [{"index": i, "disabled": True} for i in range(num_qubits) if i not in named]
     if qubits:
