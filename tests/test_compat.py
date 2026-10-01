@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import warnings
 
 import numpy as np
 import pytest
-from conftest import MANILA_V01, V01, migrated
+from conftest import MANILA_V01, V01, migrated, require
 
 from noisevault.channels import gate_channels, readout_matrix, superoperator
 from noisevault.errors import MigrationWarning
@@ -118,3 +120,87 @@ def test_missing_values_stay_missing() -> None:
     assert table.qubit(1).t2_ns is None
     assert table.qubit(1).readout == (0.03, 0.03)
     assert table.qubit(2).readout is None
+
+
+def _first_gate(**changes) -> dict:
+    data = _v01()
+    data["gates"][0].update(changes)
+    return data
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        ({"schema_version": "0.1"}, "provider is missing"),
+        (_v01(gates=None), "gates should be a list, not null"),
+        (_v01(provenance=[]), "provenance should be an object, not a list"),
+        (_v01(qubits=[{"t1_us": 1.0}]), "qubits[0] needs an integer index"),
+        (_v01(gates=[{"name": "sx"}]), "gates[0] needs a name and a list of qubits"),
+        (_first_gate(error="high"), "gates[0]: error should be a number"),
+        (_v01(provenance={"raw_hash": ["x"]}), "provenance.raw_hash should be a string"),
+    ],
+    ids=[
+        "empty",
+        "null-gates",
+        "list-provenance",
+        "qubit-index",
+        "gate-qubits",
+        "gate-error",
+        "raw-hash",
+    ],
+)
+def test_a_malformed_0_1_file_is_refused_with_the_field_to_fix(data: dict, message: str) -> None:
+    with pytest.raises(ValueError, match=re.escape(f"not a valid NoiseVault 0.1 file: {message}")):
+        _upgrade(data)
+
+
+@pytest.mark.parametrize(
+    "missing", [{"error": None, "duration_ns": None}, {"error": None}], ids=["both", "error"]
+)
+def test_rz_with_missing_calibration_stays_uncalibrated(missing: dict) -> None:
+    data = _v01()
+    for gate in data["gates"]:
+        if gate["name"] == "rz":
+            gate.update(missing)
+    table = _upgrade(data).table
+    assert not table.profile.gates["rz"].virtual
+    assert table.gate("rz", (0,)).state == "uncalibrated"
+
+
+def test_rz_without_records_stays_uncalibrated() -> None:
+    data = _v01()
+    data["gates"] = [g for g in data["gates"] if g["name"] != "rz"]
+    profile = _upgrade(data)
+    assert "rz" in data["basis_gates"] and not profile.gates["rz"].virtual
+    assert profile.table.gate("rz", (0,)).state == "uncalibrated"
+
+
+@pytest.mark.parametrize("raw_hash", ["sha256:" + "0" * 64, None], ids=["other-data", "no-hash"])
+def test_an_unverified_fake_snapshot_claims_no_license(raw_hash: str | None) -> None:
+    data = _v01()
+    data["provenance"]["raw_hash"] = raw_hash
+    prov = _upgrade(data).provenance
+    assert (prov.license, prov.attribution, prov.redistributable) == (
+        None,
+        "IBM Quantum",
+        "unknown",
+    )
+    assert prov.source_kind != "package_snapshot"
+    assert any("did not prove" in note for note in prov.notes)
+
+
+def test_the_verified_hash_is_the_0_1_payload_of_the_shipped_fake_manila() -> None:
+    runtime = require("qiskit_ibm_runtime")
+    if runtime.__version__ != "0.49.0":
+        pytest.skip(f"the hash was taken from qiskit-ibm-runtime 0.49.0, not {runtime.__version__}")
+    from qiskit_ibm_runtime.fake_provider import FakeManilaV2
+
+    backend = FakeManilaV2()
+    raw = {
+        "configuration": backend.configuration().to_dict(),
+        "properties": backend.properties().to_dict(),
+    }
+    text = json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    payload_hash = "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+    assert payload_hash == json.loads(MANILA_V01.read_text())["provenance"]["raw_hash"]
+    assert PROFILES[MANILA_V01.name].provenance.redistributable == "yes"

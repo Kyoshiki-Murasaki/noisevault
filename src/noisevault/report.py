@@ -100,10 +100,13 @@ class Report:
                     Clamp(gate.gate, gate.qubits, built.requested, built.achieved)  # type: ignore[arg-type]
                 )
         for q in built.t2_clamped:
-            self.approximate(f"T2 of qubit {q}", "clamped to 2*T1", "the stated T2 exceeds 2*T1")
+            self.record_t2_clamp(q)
         self._record_qualifiers(gate.gate, gate.spec)
         if gate.origin == "reversed_record":
             self.count("reversed_record_used", gate.gate)
+
+    def record_t2_clamp(self, qubit: int) -> None:
+        self.approximate(f"T2 of qubit {qubit}", "clamped to 2*T1", "the stated T2 exceeds 2*T1")
 
     def _record_qualifiers(self, name: str, spec: GateSpec) -> None:
         """Qualifiers that make the stated number differ from the error of the gate alone."""

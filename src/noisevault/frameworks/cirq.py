@@ -434,10 +434,8 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
             if q.t1_ns is None and q.t2_ns is None and not q.dephasing_rate_per_s:
                 self.report.mark_unknown(f"T1 and T2 of qubit {index} (no WaitGate relaxation)")
                 continue
-            if q.t1_ns is not None and q.t2_ns is not None and q.t2_ns > 2 * q.t1_ns:
-                self.report.approximate(
-                    f"T2 of qubit {index}", "clamped to 2*T1", "the stated T2 exceeds 2*T1"
-                )
+            if q.t2_clamped:
+                self.report.record_t2_clamp(index)
             kraus = thermal_relaxation_kraus(q.t1_ns, q.t2_ns, duration, q.dephasing_rate_per_s)
             if len(kraus) > 1:
                 out.append(cirq.KrausChannel(kraus).on(qid))

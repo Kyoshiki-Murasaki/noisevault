@@ -247,28 +247,17 @@ def _pair_loci(
 ) -> tuple[list[Pair], Pair | None, int]:
     """Pairs among ``qubits`` to look up, as (a, b) with a < b.
 
-    Every connected pair; on all-to-all devices only the pairs with a 2-qubit record in one of
-    ``tables``, plus one pair standing in for the rest (they all resolve to the device default)
-    and how many pairs it stands for.
+    Every connected pair and every pair with a 2-qubit record in one of ``tables``; on
+    all-to-all devices the recorded pairs plus one pair standing in for the rest (they all
+    resolve to the device default) and how many pairs it stands for.
     """
     allowed = set(qubits)
-    listed = sorted({p for t in tables for p in _pairs(t) if allowed.issuperset(p)})
+    listed = sorted({p for t in tables for p in t.listed_pairs() if allowed.issuperset(p)})
     if not all(t.all_to_all for t in tables):
         return listed, None, 0
     taken = set(listed)
     rest = next((p for p in combinations(qubits, 2) if p not in taken), None)
     return listed, rest, comb(len(qubits), 2) - len(listed)
-
-
-def _pairs(table: NoiseTable) -> set[Pair]:
-    if not table.all_to_all:
-        return {(min(e), max(e)) for e in table.edges()}
-    arity = table.arity
-    return {
-        (min(r.qubits), max(r.qubits))
-        for r in table.profile.calibrations
-        if len(r.qubits) == 2 and arity(r.gate) == 2
-    }
 
 
 def _directions(table: NoiseTable, pair: Pair) -> tuple[float | None, float | None]:
@@ -352,10 +341,12 @@ def _collapse_uniform(moved: list[tuple[Any, Change]], keys: set[Any]) -> list[t
 def _availability(a: Profile, b: Profile) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Gate loci and qubits usable in ``a`` and disabled in ``b``, and the reverse.
 
-    A locus that one profile does not have at all (a directed gate calibrated in the other
-    direction, a qubit past the end) is neither: it was not usable before, or is not now.
+    Every locus a record names in either profile is compared, so removing an override that
+    enabled a pair under a disabled definition counts. A locus that one profile does not have at
+    all (a directed gate calibrated in the other direction, a qubit past the end) is neither: it
+    was not usable before, or is not now.
     """
-    loci = sorted({*_disabled(a), *_disabled(b)})
+    loci = sorted({*_loci(a), *_loci(b)})
     state_a, state_b = [_state(a, k) for k in loci], [_state(b, k) for k in loci]
     labels = [
         f"{gate or 'qubit'} {'-'.join(map(str, qubits)) if qubits else DEFAULT}"
@@ -368,10 +359,14 @@ def _availability(a: Profile, b: Profile) -> tuple[tuple[str, ...], tuple[str, .
     )
 
 
-def _disabled(profile: Profile) -> set[tuple[str, tuple[int, ...]]]:
-    """Disabled gate loci as (gate, qubits), disabled gate definitions as (gate, ()), and
-    disabled qubits as ("", (index,))."""
-    gates = {(r.gate, r.qubits) for r in profile.calibrations if r.disabled}
+def _loci(profile: Profile) -> set[tuple[str, tuple[int, ...]]]:
+    """Recorded gate loci as (gate, qubits), one order for a symmetric pair; disabled gate
+    definitions as (gate, ()); disabled qubits as ("", (index,))."""
+    table = profile.table
+    gates = {
+        (r.gate, tuple(sorted(r.qubits)) if table.symmetric(r.gate) else r.qubits)
+        for r in profile.calibrations
+    }
     gates |= {(name, ()) for name, spec in profile.gates.items() if spec.disabled}
     return gates | {("", (q.index,)) for q in profile.qubits if q.disabled}
 

@@ -258,3 +258,23 @@ def test_typical_does_not_reverse_a_gate_disabled_on_the_pair() -> None:
         ],
     )
     assert isinstance(table.typical(2, (0, 1)), Unavailable)
+
+
+def test_listed_pairs_are_connectivity_and_recorded_pairs_low_first() -> None:
+    cz_on = [{"gate": "cz", "qubits": [3, 2], "avg_infidelity": 0.02}]
+    four = {"name": "toy", "vendor": "test", "technology": "superconducting", "num_qubits": 4}
+    directed = {"edges": [[1, 0], [1, 2]], "directed": True}
+    table = table_of(device=four, connectivity=directed, calibrations=cz_on)
+    assert table.listed_pairs() == [(0, 1), (1, 2), (2, 3)]
+    assert table_of(device=four, connectivity="all_to_all", calibrations=cz_on).listed_pairs() == [
+        (2, 3)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("t1_us", "t2_us", "clamped"),
+    [(10, 20.001, True), (10, 20, False), (10, 5, False), (None, 50, False), (10, None, False)],
+)
+def test_t2_is_clamped_only_above_twice_t1(t1_us, t2_us, clamped) -> None:
+    table = table_of(qubits=[{"index": 0, "t1_us": t1_us, "t2_us": t2_us}])
+    assert table.qubit(0).t2_clamped is clamped

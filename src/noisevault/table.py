@@ -35,6 +35,11 @@ class QubitNoise:
     prep_error: float | None  # None means unknown
     disabled: bool
 
+    @property
+    def t2_clamped(self) -> bool:
+        """The stated T2 exceeds 2*T1, the physical limit, so conversions clamp it to 2*T1."""
+        return self.t1_ns is not None and self.t2_ns is not None and self.t2_ns > 2 * self.t1_ns
+
 
 @dataclass(frozen=True)
 class GateNoise:
@@ -174,6 +179,15 @@ class NoiseTable:
         if self.all_to_all:
             return list(combinations(range(self.num_qubits), 2))
         return sorted(self._edges)
+
+    def listed_pairs(self) -> list[tuple[int, int]]:
+        """Pairs (a < b) named by connectivity or by a 2-qubit calibration record.
+
+        On a device with edges these are the only pairs that can carry a 2-qubit gate. All-to-all
+        connectivity names no pair, so there only the recorded pairs come back.
+        """
+        recorded = (qubits for _, qubits in self._records if len(qubits) == 2)
+        return sorted({(min(p), max(p)) for p in (*self._edges, *recorded)})
 
     def _resolve_gate(self, name: str, qubits: tuple[int, ...]) -> GateNoise | Unavailable:
         spec = self.profile.gates.get(name)

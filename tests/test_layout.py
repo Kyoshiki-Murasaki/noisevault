@@ -111,6 +111,7 @@ def test_suggest_layout_avoids_disabled_qubits_and_gates() -> None:
     assert set(suggest_layout(broken, 3).values()) == {0, 1, 2}
 
 
+@pytest.mark.timing
 def test_suggest_layout_is_fast_at_156_qubits() -> None:
     profile = _grid(12, 13)
     profile.table.typical(1, (0,))  # table built outside the timing
@@ -129,6 +130,7 @@ def test_suggest_layout_on_all_to_all() -> None:
         suggest_layout(profile, 57)
 
 
+@pytest.mark.timing
 def test_suggest_layout_on_all_to_all_takes_the_best_qubits_fast() -> None:
     good = [5, 17, 140]
     data = Profile.uniform(
@@ -171,3 +173,28 @@ def test_missing_calibration_ranks_after_calibrated_qubits(connectivity) -> None
     assert suggest_layout(profile, 1) == {0: 1}
     readout = _ions(qubits=[{"index": 2, "readout": {"error": 0.4}}], connectivity=connectivity)
     assert suggest_layout(readout, 1) == {0: 2}
+
+
+@pytest.mark.parametrize("connectivity", ["all_to_all", {"edges": [[0, 1], [1, 2]]}])
+def test_missing_gate_calibration_ranks_after_missing_readout(connectivity) -> None:
+    gates = {"rz": {"virtual": True}, "x": {}, "cz": {"avg_infidelity": 1e-2}}
+    profile = _ions(
+        gates=gates,
+        calibrations=[{"gate": "x", "qubits": [1], "avg_infidelity": 1e-3}],
+        qubits=[{"index": 0, "readout": {"error": 1e-4}}],
+        connectivity=connectivity,
+    )
+    layout = suggest_layout(profile, 1)
+    assert layout == {0: 1}
+    assert profile.table.gate("x", (layout[0],)).state == "calibrated"
+
+
+def test_a_pair_calibrated_outside_the_connectivity_links_the_chain() -> None:
+    profile = _ions(
+        connectivity={"edges": [[0, 1]]},
+        calibrations=[{"gate": "cz", "qubits": [1, 2], "avg_infidelity": 0.02}],
+    )
+    layout = suggest_layout(profile, 3)
+    path = [layout[i] for i in range(3)]
+    assert path in ([0, 1, 2], [2, 1, 0])
+    assert all(profile.table.allowed("cz", pair) for pair in zip(path, path[1:], strict=False))

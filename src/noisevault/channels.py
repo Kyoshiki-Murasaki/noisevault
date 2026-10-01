@@ -91,7 +91,7 @@ def gate_channels(gate: GateNoise, qubits: Sequence[QubitNoise]) -> GateChannels
         if len(kraus) > 1:
             channels.append(ChannelSpec("thermal_relaxation", (q.index,), tuple(kraus)))
     achieved = 1.0 - average_gate_fidelity(_compose(relaxation, depolarizing))
-    clamped = tuple(q.index for q in qubits if _t2_clamped(q))
+    clamped = tuple(q.index for q in qubits if q.t2_clamped)
     return GateChannels(
         gate, tuple(channels), gate.avg_infidelity, max(achieved, 0.0), relaxation_error, clamped
     )
@@ -215,10 +215,6 @@ def _residual_depolarizing(
     strength = d * (target - relaxation_error) / denominator
     strength = float(np.clip(strength, 0.0, metrics.max_depolarizing_param(num_qubits)))
     return metrics.avg_from_depolarizing(strength, num_qubits)
-
-
-def _t2_clamped(q: QubitNoise) -> bool:
-    return q.t1_ns is not None and q.t2_ns is not None and q.t2_ns > 2 * q.t1_ns
 
 
 def _compose(after: Iterable[np.ndarray], before: Iterable[np.ndarray]) -> list[np.ndarray]:

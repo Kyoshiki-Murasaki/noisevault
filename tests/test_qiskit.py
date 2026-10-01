@@ -11,7 +11,7 @@ import pytest
 from conftest import MANILA_V01, migrated, require, toy
 
 import noisevault as nv
-from noisevault.channels import ChannelSpec, superoperator
+from noisevault.channels import ChannelSpec, gate_channels, superoperator
 from noisevault.conversion import resolve_op
 from noisevault.errors import (
     NoiseApproximationWarning,
@@ -665,3 +665,55 @@ def test_google_profiles_export_sqrt_iswap_and_report_the_gate_count_cost() -> N
     assert "native sycamore: no Qiskit instruction for it in this export" in sim.report.omitted
     (qiskit,) = nv.load("google_weber").check(frameworks=["qiskit"]).frameworks
     assert qiskit.passed and not qiskit.not_run
+
+
+def _t2_above_2_t1(**gates: dict) -> Profile:
+    """Qubit 0 states T2 above 2*T1; qubit 1 does not."""
+    return Profile.model_validate(
+        toy(
+            device={
+                "name": "t2",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 2,
+            },
+            connectivity={"edges": []},
+            gates={"rz": {"virtual": True}, **gates},
+            qubits=[
+                {"index": 0, "t1_us": 10, "t2_us": 100},
+                {"index": 1, "t1_us": 10, "t2_us": 15},
+            ],
+        )
+    )
+
+
+def _gate_path_t2_entries() -> list:
+    profile = _t2_above_2_t1(sx={"avg_infidelity": 1e-3, "duration_ns": 35})
+    report = Report.start(profile, "test", None)
+    report.record_channels(gate_channels(profile.table.gate("sx", (0,)), [profile.table.qubit(0)]))
+    return report.approximated
+
+
+def test_delay_relaxation_reports_the_t2_clamp_like_the_gate_path() -> None:
+    sim = quiet_export(_t2_above_2_t1())
+    circuit = QuantumCircuit(2)
+    circuit.delay(1000, [0, 1], unit="ns")
+    sim.run(circuit).result()
+    t2 = [a for a in sim.report.approximated if a.what.startswith("T2")]
+    assert t2 == _gate_path_t2_entries()
+
+
+@pytest.mark.parametrize("directed", [False, True])
+def test_the_target_holds_every_pair_the_table_allows_off_the_connectivity(directed) -> None:
+    profile = Profile.model_validate(
+        toy(
+            connectivity={"edges": [[0, 1]], "directed": directed},
+            calibrations=[{"gate": "cz", "qubits": [2, 1], "avg_infidelity": 0.03}],
+        )
+    )
+    target = quiet_export(profile).target
+    pairs = [(a, b) for a in range(3) for b in range(3) if a != b]
+    assert [p for p in pairs if p in target["cz"]] == [
+        p for p in pairs if profile.table.allowed("cz", p)
+    ]
+    assert (1, 2) in target["cz"]

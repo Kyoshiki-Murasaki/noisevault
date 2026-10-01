@@ -5,6 +5,7 @@ from __future__ import annotations
 import operator
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import combinations
 from typing import TYPE_CHECKING
 
 from .errors import LayoutError
@@ -19,13 +20,19 @@ _BEAMS = (32, 128, 512)
 
 @dataclass(frozen=True, order=True)
 class _Cost:
-    """A chain's score: values with no calibration (compared first), then the summed error."""
+    """A chain's score: qubits with no usable 1-qubit gate first, then qubits with unknown
+    readout, then the summed error."""
 
-    missing: int
+    no_gate: int
+    no_readout: int
     error: float
 
     def __add__(self, other: _Cost) -> _Cost:
-        return _Cost(self.missing + other.missing, self.error + other.error)
+        return _Cost(
+            self.no_gate + other.no_gate,
+            self.no_readout + other.no_readout,
+            self.error + other.error,
+        )
 
 
 def _int_label(label: Hashable) -> int | None:
@@ -100,12 +107,14 @@ def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
     """A connected chain of ``n`` well-calibrated qubits as ``{0: p0, 1: p1, ...}``.
 
     Deterministic beam search minimizing the summed average infidelity of the typical 1-qubit
-    gate, mean readout error and typical 2-qubit gate along the chain. A qubit with no usable
-    1-qubit calibration or an unknown readout error ranks last: a chain with fewer such gaps always
-    beats one with more, whatever the calibrated errors. A pair with no usable 2-qubit gate is
-    never a link. On an all-to-all device it takes the ``n`` qubits with the lowest 1-qubit and
-    readout cost when every consecutive pair among them is usable, and otherwise searches as on
-    any other device. It is a starting point for small experiments, not a circuit placer.
+    gate, mean readout error and typical 2-qubit gate along the chain. Missing calibration ranks
+    last: a chain with fewer qubits lacking a usable 1-qubit gate always wins, then one with
+    fewer unknown readout errors, whatever the calibrated errors. A pair with no usable 2-qubit
+    gate is never a link; a pair with one is, whether connectivity lists it or only a
+    calibration record does. On an all-to-all device it takes the ``n`` qubits with the lowest
+    1-qubit and readout cost when every consecutive pair among them is usable, and otherwise
+    searches as on any other device. It is a starting point for small experiments, not a
+    circuit placer.
     """
     table = profile.table
     if not 1 <= n <= table.num_qubits:
@@ -166,12 +175,13 @@ def _beam_search(
 def _qubit_cost(table: NoiseTable, q: int) -> _Cost:
     one = table.typical(1, (q,))
     readout = table.qubit(q).readout
-    errors = [
-        one.avg_infidelity if isinstance(one, GateNoise) else None,
-        None if readout is None else sum(readout) / 2,
-    ]
-    known = [e for e in errors if e is not None]
-    return _Cost(len(errors) - len(known), sum(known))
+    gate_error = one.avg_infidelity if isinstance(one, GateNoise) else None
+    readout_error = None if readout is None else sum(readout) / 2
+    return _Cost(
+        int(gate_error is None),
+        int(readout_error is None),
+        (gate_error or 0.0) + (readout_error or 0.0),
+    )
 
 
 def _edge_cost(table: NoiseTable, a: int, b: int) -> _Cost | None:
@@ -180,13 +190,14 @@ def _edge_cost(table: NoiseTable, a: int, b: int) -> _Cost | None:
         for found in (table.typical(2, (a, b)), table.typical(2, (b, a)))
         if isinstance(found, GateNoise) and found.avg_infidelity is not None
     ]
-    return _Cost(0, min(costs)) if costs else None
+    return _Cost(0, 0, min(costs)) if costs else None
 
 
 def _neighbors(table: NoiseTable, usable: list[int]) -> dict[int, list[int]]:
     allowed = set(usable)
     out: dict[int, set[int]] = {q: set() for q in usable}
-    for a, b in table.edges():
+    pairs = combinations(usable, 2) if table.all_to_all else table.listed_pairs()
+    for a, b in pairs:
         if a in allowed and b in allowed:
             out[a].add(b)
             out[b].add(a)

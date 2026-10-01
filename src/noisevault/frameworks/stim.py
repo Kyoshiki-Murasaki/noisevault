@@ -518,6 +518,8 @@ class _Exporter:
             noise = self.table.qubit(self.physical[q])
             if noise.t1_ns is None and noise.t2_ns is None and not noise.dephasing_rate_per_s:
                 self.unknown["idle"].add(noise.index)
+            if noise.t2_clamped:
+                self.report.record_t2_clamp(noise.index)
             kraus = thermal_relaxation_kraus(
                 noise.t1_ns, noise.t2_ns, float(self.tick_ns or 0.0), noise.dephasing_rate_per_s
             )
@@ -791,13 +793,11 @@ class _PlacementCost:
             dtype=float,
         )
         self._pair: dict[int, float] = {}
-        # A pair can host a 2-qubit gate only through connectivity or a calibration record, in
-        # either direction; other pairs skip the (slow) typical-gate lookup.
+        # Pairs that no 2-qubit gate can use skip the (slow) typical-gate lookup.
         self.maybe: np.ndarray | None = None
         if not self.table.all_to_all:
             n = self.table.num_qubits
-            linked = self.table.edges()
-            linked += [tuple(r.qubits) for r in profile.calibrations if len(r.qubits) == 2]
+            linked = self.table.listed_pairs()
             codes = [a * n + b for a, b in linked] + [b * n + a for a, b in linked]
             self.maybe = np.array(codes, dtype=np.int64)
 

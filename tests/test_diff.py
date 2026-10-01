@@ -264,3 +264,39 @@ def test_a_lost_pair_calibration_is_drift_but_a_disabled_pair_is_availability() 
     assert [(c.where, c.before, c.after) for c in lost.pairs] == [("0-1", 0.01, None)]
     disabled = diff(calibrated, device({"gate": "cz", "qubits": [0, 1], "disabled": True}))
     assert disabled.pairs == () and disabled.newly_disabled == ("cz 0-1",)
+
+
+def _enabled_by_records(*pairs: tuple[int, int]) -> Profile:
+    cz = {"avg_infidelity": 0.01, "disabled": True}
+    records = [{"gate": "cz", "qubits": list(p), "disabled": False} for p in pairs]
+    gates = {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}, "cz": cz}
+    return Profile.model_validate(toy(connectivity="all_to_all", gates=gates, calibrations=records))
+
+
+def test_removing_an_enabling_record_exposes_the_disabled_default() -> None:
+    both, one = _enabled_by_records((0, 1), (0, 2)), _enabled_by_records((0, 2))
+    assert diff(both, one).newly_disabled == ("cz 0-1",)
+    assert diff(one, both).reenabled == ("cz 0-1",)
+    assert diff(both, one).reenabled == () and diff(one, both).newly_disabled == ()
+
+
+def test_a_symmetric_pair_disabled_by_its_reversed_record_is_listed_once() -> None:
+    reversed_off = _profile(
+        calibrations=[
+            {"gate": "cz", "qubits": [1, 0], "disabled": True},
+            {"gate": "cz", "qubits": [1, 2], "avg_infidelity": 0.02},
+        ]
+    )
+    assert diff(_profile(), reversed_off).newly_disabled == ("cz 0-1",)
+
+
+def test_a_pair_calibrated_outside_the_connectivity_is_compared() -> None:
+    def device(error: float) -> Profile:
+        record = {"gate": "cz", "qubits": [1, 2], "avg_infidelity": error}
+        return _profile(connectivity={"edges": [[0, 1]]}, calibrations=[record])
+
+    result = diff(device(0.02), device(0.2))
+    assert [(c.where, c.before, c.after) for c in result.pairs] == [("1-2", 0.02, 0.2)]
+    medians = {c.metric: c for c in result.medians}
+    assert medians["error_2q"].before == pytest.approx(0.015)
+    assert medians["error_2q"].after == pytest.approx(0.105)

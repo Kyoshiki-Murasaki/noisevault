@@ -13,6 +13,7 @@ stim = require("stim")
 from noisevault import gates  # noqa: E402
 from noisevault.channels import (  # noqa: E402
     ChannelSpec,
+    gate_channels,
     pauli_kraus,
     pauli_twirl,
     superoperator,
@@ -651,3 +652,33 @@ def test_detector_error_model_builds_and_decodes_for_a_noisy_surface_code():
     decoded = np.mean(matching.decode_batch(detectors)[:, 0] != observed[:, 0])
     raw = np.mean(observed[:, 0])
     assert 0 < decoded < raw / 3
+
+
+def _t2_above_2_t1(**gates: dict) -> Profile:
+    """Qubit 0 states T2 above 2*T1; qubit 1 does not."""
+    return Profile.model_validate(
+        toy(
+            device={
+                "name": "t2",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 2,
+            },
+            connectivity={"edges": []},
+            gates={"rz": {"virtual": True}, **gates},
+            qubits=[
+                {"index": 0, "t1_us": 10, "t2_us": 100},
+                {"index": 1, "t1_us": 10, "t2_us": 15},
+            ],
+        )
+    )
+
+
+def test_idle_noise_reports_the_t2_clamp_like_the_gate_path() -> None:
+    gate_profile = _t2_above_2_t1(sx={"avg_infidelity": 1e-3, "duration_ns": 35})
+    gate_report = Report.start(gate_profile, "test", None)
+    table = gate_profile.table
+    gate_report.record_channels(gate_channels(table.gate("sx", (0,)), [table.qubit(0)]))
+    out = to_stim(_t2_above_2_t1(), "R 0 1\nTICK\nTICK\nM 0 1", tick_ns=1000.0)
+    t2 = [a for a in out.report.approximated if a.what.startswith("T2")]
+    assert t2 == gate_report.approximated

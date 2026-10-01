@@ -450,12 +450,11 @@ def _require_natives(
 
 def _pairs(table: NoiseTable, enabled: Sequence[int]) -> list[tuple[int, int]]:
     """Ordered pairs that may carry a 2-qubit gate; the table decides which really do."""
-    usable = set(enabled)
     if table.all_to_all:
         return list(permutations(enabled, 2))
-    pairs = {p for a, b in table.edges() for p in ((a, b), (b, a))}
-    pairs |= {r.qubits for r in table.profile.calibrations if len(r.qubits) == 2}
-    return sorted(p for p in pairs if usable.issuperset(p))
+    usable = set(enabled)
+    listed = [pair for pair in table.listed_pairs() if usable.issuperset(pair)]
+    return sorted(p for a, b in listed for p in ((a, b), (b, a)))
 
 
 def _event_totals(report: Report) -> Counter[tuple[str, str]]:
@@ -705,6 +704,9 @@ def _report_fixed(table: NoiseTable, enabled: Sequence[int], readout: bool, repo
         report.mark_unknown(f"preparation (reset) error of qubits {_span(no_prep)}")
     if any(q.t1_ns or q.t2_ns or q.dephasing_rate_per_s for q in qubits):
         report.mark_exact("delay: thermal relaxation and dephasing over its duration")
+    for q in qubits:
+        if q.t2_clamped:
+            report.record_t2_clamp(q.index)
     report.omit(
         "idle time outside explicit delays (insert delays with"
         " transpile(circuit, sim, scheduling_method='alap'))"
