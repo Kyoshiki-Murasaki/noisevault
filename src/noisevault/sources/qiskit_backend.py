@@ -494,8 +494,8 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     ``disabled: true``. A working locus with no error of its own takes the device median, and a
     note names it.
     Records of a symmetric gate that agree in both directions are stored once. A nonpositive or
-    nonfinite T1/T2 is treated as missing and named in a note; a device with no valid T1 (or T2)
-    left on a working qubit is an error.
+    nonfinite T1/T2 is treated as missing, and named in a note when a working qubit has a valid
+    one; when none does, an invalid T1 (or T2) on a working qubit is an error.
     """
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
@@ -539,19 +539,18 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         notes.append(f"Not converted: {', '.join(cal.skipped)}.")
     notes += gate_notes
     for key, label in _COHERENCE.items():
-        if invalid[key] and not any(key in q for q in working):
-            index, value = next(
-                (r for r in invalid[key] if r.index not in disabled_qubits), invalid[key][0]
-            )
+        if any(key in q for q in working):
+            notes += [
+                f"Qubit {index} reported {label} = {value:g} us; treated as missing,"
+                " the device median applies."
+                for index, value in invalid[key]
+            ]
+        elif on_working := [r for r in invalid[key] if r.index not in disabled_qubits]:
+            index, value = on_working[0]
             raise ValueError(
                 f"{cal.name} reports no valid {label} on any working qubit (e.g. qubit {index}:"
                 f" {label} = {value:g} us); {label} must be a positive number of microseconds"
             )
-        notes += [
-            f"Qubit {index} reported {label} = {value:g} us; treated as missing,"
-            " the device median applies."
-            for index, value in invalid[key]
-        ]
     explained = {key: {index for index, _ in found} for key, found in invalid.items()}
     lacking = {
         key: [

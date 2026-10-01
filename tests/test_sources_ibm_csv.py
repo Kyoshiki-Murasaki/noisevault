@@ -275,6 +275,18 @@ def test_a_device_with_no_valid_t1_is_a_one_line_error(tmp_path: Path) -> None:
     assert "\n" not in str(info.value)
 
 
+def test_an_invalid_t1_on_a_disabled_qubit_counts_as_missing(tmp_path: Path) -> None:
+    imported = {}
+    for reading in ("0", ""):
+        path = _edited(tmp_path, HERON, '"3","240",', f'"3","{reading}",')
+        for qubit, t1 in (("0", "300"), ("1", "280"), ("2", "260")):
+            path = _edited(tmp_path, path, f'"{qubit}","{t1}",', f'"{qubit}","",')
+        imported[reading] = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    zero, blank = imported["0"], imported[""]
+    assert zero.idle.t1_us is None and zero.table.qubit(3).disabled
+    assert (zero.fingerprint, zero.provenance.notes) == (blank.fingerprint, blank.provenance.notes)
+
+
 @pytest.mark.parametrize("qubit", ["0.5", "-1", "nan", "inf", "x"])
 def test_a_qubit_that_is_not_a_whole_number_names_its_line(tmp_path: Path, qubit: str) -> None:
     path = _edited(tmp_path, HERON, '"0","300"', f'"{qubit}","300"')

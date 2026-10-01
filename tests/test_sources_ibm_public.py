@@ -256,6 +256,27 @@ def test_valid_coherence_only_on_a_disabled_qubit_is_an_error(
         ibm_public.pull("ibm_manila")
 
 
+@pytest.mark.parametrize("label", ["T1", "T2"])
+def test_invalid_coherence_only_on_a_disabled_qubit_counts_as_missing(
+    monkeypatch: pytest.MonkeyPatch, label: str
+) -> None:
+    def pull(kept: set[int]) -> nv.Profile:
+        props = _disabled_with_zero(3, {3}, label)
+        props["qubits"] = [
+            [p for p in qubit if p["name"] != label or index in kept]
+            for index, qubit in enumerate(props["qubits"])
+        ]
+        monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
+        return ibm_public.pull("ibm_manila")
+
+    zero, omitted = pull({3}), pull(set())
+    assert getattr(zero.idle, f"{label.lower()}_us") is None
+    assert (zero.fingerprint, zero.provenance.notes) == (
+        omitted.fingerprint,
+        omitted.provenance.notes,
+    )
+
+
 def test_no_valid_coherence_names_a_working_qubit(monkeypatch: pytest.MonkeyPatch) -> None:
     props = _disabled_with_zero(0, {0, 1, 2, 3, 4}, "T1")
     monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
