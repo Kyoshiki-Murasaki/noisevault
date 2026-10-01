@@ -808,7 +808,6 @@ def test_effects_that_cannot_be_omitted_refuse_to_convert(qml) -> None:
 
 
 def _uniform(num_qubits: int) -> Profile:
-    """Error 0.1 on every 1-qubit gate and 0.2 on every 2-qubit gate; the z family is free."""
     return Profile.uniform(
         "uniform",
         technology="other",

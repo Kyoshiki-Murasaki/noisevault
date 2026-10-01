@@ -16,7 +16,7 @@ from collections import Counter
 from collections.abc import Callable, Container, Hashable, Mapping, Sequence
 from math import pi
 from types import FrameType
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -50,7 +50,12 @@ Kraus = tuple[np.ndarray, ...]
 PhysicalChannel = tuple[Kraus, tuple[int, ...]]  # Kraus operators (big-endian) and their qubits
 EventCounts = tuple[tuple[str, str, int], ...]  # (event, key, count) added to the report
 CacheEntry = tuple[tuple[PhysicalChannel, ...], EventCounts]
-Charge = tuple[str, tuple[Hashable, ...]]  # a registry gate and the circuit wires it acts on
+
+
+class Charge(NamedTuple):
+    gate: str
+    wires: tuple[Hashable, ...]
+
 
 _CANONICAL = {info.pennylane: info.name for info in gates.GATES.values() if info.pennylane}
 # Registry gates PennyLane has only as another operation at a fixed angle: operation name ->
@@ -425,24 +430,17 @@ def _is_arithmetic(op: Operator) -> bool:
 
 
 def _charges(op: Operator, defined: Container[str]) -> list[Charge]:
-    """The registry gates whose noise ``op`` gets, with their wires, in circuit order.
-
-    An identity gets one ``id`` per wire. Operator arithmetic gets the gates it decomposes into,
-    because those are the gates default.mixed runs.
-    """
     charges: list[Charge] = []
     for gate in _decomposed(op) if _is_arithmetic(op) else [op]:
         name = gate_name(gate, defined)
         if isinstance(gate, qml.Identity):
-            charges += [(name, (wire,)) for wire in gate.wires]
+            charges += [Charge(name, (wire,)) for wire in gate.wires]
         else:
-            charges.append((name, tuple(gate.wires)))
+            charges.append(Charge(name, tuple(gate.wires)))
     return charges
 
 
 def _decomposed(op: Operator) -> list[Operator]:
-    """The gates operator arithmetic ``op`` decomposes into, in circuit order. Adjoints inside it
-    decompose too, as qml.add_noise decomposes adjoints at level='user'."""
     if not op.has_decomposition:
         raise ValueError(
             f"{op} has no decomposition into gates, so it gets no gate noise and default.mixed"
@@ -455,12 +453,12 @@ def _decomposed(op: Operator) -> list[Operator]:
         gate
         for part in parts
         if _is_gate(part)
-        for gate in (
-            _decomposed(part)
-            if _is_arithmetic(part) or (isinstance(part, Adjoint) and part.has_decomposition)
-            else [part]
-        )
+        for gate in (_decomposed(part) if _splits_at_user_level(part) else [part])
     ]
+
+
+def _splits_at_user_level(op: Operator) -> bool:
+    return _is_arithmetic(op) or (isinstance(op, Adjoint) and op.has_decomposition)
 
 
 def _is_reset(op: Operator) -> bool:
