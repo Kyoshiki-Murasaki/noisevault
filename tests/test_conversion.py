@@ -80,18 +80,16 @@ def test_unknown_gates_error_raises_instead() -> None:
     assert report.events == {}
 
 
-@pytest.mark.parametrize(("name", "qubits"), [("swap", (0, 1)), ("ccx", (0, 1, 2))])
-def test_multi_entanglers_must_be_decomposed(name, qubits) -> None:
+@pytest.mark.parametrize("unknown_gates", ["typical", "error"])
+@pytest.mark.parametrize(
+    ("name", "qubits"), [("swap", (0, 1)), ("ccx", (0, 1, 2)), ("mystery3", (0, 1, 2))]
+)
+def test_multi_entanglers_must_be_decomposed(name, qubits, unknown_gates) -> None:
     profile, report = _setup(connectivity="all_to_all")
-    with pytest.raises(MissingCalibrationError, match="decompose"):
-        _resolve(profile, report, name, qubits)
+    with pytest.raises(MissingCalibrationError, match="decompose") as caught:
+        _resolve(profile, report, name, qubits, unknown_gates)
+    assert "unknown_gates" not in str(caught.value)
     assert report.events == {}
-
-
-def test_three_qubit_unknown_gate_must_be_decomposed() -> None:
-    profile, report = _setup(connectivity="all_to_all")
-    with pytest.raises(MissingCalibrationError, match="decompose"):
-        _resolve(profile, report, "mystery3", (0, 1, 2))
 
 
 def test_pair_the_profile_does_not_allow_has_no_typical_noise() -> None:

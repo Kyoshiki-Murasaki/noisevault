@@ -188,9 +188,10 @@ idle qubits at each `TICK`. To run on a real chip's topology, use a profile whos
 ## Describe a hypothetical device
 
 `Profile.uniform` gives every 1- and 2-qubit registry gate one error per arity. Z-family gates
-such as `s` and `t` are free through a virtual `rz`. The exception is `swap`, which takes more
-than one entangling gate, so decompose it first. In every other circuit of 1- and 2-qubit
-gates, each gate gets its own calibrated noise and none falls back to typical noise:
+such as `s` and `t` are free through a virtual `rz`. The exceptions are `swap`, `cxswap`,
+`swapcx` and `czswap`, which each take more than one entangling gate, so decompose them first.
+In every other circuit of 1- and 2-qubit gates, each gate gets its own calibrated noise and none
+falls back to typical noise:
 
 ```python
 import noisevault as nv

@@ -647,7 +647,7 @@ def _delay_relaxation(
         (q,) = qubits
         noise = table.qubit(q)
         duration = _delay_ns(op, q)
-        if noise.t1_ns is None and noise.t2_ns is None and not noise.dephasing_rate_per_s:
+        if noise.relaxation_unknown:
             report.mark_unknown(f"T1 and T2 of qubit {q} (no delay relaxation)")
             return None
         kraus = thermal_relaxation_kraus(
@@ -720,7 +720,7 @@ def _report_fixed(table: NoiseTable, enabled: Sequence[int], readout: bool, repo
         report.approximate("initial state", "ideal |0>", "preparation error applies after reset")
     if no_prep:
         report.mark_unknown(f"preparation (reset) error of qubits {_span(no_prep)}")
-    if any(q.t1_ns or q.t2_ns or q.dephasing_rate_per_s for q in qubits):
+    if not all(q.relaxation_unknown for q in qubits):
         report.mark_exact("delay: thermal relaxation and dephasing over its duration")
     for q in qubits:
         if q.t2_clamped:

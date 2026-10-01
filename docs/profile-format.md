@@ -155,14 +155,16 @@ outside `0..num_qubits-1` are errors.
 gate registry so every framework recognizes the gate:
 
 `id`, `x`, `y`, `z`, `h`, `s`, `sdg`, `t`, `tdg`, `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `u1`, `u`,
-`r`, `cx`, `cy`, `cz`, `ecr`, `swap`, `iswap`, `sqrt_iswap`, `rzz`, `rxx`, `ryy`, `zz`, `ms`,
-`cswap`, `ccx`, `measure`, `reset`, `delay`.
+`r`, `cx`, `cy`, `cz`, `ecr`, `swap`, `cxswap`, `swapcx`, `czswap`, `iswap`, `sqrt_iswap`, `rzz`,
+`rxx`, `ryy`, `zz`, `ms`, `cswap`, `ccx`, `measure`, `reset`, `delay`.
 
 `zz` is exp(-i pi/4 ZZ), the native entangler of Quantinuum machines. `ms` is IonQ's
 Molmer-Sorensen gate with two phases. `r(theta, phi)` is a rotation about an axis in the XY
-plane. Other names are allowed (Google's `sycamore`, for example) but must state their arity
-with `qubits`. The Qiskit export reports such a gate as omitted. The other exports apply it only
-when a circuit uses a gate that they map to that name.
+plane. `cxswap`, `swapcx` and `czswap` are Stim's `CXSWAP`, `SWAPCX` and `CZSWAP`. `cxswap`
+applies `cx` and then `swap`, and `swapcx` applies them in the other order. Other names are
+allowed (Google's `sycamore`, for example) but must state their arity with `qubits`. The Qiskit
+export reports such a gate as omitted. The other exports apply it only when a circuit uses a gate
+that they map to that name.
 
 A definition and a calibration record share these fields:
 

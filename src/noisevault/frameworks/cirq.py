@@ -446,7 +446,7 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
         out = [operation]
         for qid, index in zip(operation.qubits, physical, strict=True):
             q = self._table.qubit(index)
-            if q.t1_ns is None and q.t2_ns is None and not q.dephasing_rate_per_s:
+            if q.relaxation_unknown:
                 self.report.mark_unknown(f"T1 and T2 of qubit {index} (no WaitGate relaxation)")
                 continue
             if q.t2_clamped:

@@ -301,16 +301,18 @@ def test_report_events_count_every_gate_application(tick_ns):
     assert out.report.events["typical_noise_used"]["h"] == 3 + 100 * (1 + 2 * 2)
 
 
+@pytest.mark.parametrize("unknown_gates", ["typical", "error"])
 @pytest.mark.parametrize("gate", ["CXSWAP", "SWAPCX", "CZSWAP", "SWAP"])
-def test_gates_needing_two_or_more_entanglers_must_be_decomposed(gate):
-    with pytest.raises(MissingCalibrationError, match=f"`{gate} 0 1`.*decompose"):
-        to_stim(_manila(), f"{gate} 0 1")
+def test_gates_needing_two_or_more_entanglers_must_be_decomposed(gate, unknown_gates):
+    with pytest.raises(MissingCalibrationError, match=f"`{gate} 0 1`.*decompose") as caught:
+        to_stim(_manila(), f"{gate} 0 1", unknown_gates=unknown_gates)
+    assert "unknown_gates" not in str(caught.value)
 
 
 @pytest.mark.parametrize("gate", ["CXSWAP", "SWAPCX", "CZSWAP"])
 def test_a_two_entangler_gate_takes_the_profiles_own_calibration_of_it(gate):
     def export(spec: dict, unknown_gates: str = "typical") -> stim.Circuit:
-        profile = _all_to_all(2, gate.lower(), {"qubits": 2, **spec})
+        profile = _all_to_all(2, gate.lower(), spec)
         return to_stim(profile, f"{gate} 0 1", readout="none", unknown_gates=unknown_gates)
 
     calibrated = export({"avg_infidelity": 0.02})
@@ -424,6 +426,17 @@ def test_idle_noise_at_tick_goes_to_qubits_left_idle_in_that_layer(layout):
     assert emitted != pytest.approx(_idle_twirl(profile, 2 if layout else 4, 200.0))
     assert "idle noise" in [a.what for a in timed.report.approximated]
     assert any("idle noise (pass tick_ns=" in o for o in to_stim(profile, circuit).report.omitted)
+
+
+def test_idle_noise_reports_qubits_without_relaxation_data_as_unknown():
+    device = {"name": "toy", "vendor": "test", "technology": "superconducting", "num_qubits": 4}
+    coherence = [{"t1_us": 50.0}, {"t2_us": 40.0}, {"dephasing_rate_per_s": 300.0}]
+    qubits = [{"index": q, **c} for q, c in enumerate(coherence)]
+    profile = Profile.model_validate(toy(device=device, qubits=qubits))
+    out = to_stim(profile, "TICK\nM 0 1 2 3", readout="none", tick_ns=40.0)
+    assert out.report.unknown == ["T1/T2 for idle noise of physical qubits 3"]
+    idle = [t.value for inst in out if inst.name == "PAULI_CHANNEL_1" for t in inst.targets_copy()]
+    assert sorted(idle) == [0, 1, 2]
 
 
 def test_measured_and_reset_qubits_are_busy_in_their_tick_layer():
@@ -542,11 +555,6 @@ def test_a_pauli_product_gate_is_noised_on_the_qubits_left_after_reducing_it():
 
 
 def _paulis_seen_by_stim(noise: stim.Circuit, n: int) -> dict[str, float]:
-    """Pauli errors that ``noise`` puts on qubits 0..n-1, read from Stim's error model.
-
-    Qubit q starts in a Bell pair with qubit q + n, so the Bell measurement after the noise
-    flips a different set of detectors for each Pauli.
-    """
     data, partners = " ".join(map(str, range(n))), " ".join(map(str, range(n, 2 * n)))
     pairs = " ".join(f"{q} {q + n}" for q in range(n))
     detectors = "\n".join(f"DETECTOR rec[{i - 2 * n}]" for i in range(2 * n))
@@ -556,12 +564,15 @@ def _paulis_seen_by_stim(noise: stim.Circuit, n: int) -> dict[str, float]:
     for error in probe.detector_error_model(approximate_disjoint_errors=True):
         if error.type == "error":
             flipped = {t.val for t in error.targets_copy()}
-            label = "".join("IXZY"[(q + n in flipped) + 2 * (q in flipped)] for q in range(n))
+            has_x = [q + n in flipped for q in range(n)]
+            has_z = [q in flipped for q in range(n)]
+            label = "".join("IXZY"[x + 2 * z] for x, z in zip(has_x, has_z, strict=True))
             seen[label] = error.args_copy()[0]
     return seen
 
 
 _DISTINCT_3Q = tuple(1e-4 * (k + 1) for k in range(63))
+_NO_IDENTITY_3Q = (1 / 63,) * 63
 
 
 @pytest.mark.parametrize(
@@ -569,6 +580,7 @@ _DISTINCT_3Q = tuple(1e-4 * (k + 1) for k in range(63))
     [
         (3, {"avg_infidelity": 0.02}, metrics.uniform_pauli(0.02, 3)),
         (3, {"pauli": _DISTINCT_3Q}, _DISTINCT_3Q),
+        (3, {"pauli": _NO_IDENTITY_3Q}, _NO_IDENTITY_3Q),
         (4, {"avg_infidelity": 0.02}, metrics.uniform_pauli(0.02, 4)),
     ],
 )

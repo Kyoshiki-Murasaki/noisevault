@@ -71,7 +71,8 @@ def resolve_op(
     metric, or a pair the profile does not allow) raises MissingCalibrationError when
     ``unknown_gates`` is ``"error"``; with ``"typical"`` it gets the noise of the typical native
     gate of its arity, reported and warned about once per gate name. Gates that need several
-    native entanglers, or act on more than two qubits, must be decomposed first.
+    native entanglers, or act on more than two qubits, must be decomposed first under either
+    setting.
     """
     if unknown_gates not in ("typical", "error"):
         raise ValueError(f"unknown_gates={unknown_gates!r}: choose 'typical' or 'error'")
@@ -88,15 +89,15 @@ def resolve_op(
         raise ValueError(found.reason)
     why = found.reason if isinstance(found, Unavailable) else f"{name} has no error metric"
     where = f"{name} on qubits {list(qubits)}"
-    if unknown_gates == "error":
-        raise MissingCalibrationError(
-            f"{where}: {why}; compile to the profile's native gates, or pass"
-            " unknown_gates='typical' to use the typical native gate's noise"
-        )
     if (info is not None and info.multi_entangler) or len(qubits) > 2:
         raise MissingCalibrationError(
             f"{where}: {name} needs more than one native entangling gate, so no single"
             " calibration describes it; decompose it into the profile's native gates first"
+        )
+    if unknown_gates == "error":
+        raise MissingCalibrationError(
+            f"{where}: {why}; compile to the profile's native gates, or pass"
+            " unknown_gates='typical' to use the typical native gate's noise"
         )
     typical = table.typical(len(qubits), qubits)
     if isinstance(typical, Unavailable):

@@ -40,6 +40,10 @@ class QubitNoise:
         """The stated T2 exceeds 2*T1, the physical limit, so conversions clamp it to 2*T1."""
         return self.t1_ns is not None and self.t2_ns is not None and self.t2_ns > 2 * self.t1_ns
 
+    @property
+    def relaxation_unknown(self) -> bool:
+        return self.t1_ns is None and self.t2_ns is None and not self.dephasing_rate_per_s
+
 
 @dataclass(frozen=True)
 class GateNoise:

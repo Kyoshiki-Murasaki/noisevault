@@ -32,8 +32,15 @@ profile files still load.
     `qml.transforms.broadcast_expand`. Operator arithmetic such as `qml.prod` gets the noise of
     the gates it decomposes into.
   - `to_stim(circuit)`: a noisy copy of a Stim circuit for QEC-size sampling and decoding.
+    `CXSWAP`, `SWAPCX` and `CZSWAP` are the registry gates `cxswap`, `swapcx` and `czswap`.
+    Each takes the profile's calibration of that gate. Without one, the export asks you to
+    decompose it.
 - **One rule for fixed-angle gates in every export.** A gate such as `s`, `sx` or `ms` takes
   its own native's noise if the profile has it, else the noise of the rotation it equals.
+- **No typical noise for gates that need a decomposition.** A gate that needs several native
+  entanglers, such as `swap` or `ccx`, or acts on more than two qubits, never takes the typical
+  native gate's noise. If the profile does not calibrate it, the export raises
+  `MissingCalibrationError` and asks you to decompose it, with either `unknown_gates` value.
 - **Readable reports.** Approximation warnings point at your own line of code, and
   `report.summary()` states counts as sentences, such as "cx took the typical native gate's
   noise 40 times".

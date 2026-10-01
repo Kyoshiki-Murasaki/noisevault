@@ -1162,7 +1162,7 @@ def test_every_buildable_registry_gate_has_the_registry_unitary(qml) -> None:
         overlap = np.trace(theirs.conj().T @ row.unitary(*args)) / 2**row.arity
         assert abs(abs(overlap) - 1) < 1e-12, row.name
     # Adjoint(...) is no qml attribute, and PennyLane has no Molmer-Sorensen gate.
-    assert missing == {"sdg", "sxdg", "tdg", "ms"}
+    assert missing == {"sdg", "sxdg", "tdg", "ms", "cxswap", "swapcx", "czswap"}
 
 
 def _trapped_ion(*, two_qubit: str = "zz") -> Profile:

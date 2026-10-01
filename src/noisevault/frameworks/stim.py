@@ -33,7 +33,7 @@ except ImportError as exc:
     raise ImportError(f"the Stim export needs stim: {install_hint('stim')}") from exc
 
 from .. import gates, metrics
-from ..channels import ChannelSpec, GateChannels, pauli_twirl, thermal_relaxation_kraus
+from ..channels import ChannelSpec, pauli_twirl, thermal_relaxation_kraus
 from ..conversion import UnknownGates, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
@@ -66,7 +66,6 @@ _NAMES: dict[str, tuple[str, str | None]] = {
     "SQRT_YY_DAG": ("ms", "ryy"),
 }
 _NOISELESS = frozenset({"II"})  # a 2-qubit identity is no entangling gate
-_MULTI_ENTANGLER = frozenset({"CXSWAP", "SWAPCX", "CZSWAP"})  # two native entanglers each
 # The Pauli that undoes each reset: a failed Z reset leaves |1>, a failed X reset |->.
 _PREP_FLIP = {
     "R": "X_ERROR",
@@ -313,6 +312,12 @@ def _check_exact_readout(found: _Scan) -> None:
 # emission ---------------------------------------------------------------------------------
 
 
+class _Resolved(NamedTuple):
+    events: EventCounts
+    prefix: str = ""
+    lines: tuple[str, ...] = ()
+
+
 class _Exporter:
     """Emits Stim program text; text parsing is far faster than stim.Circuit.append."""
 
@@ -336,7 +341,7 @@ class _Exporter:
         self.keep_noise = existing_noise == "keep"
         self.unknown_gates = unknown_gates
         self.unknown: dict[str, set[int]] = {"readout": set(), "prep": set(), "idle": set()}
-        self._gate_noise: dict[tuple[str, tuple[int, ...]], tuple[str, EventCounts]] = {}
+        self._gate_noise: dict[tuple[str, tuple[int, ...]], _Resolved] = {}
         # Gate applications per (Stim gate, qubits); a REPEAT body counts once per pass.
         self._applied: Counter[tuple[str, tuple[int, ...]]] = Counter()
         self._passes = 1
@@ -422,11 +427,10 @@ class _Exporter:
                 if not qubits:
                     continue
                 busy.update(qubits)
-                channel = self._gate_channel(inst.name, qubits)
-                if channel and len(qubits) > 2:
-                    lines.append(channel)  # a correlated chain names its own targets
-                elif channel:
-                    noise.setdefault(channel, []).extend(qubits)
+                resolved = self._gate_channel(inst.name, qubits)
+                lines.extend(resolved.lines)
+                if resolved.prefix:
+                    noise.setdefault(resolved.prefix, []).extend(qubits)
             lines.extend(_noise_lines(noise))
         return busy
 
@@ -475,46 +479,33 @@ class _Exporter:
 
     # noise values -----------------------------------------------------------------------
 
-    def _gate_channel(self, stim_name: str, qubits: tuple[int, ...]) -> str:
+    def _gate_channel(self, stim_name: str, qubits: tuple[int, ...]) -> _Resolved:
         key = (stim_name, qubits)
         if key not in self._gate_noise:
             self._gate_noise[key] = self._resolve(stim_name, qubits)
-        channel, events = self._gate_noise[key]
-        if events:
+        resolved = self._gate_noise[key]
+        if resolved.events:
             self._applied[key] += self._passes
-        return channel
+        return resolved
 
-    def _resolve(self, stim_name: str, qubits: tuple[int, ...]) -> tuple[str, EventCounts]:
+    def _resolve(self, stim_name: str, qubits: tuple[int, ...]) -> _Resolved:
         """Twirled channel of one gate and the report events that resolving it counted."""
         if stim_name in _NOISELESS:
-            return "", ()
+            return _Resolved(())
         wires = tuple(self.physical[q] for q in qubits)
+        name = gate_name(stim_name, self.defined)
         before = {event: Counter(counts) for event, counts in self.report.events.items()}
         try:
-            built = self._channels(stim_name, wires)
+            built = resolve_op(
+                self.table, name, wires, unknown_gates=self.unknown_gates, report=self.report
+            )
         except (MissingCalibrationError, DisabledGateError, LayoutError) as exc:
             raise type(exc)(self._explain(stim_name, qubits, wires, exc)) from exc
         events = _added_events(before, self.report.events)
         if len(qubits) > 2:
-            return _correlated_errors(pauli_twirl(built.channels, wires), qubits), events
-        return self._twirl(built.channels, wires), events
-
-    def _channels(self, stim_name: str, wires: tuple[int, ...]) -> GateChannels:
-        name = gate_name(stim_name, self.defined)
-        if stim_name not in _MULTI_ENTANGLER:
-            return resolve_op(
-                self.table, name, wires, unknown_gates=self.unknown_gates, report=self.report
-            )
-        # CXSWAP and the like are not registry gates, so resolve_op's rule that keeps typical
-        # noise off SWAP does not cover them.
-        try:
-            return resolve_op(self.table, name, wires, unknown_gates="error", report=self.report)
-        except MissingCalibrationError:
-            raise MissingCalibrationError(
-                f"{stim_name} needs two native entangling gates, so no single native gate's"
-                f" calibration describes it; decompose it into the profile's native gates, or"
-                f" calibrate {name} itself"
-            ) from None
+            probs = pauli_twirl(built.channels, wires)
+            return _Resolved(events, lines=_correlated_errors(probs, qubits))
+        return _Resolved(events, prefix=self._twirl(built.channels, wires))
 
     def _explain(
         self, stim_name: str, qubits: tuple[int, ...], wires: tuple[int, ...], exc: Exception
@@ -541,7 +532,7 @@ class _Exporter:
     def _idle_noise(self, q: int) -> str:
         if q not in self._idle:
             noise = self.table.qubit(self.physical[q])
-            if noise.t1_ns is None and noise.t2_ns is None and not noise.dephasing_rate_per_s:
+            if noise.relaxation_unknown:
                 self.unknown["idle"].add(noise.index)
             if noise.t2_clamped:
                 self.report.record_t2_clamp(noise.index)
@@ -590,7 +581,7 @@ class _Exporter:
     def finish(self) -> None:
         """Count every gate application's events and report the unknown values."""
         for key, applied in self._applied.items():
-            for event, what, n in self._gate_noise[key][1]:
+            for event, what, n in self._gate_noise[key].events:
                 self.report.count(event, what, n * (applied - 1))  # resolving counted one
         texts = {
             "readout": "readout error",
@@ -696,22 +687,25 @@ def _pauli_channel(probs: Sequence[float]) -> str:
     return f"{_PAULI_CHANNEL[len(probs)]}({','.join(map(repr, probs))})"
 
 
-def _correlated_errors(probs: Sequence[float], qubits: Sequence[int]) -> str:
+def _correlated_errors(probs: Sequence[float], qubits: Sequence[int]) -> tuple[str, ...]:
     """The Pauli channel ``probs`` on 3+ ``qubits``, which no PAULI_CHANNEL instruction takes.
 
     An ELSE_CORRELATED_ERROR fires only when no earlier error in its chain did, so each takes
-    its probability divided by the chance that none has fired yet (at most 1, which rounding
-    can pass at the end of a channel with no identity part).
+    its probability divided by the chance that none has fired yet.
     """
     lines: list[str] = []
     untouched = 1.0
     for label, p in zip(metrics.pauli_labels(len(qubits)), probs, strict=True):
         if p > 0:
             targets = " ".join(f"{c}{q}" for c, q in zip(label, qubits, strict=True) if c != "I")
-            given = p / untouched if p < untouched else 1.0
+            given = _conditional(p, untouched)
             lines.append(f"{'ELSE_' if lines else ''}CORRELATED_ERROR({given!r}) {targets}")
             untouched -= p
-    return "\n".join(lines)
+    return tuple(lines)
+
+
+def _conditional(p: float, untouched: float) -> float:
+    return p / untouched if p < untouched else 1.0
 
 
 def _noise_lines(noise: dict[str, list[int]]) -> list[str]:

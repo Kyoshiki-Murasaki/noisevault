@@ -55,6 +55,15 @@ def test_stim_column_names_the_same_gate_up_to_phase(row) -> None:
         assert abs(abs(overlap) - 1) < 1e-6, name  # stim matrices are single precision
 
 
+@pytest.mark.parametrize(
+    "row", [r for r in GATES.values() if r.stim and r.arity == 2], ids=lambda r: r.name
+)
+def test_stim_agrees_on_which_gates_are_symmetric(row) -> None:
+    stim = require("stim")
+    for name in row.stim:
+        assert stim.gate_data(name).is_symmetric_gate == row.symmetric, name
+
+
 @pytest.mark.parametrize("row", [r for r in GATES.values() if r.pennylane], ids=lambda r: r.name)
 def test_pennylane_column_names_an_operation(row) -> None:
     qml = require("pennylane")
@@ -69,6 +78,7 @@ def test_cirq_column_names_a_gate_class(row) -> None:
 
 
 def test_direction_defaults() -> None:
-    symmetric = {n for n, r in GATES.items() if r.symmetric}
-    assert {"cz", "rzz", "rxx", "ryy", "zz", "ms", "iswap", "swap", "sqrt_iswap"} == symmetric
-    assert {n for n, r in GATES.items() if r.multi_entangler} == {"swap", "cswap", "ccx"}
+    symmetric = {"cz", "rzz", "rxx", "ryy", "zz", "ms", "iswap", "swap", "czswap", "sqrt_iswap"}
+    assert {n for n, r in GATES.items() if r.symmetric} == symmetric
+    multi = {n for n, r in GATES.items() if r.multi_entangler}
+    assert multi == {"swap", "cxswap", "swapcx", "czswap", "cswap", "ccx"}

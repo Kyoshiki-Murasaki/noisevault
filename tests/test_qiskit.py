@@ -640,7 +640,6 @@ def test_unbound_delay_duration_says_to_bind_it_first() -> None:
 
 
 def _coherence_on_qubit_0(**coherence: float) -> Profile:
-    """Three qubits with noiseless x and sx and perfect resets; only qubit 0 has coherence data."""
     return Profile.model_validate(
         toy(
             gates={
