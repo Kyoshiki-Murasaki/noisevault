@@ -294,6 +294,17 @@ def test_gate_marked_not_operational_is_disabled_despite_a_normal_error() -> Non
     assert profile.table.gate("cx", (4, 3)).state == "calibrated"
 
 
+def test_an_ideal_gate_outside_the_registry_keeps_its_arity() -> None:
+    from noisevault.sources.qiskit_backend import calibration_from_properties, to_profile
+
+    props = json.loads((FIXTURES / "manila_properties.json").read_bytes())
+    zero = [{"name": "gate_error", "value": 0}, {"name": "gate_length", "value": 0, "unit": "ns"}]
+    props["gates"] += [{"gate": "phase", "qubits": [q], "parameters": zero} for q in range(5)]
+    profile = to_profile(calibration_from_properties(props), {"source_kind": "other"})
+    assert (profile.gates["phase"].qubits, profile.gates["phase"].virtual) == (1, True)
+    assert profile.table.gate("phase", (3,)).state == "ideal"
+
+
 def test_aer_simulator_from_a_fake_models_that_device() -> None:
     aer = require("qiskit_aer")
     profile = nv.from_qiskit_backend(aer.AerSimulator.from_backend(_backend("FakeManilaV2")))

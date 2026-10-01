@@ -637,10 +637,10 @@ def _gate(
         if not is_dead and disabled_qubits.isdisjoint(e.qubits)
     ]
     virtual = bool(working) and all(e.error == 0 and not e.duration_ns for e in working)
+    definition: dict[str, Any] = {} if gates.lookup(name) else {"qubits": arity}
     if virtual:
-        definition: dict[str, Any] = {"virtual": True}
+        definition["virtual"] = True
     else:
-        definition = {} if gates.lookup(name) else {"qubits": arity}
         errors = [e.error for e in working if e.error is not None]
         if errors:
             definition |= {"avg_infidelity": statistics.median(errors), "statistic": "median"}

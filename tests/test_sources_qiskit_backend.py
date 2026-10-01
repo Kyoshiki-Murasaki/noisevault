@@ -4,6 +4,7 @@ import json
 from itertools import permutations
 from pathlib import Path
 
+import numpy as np
 from conftest import require
 
 import noisevault as nv
@@ -17,6 +18,7 @@ from qiskit.circuit.library import (  # noqa: E402
     ECRGate,
     SwapGate,
     SXGate,
+    UnitaryGate,
     XGate,
     YGate,
 )
@@ -193,6 +195,17 @@ def test_a_gate_with_no_locus_is_not_in_the_profile() -> None:
     )
     profile = nv.from_qiskit_backend(_Backend(target))
     assert "y" not in profile.gates
+    _assert_allows_exactly_what_the_target_allows(target, profile)
+
+
+def test_an_ideal_custom_gate_keeps_its_arity_and_resolves_as_ideal() -> None:
+    target = Target(num_qubits=2)
+    target.add_instruction(
+        UnitaryGate(np.diag([1, 1, 1, -1])), {(0, 1): _props(0, 0)}, name="unitary"
+    )
+    profile = nv.from_qiskit_backend(_Backend(target))
+    assert (profile.gates["unitary"].qubits, profile.gates["unitary"].virtual) == (2, True)
+    assert profile.table.gate("unitary", (0, 1)).state == "ideal"
     _assert_allows_exactly_what_the_target_allows(target, profile)
 
 
