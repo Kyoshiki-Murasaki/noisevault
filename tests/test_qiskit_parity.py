@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from conftest import MANILA_V01, migrated, require
+from conftest import FAKES_ADDED_IN, MANILA_V01, migrated, needs_runtime, require
 
 from noisevault.profile import Profile
 
@@ -153,6 +153,8 @@ def tvd(p: np.ndarray, q: np.ndarray) -> float:
 @pytest.fixture(scope="module", params=MODERN)
 def aer(request: pytest.FixtureRequest) -> dict[str, Any]:
     """Circuits compiled for one fake backend, and from_backend's simulators for them."""
+    if request.param in FAKES_ADDED_IN:
+        needs_runtime(FAKES_ADDED_IN[request.param])
     backend = getattr(fake_provider, request.param)()
     layouts = profile_from_target(backend).suggest_layout(5)
     compiled = []

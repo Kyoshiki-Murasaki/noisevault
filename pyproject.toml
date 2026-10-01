@@ -38,16 +38,16 @@ classifiers = [
 dependencies = [
   "numpy>=1.26",
   "pydantic>=2.8,<3",
-  "typer>=0.12",
-  "rich>=13.7",
+  "typer>=0.27",
+  "rich>=13.8",
 ]
 
 [project.optional-dependencies]
 qiskit = ["qiskit>=2.1", "qiskit-aer>=0.17"]
 ibm = ["noisevault[qiskit]", "qiskit-ibm-runtime>=0.40"]
 cirq = ["cirq-core>=1.5"]
-pennylane = ["pennylane>=0.42"]
-stim = ["stim>=1.14"]
+pennylane = ["pennylane>=0.43.3"]
+stim = ["stim>=1.15"]
 google = ["noisevault[cirq]", "cirq-google>=1.6"]
 all = ["noisevault[qiskit,ibm,cirq,pennylane,stim,google]"]
 dev = [

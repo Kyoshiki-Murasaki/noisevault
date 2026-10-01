@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from conftest import require
+from conftest import FAKES_ADDED_IN, needs_runtime, require
 
 import noisevault as nv
 from noisevault.reference import Op, probabilities
@@ -23,6 +23,8 @@ ROUND_TRIP = ("FakeFez", "FakeSherbrooke", "FakeManilaV2")
 
 def _backend(class_name: str):
     fake_provider = require("qiskit_ibm_runtime.fake_provider")
+    if class_name in FAKES_ADDED_IN:
+        needs_runtime(FAKES_ADDED_IN[class_name])
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return getattr(fake_provider, class_name)()
@@ -148,6 +150,7 @@ def test_fake_backend_provenance() -> None:
 def _refresh(backend, *, persist: bool) -> None:
     """Run the SDK's own refresh() against an IBM Quantum account serving a newer calibration."""
     runtime = require("qiskit_ibm_runtime")
+    needs_runtime("0.49")  # refresh(persist=...)
     from qiskit_ibm_runtime.utils.backend_decoder import properties_from_server_data
 
     folder = Path(backend.dirname)

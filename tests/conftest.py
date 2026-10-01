@@ -11,11 +11,13 @@ import copy
 import importlib
 import os
 import warnings
+from importlib.metadata import version
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+from packaging.version import Version
 
 from noisevault.errors import MigrationWarning
 from noisevault.profile import Profile, load_file
@@ -42,6 +44,16 @@ def require(module: str) -> ModuleType:
         if os.environ.get("NOISEVAULT_REQUIRE_ALL") == "1":
             pytest.fail(f"{module} must be installed when NOISEVAULT_REQUIRE_ALL=1 ({exc})")
         pytest.skip(f"{module} is not installed", allow_module_level=True)
+
+
+# Fake backends newer than the qiskit-ibm-runtime floor, with the release that added them.
+FAKES_ADDED_IN = {"FakeKingston": "0.47"}
+
+
+def needs_runtime(release: str) -> None:
+    """Skip when the installed qiskit-ibm-runtime predates `release`; the extra allows it."""
+    if Version(version("qiskit-ibm-runtime")) < Version(release):
+        pytest.skip(f"needs qiskit-ibm-runtime {release} or later")
 
 
 def toy(**sections: Any) -> dict[str, Any]:
