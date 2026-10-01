@@ -7,7 +7,9 @@ machines and never contains color. NO_COLOR and COLUMNS are read at each invocat
 
 from __future__ import annotations
 
+import difflib
 import errno
+import gzip
 import json
 import os
 import platform
@@ -15,9 +17,10 @@ import re
 import statistics
 import warnings
 import zlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated, Any, get_args
@@ -26,11 +29,12 @@ import typer
 from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
+from typer.core import TyperGroup
 
 from . import __version__, catalog, metrics
 from .diff import METRICS, describe_delta, fmt_error, fmt_metric, fmt_relative, fmt_time
 from .errors import (
-    AmbiguousRef,
+    REPOSITORY,
     FingerprintMismatch,
     NoiseVaultError,
     ProfileNotFound,
@@ -39,7 +43,38 @@ from .errors import (
 from .profile import Profile, Ref, Technology, json_schema, load_file, parse_ref
 from .table import GateNoise
 
+# Click's UsageError; typer exports only this subclass of it.
+_USAGE_ERROR = typer.BadParameter.__mro__[1]
+
+
+class _Commands(TyperGroup):
+    """A usage mistake or an unexpected failure ends in one ``error:`` line, never a box or a
+    traceback. NOISEVAULT_DEBUG=1 lets an unexpected failure raise."""
+
+    def invoke(self, ctx: Any) -> Any:
+        try:
+            return super().invoke(ctx)
+        except _USAGE_ERROR as exc:
+            message = exc.format_message().rstrip(".").replace(". Did you mean", "; did you mean")
+            message = message[:1].lower() + message[1:]
+            if not re.search(r"did you mean|possible options", message, re.I):
+                message += f"; see `{exc.ctx.command_path if exc.ctx else 'nv'} --help`"
+            err.print(f"error: {message}", markup=False)
+            raise typer.Exit(2) from None
+        except Exception as exc:
+            # Exit and Abort, from typer or click, carry an exit code: they are control flow.
+            if hasattr(exc, "exit_code") or os.environ.get("NOISEVAULT_DEBUG"):
+                raise
+            err.print(
+                f"error: unexpected {type(exc).__name__}: {exc}; please report this bug at"
+                f" {REPOSITORY}/issues (NOISEVAULT_DEBUG=1 shows the traceback)",
+                markup=False,
+            )
+            raise typer.Exit(1) from None
+
+
 app = typer.Typer(
+    cls=_Commands,
     no_args_is_help=True,
     add_completion=False,
     help="NoiseVault: real device noise, pinned and portable.",
@@ -47,16 +82,18 @@ app = typer.Typer(
 out = Console(highlight=False)
 err = Console(stderr=True, highlight=False, soft_wrap=True)
 
-_FRAMEWORK_PACKAGES = (
-    "qiskit",
-    "qiskit-aer",
-    "qiskit-ibm-runtime",
-    "cirq-core",
-    "cirq-google",
-    "pennylane",
-    "stim",
-    "pymatching",
-)
+# Package doctor reports -> the extra that installs it. pymatching is in no extra: only the QEC
+# recipe uses it.
+_PACKAGES: dict[str, str | None] = {
+    "qiskit": "qiskit",
+    "qiskit-aer": "qiskit",
+    "qiskit-ibm-runtime": "ibm",
+    "cirq-core": "cirq",
+    "cirq-google": "google",
+    "pennylane": "pennylane",
+    "stim": "stim",
+    "pymatching": None,
+}
 _INSTALL_ALL = install_hint("all")
 _SOURCE_LABELS = {  # short forms of provenance.source_kind for the list table
     "package_snapshot": "package",
@@ -70,7 +107,6 @@ _SOURCE_LABELS = {  # short forms of provenance.source_kind for the list table
 # What to do next, by failure type; the first match wins.
 _HINTS: tuple[tuple[type[BaseException], str], ...] = (
     (ProfileNotFound, "run `nv list` to see every profile you can load offline"),
-    (AmbiguousRef, "run `nv list` to see the full refs"),
     (FingerprintMismatch, "load the ref without a pin to see what it holds now"),
     (ImportError, f"install the frameworks: {_INSTALL_ALL}"),
     (ValidationError, "run `nv validate FILE` to list every problem in the file"),
@@ -122,15 +158,35 @@ def list_profiles(
     """List the profiles you can load offline: the bundled set and your vault."""
     with _friendly():
         technologies = get_args(Technology)
+        if tech is not None:
+            tech = tech.lower().replace("-", "_")
         if tech is not None and tech not in technologies:
-            raise ValueError(f"unknown technology {tech!r}; choose from {', '.join(technologies)}")
-        rows = [_list_row(info) for info in catalog.profiles(technology=tech, vendor=vendor)]
+            guess = _guess(tech, technologies)
+            raise ValueError(f"--tech {tech!r}: {guess}choose from {', '.join(technologies)}")
+        vendors = sorted({i.vendor for i in catalog.profiles() if i.vendor})
+        if vendor is not None:
+            vendor = next((v for v in vendors if v.lower() == vendor.lower()), vendor)
+        if vendor is not None and vendor not in vendors:
+            raise ValueError(
+                f"--vendor {vendor!r}: {_guess(vendor, vendors)}choose from {', '.join(vendors)}"
+            )
+        infos = catalog.profiles(technology=tech, vendor=vendor)
+        rows = [_list_row(info) for info in infos]
         if as_json:
             _echo_json(rows)
             return
         if not rows:
-            known = sorted({i.vendor or "-" for i in catalog.profiles()})
-            raise ProfileNotFound(f"no profile matches; vendors with profiles: {', '.join(known)}")
+            wanted = " ".join(x for x in (vendor, tech) if x)
+            raise ProfileNotFound(f"no {wanted} profile yet; run `nv list` to see them all")
+        same_day: dict[tuple[str, Any], list[datetime]] = {}
+        for info in infos:
+            if info.calibrated_at:
+                same_day.setdefault((info.id, info.calibrated_at.date()), []).append(
+                    info.calibrated_at
+                )
+        for row, info in zip(rows, infos, strict=True):
+            stamp = info.calibrated_at
+            row["when"] = _when(stamp, same_day[info.id, stamp.date()]) if stamp else "undated"
         # Grouped under technology headings so the table fits 80 columns. Only processor and
         # license may wrap; the other cells are short and must stay whole.
         table = Table(box=None, pad_edge=False, header_style="bold")
@@ -148,7 +204,7 @@ def list_profiles(
                 mark = "* " if row["location"] == "vault" else "  "
                 table.add_row(
                     f"{mark}{row['id']}",
-                    row["date"] or "undated",
+                    row["when"],
                     str(row["num_qubits"]),
                     row["processor"] or "-",
                     _SOURCE_LABELS.get(row["source_kind"], row["source_kind"] or "-"),
@@ -161,6 +217,18 @@ def list_profiles(
         out.print(
             f"{len(rows)} profiles. Load one with nv.load('<id>'); see one with `nv show <id>`."
         )
+
+
+def _when(stamp: datetime, same_day: list[datetime]) -> str:
+    """The date, and under it as much of the time as tells apart one device's calibrations that
+    day. Under, not beside: a wider date column would wrap every processor at 80 columns."""
+    day = stamp.date().isoformat()
+    if len(same_day) < 2:
+        return day
+    clock = "%H:%M"
+    if len({s.strftime(clock) for s in same_day}) < len(same_day):
+        clock = "%H:%M:%S"
+    return f"{day}\n{stamp.astimezone(UTC).strftime(clock)} UTC"
 
 
 def _list_row(info: catalog.ProfileInfo) -> dict[str, Any]:
@@ -233,12 +301,31 @@ def card(profile: Profile) -> dict[str, Any]:
         "provenance": prov.model_dump(mode="json", exclude_none=True, exclude={"notes", "extra"}),
         "fingerprint": profile.fingerprint,
         "short_fingerprint": profile.short_fingerprint,
-        "assumptions": [
-            f"{name}: {spec.assumption}" for name, spec in profile.gates.items() if spec.assumption
-        ],
+        "assumptions": _assumptions(profile),
         "notes": list(prov.notes),
         "effects": _effects(profile),
     }
+
+
+def _assumptions(profile: Profile) -> list[str]:
+    """Each gate's default assumption, then the records that state a different one."""
+    overrides: dict[tuple[str, str], list[tuple[int, ...]]] = {}
+    for record in profile.calibrations:
+        if record.assumption and record.assumption != profile.gates[record.gate].assumption:
+            overrides.setdefault((record.gate, record.assumption), []).append(record.qubits)
+    lines = []
+    for name, spec in profile.gates.items():
+        if spec.assumption:
+            lines.append(f"{name}: {spec.assumption}")
+        for (gate, text), loci in overrides.items():
+            if gate == name:
+                where = (
+                    ", ".join("-".join(map(str, q)) for q in loci)
+                    if len(loci) <= 3
+                    else f"({len(loci)} records)"
+                )
+                lines.append(f"{name} {where}: {text}")
+    return lines
 
 
 def _connectivity(profile: Profile) -> dict[str, Any]:
@@ -492,15 +579,12 @@ def diff(
 ) -> None:
     """Show how calibration changed between two profiles."""
     with _friendly():
-        result = _load(before).diff(_load(after), top=top)
+        first, second = _load(before), _load(after)
+        result = first.diff(second, top=top)
         if as_json:
             _echo_json(result.to_dict())
             return
-        out.print(
-            f"[bold]{result.before}[/bold] -> [bold]{result.after}[/bold]"
-            f"  ({describe_delta(result.time_delta)})",
-            soft_wrap=True,
-        )
+        out.print(f"{_diff_title(first, second)}  ({describe_delta(result.time_delta)})")
         for warning in result.warnings:
             err.print(f"warning: {warning}", markup=False)
         if result.identical:
@@ -549,7 +633,37 @@ def diff(
             ("qubits removed", result.qubits_removed),
         ):
             if qubits:
-                out.print(f"{label}: {', '.join(map(str, qubits))}", markup=False)
+                out.print(f"{label}: {_runs(qubits)}", markup=False)
+
+
+def _runs(indices: Sequence[int]) -> str:
+    """``0, 3 to 9, 12``: three or more consecutive indices as one run."""
+    runs: list[list[int]] = []
+    for i in sorted(indices):
+        if runs and i == runs[-1][-1] + 1:
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    return ", ".join(
+        f"{run[0]} to {run[-1]}" if len(run) > 2 else ", ".join(map(str, run)) for run in runs
+    )
+
+
+def _diff_title(first: Profile, second: Profile) -> str:
+    """``a@date -> b@date``; one device is named once, with times when the dates match."""
+    if first.id != second.id:
+        return f"[bold]{_ref_on_day(first)}[/bold] -> [bold]{_ref_on_day(second)}[/bold]"
+    a, b = first.device.calibrated_at, second.device.calibrated_at
+    if a and b and a.date() == b.date() and a != b:
+        when = (_iso(first), _iso(second))
+    else:
+        when = tuple(t.date().isoformat() if t else "undated" for t in (a, b))
+    return f"[bold]{first.id}[/bold] {when[0]} -> {when[1]}"
+
+
+def _ref_on_day(profile: Profile) -> str:
+    when = profile.device.calibrated_at
+    return f"{profile.id}@{when.date().isoformat()}" if when else profile.id
 
 
 def _loci_table(labels: tuple[str, ...]) -> Table:
@@ -567,8 +681,11 @@ def _loci_table(labels: tuple[str, ...]) -> Table:
 
 
 def _change(change: Any) -> str:
+    if change.before is None or change.after is None:
+        # "worse" is undefined when one side has no value, so these stay uncolored
+        return "-" if change.before == change.after else "new" if change.before is None else "gone"
     text = fmt_relative(change.relative)
-    if change.relative is None or change.relative == 0:
+    if change.relative == 0:
         return text
     return f"[red]{text}[/red]" if change.worse else f"[green]{text}[/green]"
 
@@ -593,11 +710,14 @@ def check(
     with _friendly():
         names = list(FRAMEWORKS)
         if framework is not None:
-            names = [n.strip() for n in framework.split(",") if n.strip()]
+            names = [n.strip().lower() for n in framework.split(",") if n.strip()]
             unknown = [n for n in names if n not in FRAMEWORKS]
             if not names or unknown:
-                given = repr(unknown[0]) if unknown else repr(framework)
-                raise ValueError(f"--framework {given}: give one or more of {','.join(FRAMEWORKS)}")
+                given = unknown[0] if unknown else framework
+                raise ValueError(
+                    f"--framework {given!r}: {_guess(given, list(FRAMEWORKS))}give one or more"
+                    f" of {','.join(FRAMEWORKS)}"
+                )
         profile = _load(ref)
         parts = []
         for name in names:  # one at a time, so the spinner says which one is running
@@ -676,15 +796,13 @@ def validate(
         try:
             profile = load_file(file)
         except FileNotFoundError:
-            _fail(f"no file {file}")
-        except (OSError, EOFError, zlib.error) as exc:  # a directory, bad gzip or cut-off file
-            _fail(f"cannot read {file}: {exc}")
+            _fail(f"no file {file}; check the path")
         except ValidationError as exc:
             for line in _validation_lines(exc):
                 err.print(f"error: {line}", markup=False)
             raise typer.Exit(1) from None
-        except (ValueError, NoiseVaultError) as exc:
-            _fail(str(exc))
+        except (*_UNREADABLE, NoiseVaultError) as exc:
+            _fail(_unreadable(file, exc))
     notes = [str(w.message) for w in caught] + _soft_issues(profile)
     when = profile.device.calibrated_at.isoformat() if profile.device.calibrated_at else "undated"
     out.print(
@@ -706,7 +824,7 @@ def doctor() -> None:
     table.add_row("noisevault", __version__)
     table.add_row("python", platform.python_version())
     missing = []
-    for package in _FRAMEWORK_PACKAGES:
+    for package in _PACKAGES:
         try:
             table.add_row(package, version(package))
         except PackageNotFoundError:
@@ -717,8 +835,13 @@ def doctor() -> None:
     count = len(catalog.vault_profiles()) if vault.is_dir() else 0
     out.print(f"vault: {vault} ({count} profiles)", markup=False, soft_wrap=True)
     out.print(f"bundled profiles: {len(catalog.bundled_profiles())}")
-    if missing:
-        out.print(f"To add the missing frameworks: {_INSTALL_ALL}", markup=False, soft_wrap=True)
+    extras = sorted({extra for p in missing if (extra := _PACKAGES[p])})
+    if extras:
+        command = install_hint(",".join(extras))
+        out.print(f"To add the missing frameworks: {command}", markup=False, soft_wrap=True)
+    loose = [p for p in missing if _PACKAGES[p] is None]
+    if loose:
+        out.print(f"To add {', '.join(loose)}: pip install {' '.join(loose)}", markup=False)
 
 
 @app.command()
@@ -743,7 +866,34 @@ def _load(ref: str) -> Profile:
                 f"{ref} is a folder; give a profile file (.json or .json.gz) or a profile id"
                 " such as ibm_fez"
             )
+        try:
+            return load_file(target)
+        except _UNREADABLE as exc:
+            raise ValueError(_unreadable(target, exc)) from None
     return catalog.load(ref)
+
+
+# What reading a profile file can raise besides FileNotFoundError; ValidationError is a ValueError.
+_UNREADABLE = (ValueError, OSError, EOFError, zlib.error)
+
+
+def _unreadable(path: Path, exc: BaseException) -> str:
+    """One line naming the file, what is wrong with it, and what to do."""
+    if isinstance(exc, ValidationError):
+        problems = _count(exc.error_count(), "problem")
+        return f"{path} is not a valid profile ({problems}); run `nv validate {path}` to list them"
+    if isinstance(exc, json.JSONDecodeError):
+        where = f"{exc.msg} at line {exc.lineno}, column {exc.colno}"
+        return f"{path} is not JSON ({where}); give a profile file (.json or .json.gz)"
+    if isinstance(exc, UnicodeDecodeError):
+        return f"{path} is not JSON (not UTF-8 text); give a profile file (.json or .json.gz)"
+    if isinstance(exc, EOFError | zlib.error | gzip.BadGzipFile):
+        return f"cannot read {path}: it is a damaged gzip file ({exc}); copy or pull it again"
+    if isinstance(exc, IsADirectoryError):
+        return f"cannot read {path}: it is a folder; give a profile file (.json or .json.gz)"
+    if isinstance(exc, OSError):
+        return f"cannot read {path}: {exc.strerror or exc}; check the file and its permissions"
+    return f"{path}: {exc}"
 
 
 @contextmanager
@@ -769,14 +919,15 @@ def _report_warnings(caught: list[warnings.WarningMessage]) -> None:
 
 def _error(exc: BaseException) -> None:
     if isinstance(exc, ValidationError):
-        message = f"not a valid profile ({exc.error_count()} problems)"
+        message = f"not a valid profile ({_count(exc.error_count(), 'problem')})"
     elif isinstance(exc, FileNotFoundError) and exc.filename:
         message = f"no file {exc.filename}"
     else:
         message = _cli_terms(str(exc) or type(exc).__name__)
     err.print(f"error: {message}", markup=False)
     hint = next((h for kind, h in _HINTS if isinstance(exc, kind)), None)
-    if hint and "did you mean" not in message:
+    command = re.search(r"`[^`]+`", hint or "")
+    if hint and "did you mean" not in message and not (command and command[0] in message):
         err.print(f"hint: {hint}", markup=False)
     raise typer.Exit(1) from None
 
@@ -787,6 +938,7 @@ _CLI_TERMS = (
     (re.compile(r"""source=(['"])([\w-]+)\1"""), r"--source \2"),
     (re.compile(r"""nv\.load\((['"])([\w.@:-]+)\1\)"""), r"`nv show \2`"),
     (re.compile(r"\bat=(?= )"), "--at"),
+    (re.compile(r"\bat=(?=['\"])"), "--at "),
 )
 
 
@@ -794,6 +946,15 @@ def _cli_terms(message: str) -> str:
     for pattern, replacement in _CLI_TERMS:
         message = pattern.sub(replacement, message)
     return message
+
+
+def _guess(given: str, choices: Sequence[str]) -> str:
+    close = difflib.get_close_matches(given, choices, n=1)
+    return f"did you mean {close[0]}? " if close else ""
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
 def _fail(message: str) -> None:
@@ -837,7 +998,7 @@ def _soft_issues(profile: Profile) -> list[str]:
     notes = []
     for i in range(profile.device.num_qubits):
         q = profile.table.qubit(i)
-        if q.t1_ns is not None and q.t2_ns is not None and q.t2_ns > 2 * q.t1_ns:
+        if q.t2_clamped:
             notes.append(f"qubit {i}: T2 exceeds 2*T1; conversions clamp it to 2*T1")
     for record in profile.calibrations:
         if record.scope == "cycle":

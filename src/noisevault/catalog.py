@@ -11,10 +11,7 @@ import importlib
 import json
 import os
 import re
-import shutil
-import tempfile
 import warnings
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from importlib.resources import files
@@ -29,7 +26,7 @@ from .errors import (
     ProfileNotFound,
     SourceUnavailable,
 )
-from .profile import Profile, Ref, load_bytes, load_file, parse_ref
+from .profile import Profile, Ref, load_bytes, load_file, parse_ref, write_atomically
 
 _PULL_SOURCES = {
     "ibm": "noisevault.sources.ibm_public",
@@ -186,7 +183,7 @@ def _write_vault_index(folder: Path, index: dict[str, dict[str, Any]]) -> None:
     """Best effort and atomic: a read-only vault or a concurrent writer only loses the cache."""
     text = json.dumps(index, sort_keys=True)
     try:
-        _write_atomically(folder / _VAULT_INDEX, lambda tmp: tmp.write_text(text, encoding="utf-8"))
+        write_atomically(folder / _VAULT_INDEX, text.encode("utf-8"))
     except OSError:
         pass
 
@@ -308,8 +305,7 @@ def pull_and_save(
     module = importlib.import_module(_PULL_SOURCES[source])
     profile = module.pull(device, at=at)
     if output is not None:
-        _write_atomically(Path(output), profile.save)
-        return Pulled(profile, Path(output), written=True)
+        return Pulled(profile, profile.save(output), written=True)
     listed = vault_profiles()
     held = [i for i in listed if i.id == profile.id]
     for info in held:
@@ -334,7 +330,7 @@ def pull_and_save(
                 f"{path} already holds {occupant}, another calibration; move that file out of"
                 f" {path.parent} and pull again"
             )
-    _write_atomically(path, profile.save)
+    profile.save(path)
     return Pulled(profile, path, written=True)
 
 
@@ -351,30 +347,6 @@ def _default_source(device: str) -> str:
         f"no live source pulls {device!r}: pull reads IBM devices (ibm_..., source='ibm' or"
         f" 'ibm-account') and IonQ devices (ionq..., source='ionq'){hint}"
     )
-
-
-def _write_atomically(path: Path, write: Callable[[Path], object]) -> None:
-    """A failed write leaves the old file whole; the dot name keeps listings from seeing it.
-
-    The temporary file ends in ``path``'s suffix, so it is written in the same format.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        dir=path.parent, prefix=f".{path.name}.", suffix=f".tmp{path.suffix}", delete=False
-    ) as handle:
-        tmp = Path(handle.name)
-    try:
-        if path.exists():
-            shutil.copymode(path, tmp)
-        else:  # NamedTemporaryFile creates 0600; a new profile should get the usual mode
-            mask = os.umask(0)
-            os.umask(mask)
-            tmp.chmod(0o666 & ~mask)
-        write(tmp)
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
 
 
 def _expect_prefix(expect: str) -> str:

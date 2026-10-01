@@ -10,7 +10,7 @@ import warnings
 from pathlib import Path
 
 import pytest
-from conftest import MANILA_V01, migrated, toy
+from conftest import MANILA_V01, migrated, require, toy
 
 import noisevault as nv
 from noisevault import catalog
@@ -138,6 +138,7 @@ def test_import_loads_no_framework() -> None:
 
 
 def test_stim_helpers_are_reachable_as_nv_stim() -> None:
+    require("stim")
     import noisevault.frameworks.stim as stim_module
 
     assert nv.stim is stim_module
@@ -279,18 +280,18 @@ def test_a_failed_pull_to_a_file_leaves_the_existing_file_whole(
     before = target.read_bytes()
     newer = _dated("2025-02-01T00:00:00Z")
     _serve(monkeypatch, newer)
-    real_save = Profile.save
 
-    def disk_full(self: Profile, path: Path) -> Path:
-        Path(path).write_bytes(before[:20])
+    def disk_full(self: Path, data: bytes) -> int:
+        with open(self, "wb") as handle:
+            handle.write(data[:20])
         raise OSError(errno.ENOSPC, "No space left on device")
 
-    monkeypatch.setattr(Profile, "save", disk_full)
-    with pytest.raises(OSError, match="No space"):
-        _pull_quietly(output=target)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "write_bytes", disk_full)
+        with pytest.raises(OSError, match="No space"):
+            _pull_quietly(output=target)
     assert target.read_bytes() == before
     assert list(tmp_path.iterdir()) == [target]
-    monkeypatch.setattr(Profile, "save", real_save)
     assert _pull_quietly(output=target) == (newer, target, True)
     assert nv.load(target) == newer and target.read_bytes()[:2] == b"\x1f\x8b"
 

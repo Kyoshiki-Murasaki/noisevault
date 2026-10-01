@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import errno
 import json
+import os
 import random
+import re
+import stat
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -9,6 +13,7 @@ import pytest
 from conftest import toy
 from pydantic import ValidationError
 
+import noisevault as nv
 from noisevault.profile import Profile, Ref, json_schema, load_file, parse_ref, profile_id
 
 TWO_EDGES = {"edges": [[0, 1], [1, 2]]}
@@ -189,6 +194,42 @@ def test_gzip_output_is_reproducible(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("name", ["p.json", "p.json.gz"])
+def test_a_failed_save_leaves_the_existing_file_whole(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+) -> None:
+    old = Profile.model_validate(toy())
+    new = Profile.model_validate(toy(readout={"error": 0.05}))
+    target = old.save(tmp_path / "out" / name)
+    before = target.read_bytes()
+
+    def disk_full(self: Path, data: bytes | str, *args, **kwargs) -> int:
+        with open(self, "wb") as handle:
+            handle.write((data.encode() if isinstance(data, str) else data)[:20])
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "write_bytes", disk_full)
+        patch.setattr(Path, "write_text", disk_full)
+        with pytest.raises(OSError, match="No space"):
+            new.save(target)
+    assert target.read_bytes() == before
+    assert list(target.parent.iterdir()) == [target]
+    assert load_file(new.save(target)) == new
+
+
+def test_save_keeps_the_mode_of_the_file_it_replaces(tmp_path: Path) -> None:
+    profile = Profile.model_validate(toy())
+    shared = profile.save(tmp_path / "shared.json")
+    shared.chmod(0o640)
+    profile.save(shared)
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o640
+    mask = os.umask(0)
+    os.umask(mask)
+    fresh = profile.save(tmp_path / "fresh.json.gz")
+    assert stat.S_IMODE(fresh.stat().st_mode) == 0o666 & ~mask
+
+
 def _shuffled(value):
     if isinstance(value, dict):
         items = list(value.items())
@@ -315,6 +356,24 @@ def test_a_profile_cannot_be_changed_in_place() -> None:
     assert profile.to_dict()["benchmarks"] == {"eplg": {"value": 3e-3, "layers": [1, 2]}}
 
 
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize("where", ["benchmarks", "extensions", "provenance.extra"])
+def test_free_form_data_refuses_nonfinite_numbers(tmp_path: Path, where: str, bad: str) -> None:
+    free = {"eplg": {"runs": [1, {"value": 2.5}]}}
+    section, _, key = where.partition(".")
+    data = toy(**{section: {key: free} if key else free})
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps(data).replace("2.5", bad))
+    with pytest.raises(ValidationError) as caught:
+        load_file(path)
+    message = str(caught.value)
+    assert f"\n{where}\n" in message
+    assert f"eplg.runs[1].value: {float(bad)} is not a finite number" in message
+    path.write_text(json.dumps(data))
+    saved = load_file(path).to_dict()[section]
+    assert (saved[key] if key else saved) == free
+
+
 def test_copies_and_pickles_keep_the_profile() -> None:
     import copy
     import pickle
@@ -431,6 +490,21 @@ def test_parse_ref(tmp_path: Path) -> None:
     for bad in ("ibm fez", "ibm_fez@yesterday", "ibm_fez@2025-02-26T09:12:00"):
         with pytest.raises(ValueError):
             parse_ref(bad)
+
+
+@pytest.mark.parametrize(
+    ("ref", "message"),
+    [
+        ("ibm_fez@", "after @ give a date (2025-02-26) or a timestamp with timezone"),
+        ("ibm_fez@  ", "after @ give a date"),
+        ("ibm_fez@2025-13-40", "2025-13-40 is not a calendar date; give one such as 2025-02-26"),
+    ],
+)
+def test_an_incomplete_or_impossible_date_is_refused(ref: str, message: str) -> None:
+    with pytest.raises(ValueError, match=re.escape(message)):
+        parse_ref(ref)
+    with pytest.raises(ValueError, match=re.escape(message)):
+        nv.load(ref)
 
 
 def test_uniform_profile() -> None:

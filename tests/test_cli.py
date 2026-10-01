@@ -184,7 +184,7 @@ def test_no_color_removes_color_codes() -> None:
         (["cite", "ibm fez"], "is not a profile id", None),
         (
             ["check", "ibm_manila", "--framework", "qiskt"],
-            "'qiskt': give one or more of qiskit",
+            "'qiskt': did you mean qiskit? give one or more of qiskit",
             None,
         ),
         (["list", "--tech", "photonics"], "choose from superconducting, trapped_ion", None),
@@ -214,6 +214,14 @@ def test_list_groups_profiles_by_technology() -> None:
     assert row.split() == ["ibm_fez", "2025-02-26", "156", "Heron", "r2", "package", "Apache-2.0"]
     assert lines.index("superconducting") < lines.index(row) < lines.index("trapped_ion")
     assert lines[-1].startswith(f"{len(nv.profiles())} profiles.")
+
+
+def test_list_filters_ignore_case_and_dashes() -> None:
+    for args in (["--tech", "Trapped-Ion"], ["--vendor", "Quantinuum"]):
+        result = runner.invoke(app, ["list", *args, "--json"])
+        assert result.exit_code == 0 and {r["vendor"] for r in json.loads(result.stdout)} == {
+            "quantinuum"
+        }
 
 
 def test_list_filters_and_prints_json() -> None:
@@ -426,9 +434,7 @@ def test_check_failure_exits_1(monkeypatch) -> None:
 
 
 def test_check_json_and_skips() -> None:
-    result = runner.invoke(
-        app, ["check", "quantinuum_h1-1", "--framework", "stim,cirq", "--json"]
-    )
+    result = runner.invoke(app, ["check", "quantinuum_h1-1", "--framework", "stim,cirq", "--json"])
     data = json.loads(result.stdout)
     assert [f["framework"] for f in data["frameworks"]] == ["cirq"]
     assert data["skipped"][0]["framework"] == "stim"
@@ -546,7 +552,8 @@ def test_doctor_gives_a_whole_install_command_for_missing_frameworks(monkeypatch
 
     monkeypatch.setattr(cli, "version", without_stim)
     out = runner.invoke(app, ["doctor"], env={"COLUMNS": "80"}).stdout
-    assert f"To add the missing frameworks: {_INSTALL_ALL}" in out.splitlines()
+    stim = _INSTALL_ALL.replace("[all]", "[stim]")
+    assert f"To add the missing frameworks: {stim}" in out.splitlines()
 
 
 def test_check_with_no_framework_installed_gives_the_install_command(monkeypatch) -> None:
@@ -554,3 +561,262 @@ def test_check_with_no_framework_installed_gives_the_install_command(monkeypatch
     result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq"])
     assert result.exit_code == 1
     assert f"no framework could run the check; install one: {_INSTALL_ALL}" in result.stderr
+
+
+# bad input never prints a traceback -----------------------------------------------------------
+
+_DAMAGED = {
+    "not-json": ("{not json", "is not JSON (Expecting property name"),
+    "empty": ("", "is not JSON (Expecting value"),
+    "legacy-empty": ('{"schema_version": "0.1"}', "not a valid NoiseVault 0.1 file: provider"),
+    "legacy-null-gates": (
+        json.dumps({**json.loads(MANILA_V01.read_text()), "gates": None}),
+        "gates should be a list, not null; fix that field",
+    ),
+    "invalid": (json.dumps(toy(gates=None)), "is not a valid profile (1 problem); run `nv valid"),
+}
+_COMMANDS = {
+    "show": lambda f: ["show", f],
+    "cite": lambda f: ["cite", f],
+    "check": lambda f: ["check", f, "--framework", "stim"],
+    "diff-before": lambda f: ["diff", f, "ibm_manila"],
+    "diff-after": lambda f: ["diff", "ibm_manila", f],
+    "validate": lambda f: ["validate", f],
+}
+
+
+@pytest.mark.parametrize("command", list(_COMMANDS))
+@pytest.mark.parametrize("damage", list(_DAMAGED))
+def test_every_command_names_a_damaged_file_and_what_is_wrong(
+    tmp_path: Path, command: str, damage: str
+) -> None:
+    text, expected = _DAMAGED[damage]
+    path = tmp_path / f"{damage}.json"
+    path.write_text(text)
+    result = runner.invoke(app, _COMMANDS[command](str(path)), env={"COLUMNS": "80"})
+    assert result.exit_code == 1 and result.stdout == ""
+    assert "Traceback" not in result.output
+    if command == "validate" and damage == "invalid":
+        assert result.stderr == "error: gates: Input should be a valid dictionary\n"
+        return
+    assert result.stderr.startswith(f"error: {path}") and expected in result.stderr
+    assert result.stderr.count("\n") == 1
+
+
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        (["show", "ibm_fez@"], "after @ give a date (2025-02-26)"),
+        (["show", "ibm_fez@2025-13-40"], "2025-13-40 is not a calendar date; give one such as"),
+        (["diff", "ibm_fez", "ibm_fez@"], "after @ give a date (2025-02-26)"),
+        (["list", "--tech", "superconductin"], "did you mean superconducting?"),
+        (["list", "--vendor", "ibmm"], "did you mean ibm?"),
+        (["check", "ibm_manila", "--framework", "qiskt"], "did you mean qiskit?"),
+        (["validate", "missing.json"], "error: no file missing.json; check the path\n"),
+        (["show", "nosuch"], "error: no profile with id 'nosuch'; run `nv list`\n"),
+    ],
+)
+def test_a_typo_or_bad_date_gets_one_error_with_the_way_out(args: list[str], error: str) -> None:
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1 and result.stdout == ""
+    assert error in result.stderr and "Traceback" not in result.output
+    assert len(result.stderr.splitlines()) == 1
+
+
+def test_pull_names_the_at_flag_for_a_bad_date() -> None:
+    result = runner.invoke(app, ["pull", "ibm_fez", "--at", "2025-13-40"])
+    assert result.exit_code == 1
+    assert result.stderr.startswith("error: --at '2025-13-40' is not an ISO 8601 date")
+
+
+# show assumptions -----------------------------------------------------------------------------
+
+
+def test_show_states_the_assumption_behind_each_overriding_record(tmp_path: Path) -> None:
+    gates = {
+        "rz": {"virtual": True},
+        "sx": {"avg_infidelity": 1e-3},
+        "cz": {"avg_infidelity": 0.01, "assumption": "Default measured with isolated RB"},
+    }
+    calibrations = [
+        {"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.02, "assumption": "Inferred from XEB"},
+        {"gate": "cz", "qubits": [1, 2], "avg_infidelity": 0.03},
+    ]
+    path = tmp_path / "toy.json"
+    path.write_text(json.dumps(toy(gates=gates, calibrations=calibrations)))
+    data = json.loads(runner.invoke(app, ["show", str(path), "--json"]).stdout)
+    assert data["assumptions"] == [
+        "cz: Default measured with isolated RB",
+        "cz 0-1: Inferred from XEB",
+    ]
+    out = runner.invoke(app, ["show", str(path)], env={"COLUMNS": "120"}).stdout
+    assert re.search(r"^assumptions\s+cz: Default measured with isolated RB\s*$", out, re.M)
+    assert re.search(r"^\s+cz 0-1: Inferred from XEB\s*$", out, re.M)
+
+
+def test_show_groups_a_record_assumption_shared_by_many_loci(tmp_path: Path) -> None:
+    calibrations = [
+        {"gate": "cz", "qubits": list(pair), "avg_infidelity": 0.02, "assumption": "From XEB"}
+        for pair in ([0, 1], [1, 2], [2, 3], [3, 4])
+    ]
+    data = toy(calibrations=calibrations)
+    data["device"]["num_qubits"] = 5
+    data["connectivity"] = {"edges": [[0, 1], [1, 2], [2, 3], [3, 4]]}
+    path = tmp_path / "toy.json"
+    path.write_text(json.dumps(data))
+    shown = json.loads(runner.invoke(app, ["show", str(path), "--json"]).stdout)
+    assert shown["assumptions"] == ["cz (4 records): From XEB"]
+
+
+# doctor ---------------------------------------------------------------------------------------
+
+
+def _doctor_without(monkeypatch: pytest.MonkeyPatch, *absent: str) -> str:
+    from importlib.metadata import PackageNotFoundError
+
+    import noisevault.cli as cli
+
+    def installed(package: str) -> str:
+        if package in absent:
+            raise PackageNotFoundError(package)
+        return version(package)
+
+    monkeypatch.setattr(cli, "version", installed)
+    return runner.invoke(app, ["doctor"], env={"COLUMNS": "200"}).stdout
+
+
+def test_doctor_installs_pymatching_by_name_not_through_an_extra(monkeypatch) -> None:
+    out = _doctor_without(monkeypatch, "pymatching")
+    assert "pip install pymatching" in out and "noisevault[" not in out
+
+
+def test_doctor_names_only_the_extras_that_install_what_is_missing(monkeypatch) -> None:
+    out = _doctor_without(monkeypatch, "cirq-google", "stim", "pymatching")
+    hint = 'pip install "noisevault[google,stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
+    assert hint in out and "pip install pymatching" in out
+
+
+def test_each_extra_doctor_names_installs_its_package() -> None:
+    import tomllib
+
+    from noisevault.cli import _PACKAGES
+
+    extras = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())["project"][
+        "optional-dependencies"
+    ]
+
+    def requirements(extra: str) -> set[str]:
+        found = set()
+        for item in extras[extra]:
+            nested = re.fullmatch(r"noisevault\[(.+)\]", item)
+            if nested:
+                found |= {r for name in nested[1].split(",") for r in requirements(name)}
+            else:
+                found.add(re.split(r"[<>=!~ ;\[]", item)[0])
+        return found
+
+    for package, extra in _PACKAGES.items():
+        if extra is not None:
+            assert package in requirements(extra), (package, extra)
+        assert package in requirements("dev")
+
+
+# diff and list with two calibrations on one day -----------------------------------------------
+
+
+def _same_day(vault: Path) -> tuple[str, str]:
+    """Two H1-1 calibrations on 2025-05-02 in the vault, beside the bundled one of that day."""
+    base = nv.load("quantinuum_h1-1").model_dump(mode="json", exclude_none=True)
+
+    def save(when: str, zz: float, qubits: list, calibrations: list) -> str:
+        data = {**base, "device": {**base["device"], "calibrated_at": when}}
+        data["gates"] = {**base["gates"], "zz": {**base["gates"]["zz"], "avg_infidelity": zz}}
+        data["qubits"], data["calibrations"] = qubits, calibrations
+        profile = Profile.model_validate(data)
+        path = nv.catalog.vault_path(profile)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        profile.save(path)
+        return f"quantinuum_h1-1@{when}"
+
+    before = save(
+        "2025-05-02T09:15:00Z",
+        9.8e-4,
+        [{"index": 4, "t1_us": 1.0e7}],
+        [{"gate": "r", "qubits": [5], "avg_infidelity": 0.0}],
+    )
+    after = save(
+        "2025-05-02T14:30:00Z",
+        1.2e-3,
+        [{"index": 3, "t1_us": 5.0e6}],
+        [
+            {"gate": "r", "qubits": [5], "avg_infidelity": 4e-5},
+            {"gate": "zz", "qubits": [0, 1], "avg_infidelity": 3e-3},
+        ],
+    )
+    return before, after
+
+
+def test_diff_says_new_or_gone_and_colors_every_change(vault: Path) -> None:
+    before, after = _same_day(vault)
+    env = {"COLUMNS": "80", "FORCE_COLOR": "1"}
+    out = runner.invoke(app, ["diff", before, after], env=env).stdout
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+    lines = plain.splitlines()
+    assert (
+        lines[0] == "quantinuum_h1-1 2025-05-02T09:15:00Z -> 2025-05-02T14:30:00Z  (5 hours later)"
+    )
+    rows = {tuple(line.split()[:3]): line.split()[-1] for line in lines if line[:1].isalnum()}
+    assert rows[("3", "T1", "(us)")] == "new"
+    assert rows[("4", "T1", "(us)")] == "gone"
+    assert rows[("default", "2q", "error")] == "+22.4%"
+    assert re.search(r"^5 +1q error +0\.00e\+00 +4\.00e-05 +\x1b\[31m-\x1b\[0m$", out, re.M)
+    assert max(map(len, lines)) <= 80
+
+
+def test_list_shows_the_time_only_where_a_date_is_shared(vault: Path) -> None:
+    _same_day(vault)
+    out = runner.invoke(app, ["list"], env={"COLUMNS": "80"}).stdout
+    lines = out.splitlines()
+    at = [i for i, line in enumerate(lines) if "quantinuum_h1-1 " in line]
+    rows = [(lines[i].lstrip("* ").split()[1:3], lines[i + 1].split()) for i in at]
+    assert rows == [
+        (["2025-05-02", "20"], ["09:15", "UTC"]),
+        (["2025-05-02", "20"], ["14:30", "UTC"]),
+        (["2025-05-02", "20"], ["00:00", "UTC"]),
+    ]
+    h1_2 = next(i for i, line in enumerate(lines) if "quantinuum_h1-2 " in line)
+    assert lines[h1_2].split()[1] == "2023-08-21" and "quantinuum_h2-1" in lines[h1_2 + 1]
+    fez = next(line for line in lines if "ibm_fez" in line)
+    assert fez.split()[:3] == ["ibm_fez", "2025-02-26", "156"]
+    assert max(map(len, lines)) <= 80
+
+
+def test_diff_lists_added_qubits_as_ranges() -> None:
+    out = runner.invoke(app, ["diff", "ibm_manila", "ibm_fez"], env={"COLUMNS": "80"}).stdout
+    assert "qubits added: 5 to 155" in out.splitlines()
+
+
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        (["diff", "ibm_fez"], "error: missing argument 'after'; see `nv diff --help`\n"),
+        (["shwo", "ibm_fez"], "error: no such command 'shwo'; did you mean 'show'?\n"),
+        (["show", "ibm_fez", "--qubit", "1"], "error: no such option: --qubit (Possible options"),
+    ],
+)
+def test_a_usage_mistake_is_one_line(args: list[str], error: str) -> None:
+    result = runner.invoke(app, args, env={"COLUMNS": "80"}, prog_name="nv")
+    assert result.exit_code == 2 and result.stdout == ""
+    assert result.stderr.startswith(error) and result.stderr.count("\n") == 1
+
+
+def test_an_unexpected_failure_is_one_line_unless_debugging(monkeypatch) -> None:
+    def broken(ref: str) -> None:
+        raise KeyError("provider")
+
+    monkeypatch.setattr(nv.catalog, "load", broken)
+    result = runner.invoke(app, ["show", "ibm_fez"])
+    assert result.exit_code == 1 and result.stderr.count("\n") == 1
+    assert result.stderr.startswith("error: unexpected KeyError: 'provider'; please report")
+    debug = runner.invoke(app, ["show", "ibm_fez"], env={"NOISEVAULT_DEBUG": "1"})
+    assert isinstance(debug.exception, KeyError)

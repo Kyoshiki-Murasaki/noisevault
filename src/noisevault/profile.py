@@ -5,7 +5,11 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import math
+import os
 import re
+import shutil
+import tempfile
 import warnings
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -91,12 +95,20 @@ class FrozenDict(dict):
         return FrozenDict, (dict(self),)
 
 
-def _freeze(value: Any) -> Any:
-    """Read-only copy of JSON-like data: dicts become FrozenDict, lists become tuples."""
+def _freeze(value: Any, where: str = "") -> Any:
+    """Read-only copy of JSON-like data: dicts become FrozenDict, lists become tuples.
+
+    ``allow_inf_nan=False`` does not reach values typed ``Any``, and JSON has no NaN or
+    Infinity, so a nonfinite number here would be saved as null.
+    """
     if isinstance(value, dict):
-        return FrozenDict({key: _freeze(item) for key, item in value.items()})
+        return FrozenDict(
+            {key: _freeze(item, f"{where}.{key}" if where else key) for key, item in value.items()}
+        )
     if isinstance(value, list | tuple):
-        return tuple(_freeze(item) for item in value)
+        return tuple(_freeze(item, f"{where}[{i}]") for i, item in enumerate(value))
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{where}: {value} is not a finite number")
     return value
 
 
@@ -467,26 +479,26 @@ class Profile(_Model):
         return _readable_json(self.to_dict())
 
     def save(self, path: str | Path) -> Path:
-        """Write canonical JSON; a ``.gz`` suffix writes reproducible gzip."""
+        """Write canonical JSON, replacing ``path``; a ``.gz`` suffix writes reproducible gzip."""
         path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix == ".gz":
             text = json.dumps(self.to_dict(), separators=(",", ":"), ensure_ascii=False)
-            path.write_bytes(gzip.compress(text.encode("utf-8"), mtime=0))
+            data = gzip.compress(text.encode("utf-8"), mtime=0)
         else:
-            path.write_text(self.to_json() + "\n", encoding="utf-8")
+            data = (self.to_json() + "\n").encode("utf-8")
+        write_atomically(path, data)
         return path
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Profile:
         """Validate a profile dict; a format 0.1 dict is upgraded in memory with a warning."""
         if compat.is_v01(data):
+            data = compat.upgrade_v01(data)
             warnings.warn(
                 "upgraded a NoiseVault 0.1 file to format 1.0 in memory; save it to keep 1.0",
                 MigrationWarning,
                 stacklevel=2,
             )
-            data = compat.upgrade_v01(data)
         return cls.model_validate(data)
 
     @classmethod
@@ -798,6 +810,30 @@ def profile_id(vendor: str | None, name: str) -> str:
     return name if name.startswith(vendor + "_") else f"{vendor}_{name}"
 
 
+def write_atomically(path: Path, data: bytes) -> None:
+    """Replace ``path`` with ``data``: a failed write leaves the old file whole.
+
+    The temporary file's dot name keeps vault listings from seeing it.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+    ) as handle:
+        tmp = Path(handle.name)
+    try:
+        if path.exists():
+            shutil.copymode(path, tmp)
+        else:  # NamedTemporaryFile creates 0600; a new file should get the usual mode
+            mask = os.umask(0)
+            os.umask(mask)
+            tmp.chmod(0o666 & ~mask)
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def load_file(path: str | Path) -> Profile:
     """Read a profile from ``.json`` or gzip-compressed JSON (0.1 files are upgraded)."""
     return load_bytes(Path(path).read_bytes())
@@ -834,13 +870,18 @@ def parse_ref(ref: str | Path) -> Path | Ref:
     text = ref.strip()
     if "/" in text or "\\" in text or text.endswith((".json", ".gz")) or Path(text).exists():
         return Path(text)
-    ident, _, at = text.lower().partition("@")
+    ident, sep, at = text.lower().partition("@")
     if not _ID.match(ident):
         raise ValueError(f"{ref!r} is not a profile id such as ibm_fez or ibm_fez@2025-02-26")
-    if not at:
+    if not sep:
         return Ref(ident)
     if _DATE.match(at):
-        return Ref(ident, date=date.fromisoformat(at))
+        try:
+            return Ref(ident, date=date.fromisoformat(at))
+        except ValueError:
+            raise ValueError(
+                f"{ref!r}: {at} is not a calendar date; give one such as 2025-02-26"
+            ) from None
     try:
         stamp = datetime.fromisoformat(at.upper())
     except ValueError:
