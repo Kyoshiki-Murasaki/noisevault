@@ -112,8 +112,10 @@ NOTICE_TAIL = """
 Test fixtures
 =============
 
-tests/fixtures/ibm/manila_properties.json and manila_configuration.json are taken from the
-FakeManilaV2 snapshot in qiskit-ibm-runtime (https://github.com/Qiskit/qiskit-ibm-runtime).
+tests/fixtures/ibm/manila_properties.json is taken from the FakeManilaV2 snapshot in
+qiskit-ibm-runtime (https://github.com/Qiskit/qiskit-ibm-runtime), and
+tests/fixtures/ibm/manila_configuration.json keeps seven fields of that snapshot's configuration
+(backend_name, backend_version, basis_gates, coupling_map, dt, n_qubits, processor_type).
   License: Apache-2.0.
   Copyright 2021 IBM and its contributors.
 """
