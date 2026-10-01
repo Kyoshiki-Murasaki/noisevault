@@ -615,10 +615,11 @@ def _readout_on_qubit_1(p1_given_0: float, p0_given_1: float) -> Profile:
     [
         ("MPP Z0*Z1*Z0", [[0.2, 0.3]]),
         ("MPP !Z0*Z1*Z0", [[0.3, 0.2]]),
-        ("MPP X0*Z0*X0*Z0*Z1", [[0.3, 0.2]]),  # X0*Z0*X0*Z0 is -I
+        ("MPP X0*Z0*X0*Z0*Z1", [[0.3, 0.2]]),
         ("MPP Z0*Z0 !X0*X0", [[0.0, 0.0], [0.0, 0.0]]),
         ("MPP Z0*Z0 Z1 !X1*X2*X2", [[0.0, 0.0], [0.2, 0.3], [0.3, 0.2]]),
     ],
+    ids=["Z1", "-Z1", "-I times Z1", "I and -I", "I, Z1 and -X1"],
 )
 def test_exact_readout_flips_each_reduced_product_by_its_qubit_and_sign(circuit, flips):
     out = to_stim(_readout_on_qubit_1(0.2, 0.3), circuit, readout="exact")
@@ -627,13 +628,15 @@ def test_exact_readout_flips_each_reduced_product_by_its_qubit_and_sign(circuit,
 
 
 def test_exact_readout_of_reduced_products_agrees_with_the_results_stim_records():
+    p0_given_1 = 0.3
     out = to_stim(
-        _readout_on_qubit_1(0.2, 0.3), "X 1\nMPP Z0*Z1*Z0 X0*Z0*X0*Z0*Z1 !Z0*Z0", readout="exact"
+        _readout_on_qubit_1(0.2, p0_given_1),
+        "X 1\nMPP Z0*Z1*Z0 X0*Z0*X0*Z0*Z1 !Z0*Z0",
+        readout="exact",
     )
     shots = 100_000
     ones = sample_with_readout(out, shots, seed=5).mean(axis=0)
-    # Qubit 1 is in |1> and reads 0 with P(0|1) = 0.3; ideally Z1 records 1, -Z1 0 and -I 1.
-    want = np.array([0.7, 0.3, 1.0])
+    want = np.array([1 - p0_given_1, p0_given_1, 1.0])
     assert np.all(np.abs(ones - want) <= 5 * np.sqrt(want * (1 - want) / shots))
 
 

@@ -427,10 +427,12 @@ def _is_gate(op: Operator) -> bool:
     )
 
 
+def _is_named_controlled_gate(op: Operator) -> bool:
+    return isinstance(op, ControlledOp) and type(op) is not ControlledOp
+
+
 def _is_arithmetic(op: Operator) -> bool:
-    """Operator arithmetic, such as ``qml.prod``, ``qml.pow`` or ``qml.ctrl``, that is not a
-    registry gate (``CNOT``, ``Adjoint(SX)``) or a named controlled gate (``CRX``)."""
-    named = op.name in _CANONICAL or (isinstance(op, ControlledOp) and type(op) is not ControlledOp)
+    named = op.name in _CANONICAL or _is_named_controlled_gate(op)
     return isinstance(op, CompositeOp | SymbolicOp) and not named
 
 
