@@ -341,6 +341,28 @@ def test_virtual_gate_the_target_drops_as_non_operational_stays_disabled() -> No
     assert not profile.table.qubit(3).disabled
 
 
+def test_each_pair_of_a_mixed_cx_and_ecr_device_allows_only_its_own_gate() -> None:
+    backend, profile = _profile("FakeCairoV2")
+    target = backend.target
+    pairs = {qargs for name in ("cx", "ecr") for qargs in target[name]}
+    assert target.instruction_supported("ecr", (1, 2))
+    assert not target.instruction_supported("cx", (1, 2))
+    for name in ("cx", "ecr"):
+        for a, b in pairs:
+            for qubits in ((a, b), (b, a)):
+                props = target[name].get(qubits)
+                supported = props is not None and props.error < 1  # 1 is IBM's dead gate
+                assert profile.table.allowed(name, qubits) == supported, (name, qubits)
+
+
+def test_ibm_backends_are_superconducting() -> None:
+    _, profile = _profile("FakeManilaV2")
+    assert profile.device.technology == "superconducting"
+    aer = require("qiskit_aer")
+    wrapped = nv.from_qiskit_backend(aer.AerSimulator.from_backend(_backend("FakeManilaV2")))
+    assert wrapped.device.technology == "superconducting"
+
+
 def _ibm_backend(served: list[dict]):
     """A real IBMBackend whose API client serves the last calibration in `served`."""
     runtime = require("qiskit_ibm_runtime")

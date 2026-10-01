@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__, gates, metrics, units
-from ..profile import FORMAT_VERSION, Profile
+from ..profile import FORMAT_VERSION, Profile, Technology
 
 RUNTIME_REPO = "https://github.com/Qiskit/qiskit-ibm-runtime"
 IBM_ATTRIBUTION = "IBM Quantum, via qiskit-ibm-runtime"
@@ -115,6 +115,7 @@ class Calibration:
     instructions: tuple[Instruction, ...]
     qubits: Mapping[int, QubitCalibration] = field(default_factory=dict)
     vendor: str | None = "ibm"
+    technology: Technology = "superconducting"
     processor: str | None = None
     calibrated_at: datetime | None = None
     skipped: tuple[str, ...] = ()  # source instruction names deliberately not converted
@@ -156,7 +157,12 @@ def from_qiskit_backend(backend: Any) -> Profile:
             calibrated_at=from_props.calibrated_at,
             qubits={i: _overlay(q, from_props.qubits.get(i)) for i, q in cal.qubits.items()},
         )
-    cal = replace(cal, vendor=_vendor(backend), processor=_processor(backend))
+    cal = replace(
+        cal,
+        vendor=_vendor(backend),
+        technology=_technology(backend),
+        processor=_processor(backend),
+    )
     return to_profile(cal, _backend_provenance(backend))
 
 
@@ -291,6 +297,17 @@ def _vendor(backend: Any) -> str | None:
         if module.startswith("qiskit_ibm_runtime") or _device_name(backend).startswith("ibm_")
         else None
     )
+
+
+def _technology(backend: Any) -> Technology:
+    """What the backend's package or its provider's device names say; any other backend could
+    be a simulator or any hardware."""
+    if _vendor(backend) == "ibm":
+        return "superconducting"
+    package = type(backend).__module__.partition(".")[0]
+    if package in ("qiskit_ionq", "qiskit_quantinuum") or _device_name(backend).startswith("ionq_"):
+        return "trapped_ion"
+    return "other"
 
 
 _AER_WRAPPED = re.compile(r"aer_simulator_from\((?P<inner>.+)\)")
@@ -468,6 +485,8 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     sentinel (an error at or above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and
     ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration on
     every working locus (IBM's ``rz``) is virtual, and its disabled loci keep their records.
+    A source lists each gate on every locus it runs on, so a qubit or connected pair the gate
+    is not listed on gets a ``disabled: true`` record instead of the device default.
     Records of a symmetric gate that agree in both directions are stored once. A nonpositive or
     nonfinite T1/T2 is treated as missing and named in a note; a device with no valid T1 (or T2)
     left is an error.
@@ -477,12 +496,14 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     for inst in cal.instructions:
         by_name.setdefault(inst.name, []).append(inst)
     measure = {inst.qubits[0]: inst for inst in by_name.pop("measure", [])}
+    connectivity = _connectivity(cal.instructions)
 
     definitions: dict[str, dict[str, Any]] = {}
     records: list[dict[str, Any]] = []
     for name, entries in by_name.items():
         arity = len(entries[0].qubits)
-        definition, gate_records = _gate(name, arity, entries, ibm)
+        unlisted = _unlisted(name, arity, entries, cal.num_qubits, connectivity)
+        definition, gate_records = _gate(name, arity, entries + unlisted, ibm)
         definitions[name] = definition
         records += gate_records
 
@@ -537,12 +558,12 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         "device": {
             "name": cal.name,
             "vendor": cal.vendor,
-            "technology": "superconducting",
+            "technology": cal.technology,
             "num_qubits": cal.num_qubits,
             "processor": cal.processor,
             "calibrated_at": cal.calibrated_at,
         },
-        "connectivity": _connectivity(cal.instructions),
+        "connectivity": connectivity,
         "gates": definitions,
         "readout": readout,
         "prep": prep,
@@ -612,6 +633,27 @@ def _gate(
     if arity == 2 and gates.is_symmetric(name):
         records = _one_per_pair(records)
     return definition, records
+
+
+def _unlisted(
+    name: str,
+    arity: int,
+    entries: Sequence[Instruction],
+    num_qubits: int,
+    connectivity: Mapping[str, Any],
+) -> list[Instruction]:
+    """The loci the gate's device default would cover that the source does not list, as
+    non-operational entries."""
+    if arity == 1:
+        loci = [(q,) for q in range(num_qubits)]
+    elif arity == 2:
+        loci = [tuple(edge) for edge in connectivity["edges"]]
+    else:  # the format applies no default to a wider gate
+        return []
+    listed = {e.qubits for e in entries}
+    if arity == 2 and gates.is_symmetric(name):
+        listed |= {qubits[::-1] for qubits in listed}
+    return [Instruction(name, locus, operational=False) for locus in loci if locus not in listed]
 
 
 def _is_sentinel(error: float | None, arity: int) -> bool:
