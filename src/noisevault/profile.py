@@ -11,7 +11,6 @@ import re
 import shutil
 import statistics
 import struct
-import tempfile
 import warnings
 import zlib
 from collections import Counter
@@ -943,24 +942,30 @@ def gzip_reproducibly(data: bytes) -> bytes:
     return _GZIP_HEADER + body + struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
 
 
+_NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+
+
 def write_atomically(path: Path, data: bytes) -> None:
     """Replace ``path`` with ``data``: a failed write leaves the old file whole.
 
-    The temporary file's dot name keeps vault listings from seeing it.
+    The temporary file has a dot name, so vault listings skip it. A new file gets mode 0o666
+    less the umask, which the OS applies when it creates the temporary file. A replaced file
+    keeps its mode. Python can read the umask only by setting it, and all threads share one
+    umask, so this function never touches the umask.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
-    ) as handle:
-        tmp = Path(handle.name)
+    while True:
+        tmp = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
+        try:
+            fd = os.open(tmp, _NEW_FILE, 0o666)
+        except FileExistsError:
+            continue
+        break
     try:
+        with open(fd, "wb") as handle:
+            handle.write(data)
         if path.exists():
             shutil.copymode(path, tmp)
-        else:  # NamedTemporaryFile creates 0600; a new file should get the usual mode
-            mask = os.umask(0)
-            os.umask(mask)
-            tmp.chmod(0o666 & ~mask)
-        tmp.write_bytes(data)
         os.replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)

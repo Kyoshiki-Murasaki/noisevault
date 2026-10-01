@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import errno
 import json
 import os
 import random
 import re
 import stat
+import threading
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -195,39 +197,107 @@ def test_gzip_output_is_reproducible(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("name", ["p.json", "p.json.gz"])
-def test_a_failed_save_leaves_the_existing_file_whole(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
-) -> None:
+def test_a_failed_save_leaves_the_existing_file_whole(tmp_path: Path, name: str) -> None:
+    resource = pytest.importorskip("resource")
     old = Profile.model_validate(toy())
     new = Profile.model_validate(toy(readout={"error": 0.05}))
     target = old.save(tmp_path / "out" / name)
     before = target.read_bytes()
-
-    def disk_full(self: Path, data: bytes | str, *args, **kwargs) -> int:
-        with open(self, "wb") as handle:
-            handle.write((data.encode() if isinstance(data, str) else data)[:20])
-        raise OSError(errno.ENOSPC, "No space left on device")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(Path, "write_bytes", disk_full)
-        patch.setattr(Path, "write_text", disk_full)
-        with pytest.raises(OSError, match="No space"):
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (20, hard))
+    try:
+        with pytest.raises(OSError, match="File too large"):
             new.save(target)
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
     assert target.read_bytes() == before
     assert list(target.parent.iterdir()) == [target]
     assert load_file(new.save(target)) == new
 
 
-def test_save_keeps_the_mode_of_the_file_it_replaces(tmp_path: Path) -> None:
+def test_an_interrupted_save_leaves_the_existing_file_whole(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = Profile.model_validate(toy()).save(tmp_path / "p.json")
+    before = target.read_bytes()
+
+    def interrupt(src: Path, dst: Path) -> None:
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            Profile.model_validate(toy(readout={"error": 0.05})).save(target)
+    assert target.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.fixture
+def umask(request: pytest.FixtureRequest) -> Iterator[int]:
+    caller = os.umask(request.param)
+    yield request.param
+    os.umask(caller)
+
+
+@pytest.mark.parametrize(
+    ("umask", "mode"), [(0o022, 0o644), (0o077, 0o600)], indirect=["umask"], ids=["022", "077"]
+)
+def test_a_new_file_gets_the_mode_the_umask_allows(tmp_path: Path, umask: int, mode: int) -> None:
+    fresh = Profile.model_validate(toy()).save(tmp_path / "fresh.json.gz")
+    assert oct(stat.S_IMODE(fresh.stat().st_mode)) == oct(mode)
+
+
+@pytest.mark.parametrize(
+    ("umask", "mode"),
+    [(0o022, 0o600), (0o077, 0o640)],
+    indirect=["umask"],
+    ids=["600-under-022", "640-under-077"],
+)
+def test_replacing_a_file_keeps_its_mode(tmp_path: Path, umask: int, mode: int) -> None:
     profile = Profile.model_validate(toy())
     shared = profile.save(tmp_path / "shared.json")
-    shared.chmod(0o640)
+    shared.chmod(mode)
     profile.save(shared)
-    assert stat.S_IMODE(shared.stat().st_mode) == 0o640
-    mask = os.umask(0)
-    os.umask(mask)
-    fresh = profile.save(tmp_path / "fresh.json.gz")
-    assert stat.S_IMODE(fresh.stat().st_mode) == 0o666 & ~mask
+    assert oct(stat.S_IMODE(shared.stat().st_mode)) == oct(mode)
+
+
+@pytest.mark.parametrize("umask", [0o077], indirect=True, ids=["077"])
+@pytest.mark.parametrize("savers", [1, 4], ids=["1-saver", "4-savers"])
+def test_saving_leaves_the_process_umask_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, umask: int, savers: int
+) -> None:
+    """The savers meet at each umask change and at each rename. The test reads the umask while
+    they wait there and again after they finish, so a save that changes the umask fails on
+    every run."""
+    set_umask, rename = os.umask, os.replace
+    seen = []
+
+    def read_umask() -> None:
+        mask = set_umask(0)
+        set_umask(mask)
+        seen.append(mask)
+
+    together = threading.Barrier(savers, action=read_umask, timeout=10)
+
+    def set_umask_together(mask: int) -> int:
+        previous = set_umask(mask)
+        together.wait()
+        return previous
+
+    def rename_together(src: Path, dst: Path) -> None:
+        together.wait()
+        rename(src, dst)
+
+    paths = [tmp_path / f"p{i}.json" for i in range(savers)]
+    with monkeypatch.context() as patch, ThreadPoolExecutor(savers) as pool:
+        patch.setattr(os, "umask", set_umask_together)
+        patch.setattr(os, "replace", rename_together)
+        list(pool.map(Profile.model_validate(toy()).save, paths))
+    assert {p.name: oct(stat.S_IMODE(p.stat().st_mode)) for p in paths} == {
+        p.name: "0o600" for p in paths
+    }
+    read_umask()
+    assert {oct(mask) for mask in seen} == {oct(umask)}
 
 
 def _shuffled(value):
