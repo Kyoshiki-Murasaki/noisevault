@@ -20,7 +20,7 @@ from noisevault.check import (
     build_circuits,
     check,
 )
-from noisevault.errors import LayoutError, install_hint
+from noisevault.errors import LayoutError, NoiseVaultError, install_hint
 from noisevault.profile import Profile
 from noisevault.reference import _apply
 from noisevault.reference import probabilities as reference
@@ -428,6 +428,30 @@ def test_the_default_chain_leaves_out_a_link_only_a_custom_gate_calibrates() -> 
     assert result.layout == {0: 0, 1: 1}
     assert result.passed, result
     assert any("cz" in c.gates for c in result.frameworks[0].circuits)
+
+
+def _sx_calibrated_on(*qubits: int) -> Profile:
+    gates = {"rz": {"virtual": True}, "sx": {}, "cz": {"avg_infidelity": 1e-2}}
+    sx = [{"gate": "sx", "qubits": [q], "avg_infidelity": 1e-2} for q in qubits]
+    return Profile.model_validate(toy(gates=gates, calibrations=sx, readout={"error": 0.01}))
+
+
+@pytest.mark.parametrize(("calibrated", "layout"), [((0, 1), {0: 0, 1: 1}), ((2,), {0: 2})])
+def test_the_default_chain_leaves_out_qubits_no_one_qubit_native_calibrates(
+    calibrated, layout
+) -> None:
+    profile = _sx_calibrated_on(*calibrated)
+    assert profile.suggest_layout(3) == {0: 0, 1: 1, 2: 2}
+    with pytest.raises(NoiseVaultError, match=r"known unitary on qubits \[0, 1, 2\], so there"):
+        check(profile, layout=[0, 1, 2])
+    result = check(profile, frameworks=["cirq"])
+    assert result.layout == layout
+    assert result.passed, result
+
+
+def test_with_no_calibrated_one_qubit_native_the_one_qubit_chain_has_nothing_to_check() -> None:
+    with pytest.raises(NoiseVaultError, match=r"on qubits \[0\], so there is nothing to check"):
+        check(_sx_calibrated_on())
 
 
 def test_a_device_with_every_qubit_disabled_has_no_default_chain() -> None:

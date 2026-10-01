@@ -220,10 +220,10 @@ def check(
     """Run the check circuits through every installed export (or ``frameworks``).
 
     ``layout`` gives the chain of physical qubits to use (1 to 4 qubits, neighbors connected);
-    by default ``profile.suggest_layout(n)`` for the largest such ``n`` it can connect from
-    enabled qubits. ``shots`` and ``seed`` apply to sampled frameworks (Stim). A framework that
-    is not installed, or cannot express any check circuit, is listed in ``skipped`` with the
-    reason.
+    by default ``profile.suggest_layout(n)`` for the largest such ``n`` whose chain it can
+    connect and build check circuits on. ``shots`` and ``seed`` apply to sampled frameworks
+    (Stim). A framework that is not installed, or cannot express any check circuit, is listed
+    in ``skipped`` with the reason.
     """
     names = list(FRAMEWORKS if frameworks is None else frameworks)
     unknown = [n for n in names if n not in FRAMEWORKS]
@@ -231,8 +231,7 @@ def check(
         raise ValueError(f"unknown framework {unknown[0]!r}; choose from {', '.join(FRAMEWORKS)}")
     if not isinstance(shots, int) or shots < 1:
         raise ValueError(f"shots={shots!r}: give a positive number of shots")
-    chain = _chain(profile, layout)
-    circuits = build_circuits(profile, chain)
+    chain, circuits = _plan(profile, layout)
     if not circuits:
         raise NoiseVaultError(
             f"{profile.id} has no calibrated native gate with a known unitary on qubits {chain},"
@@ -271,9 +270,25 @@ def check(
 # circuits -----------------------------------------------------------------------------------
 
 
-def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int] | None) -> list[int]:
-    if layout is None:
-        return _longest_suggested_chain(profile)
+def _plan(
+    profile: Profile, layout: Mapping[Hashable, int] | Sequence[int] | None
+) -> tuple[list[int], tuple[Circuit, ...]]:
+    if layout is not None:
+        chain = _chain(profile, layout)
+        return chain, build_circuits(profile, chain)
+    for n in range(min(MAX_QUBITS, profile.device.num_qubits), 1, -1):
+        try:
+            chain = _chain(profile, profile.suggest_layout(n))
+        except LayoutError:
+            continue
+        circuits = build_circuits(profile, chain)
+        if circuits:
+            return chain, circuits
+    chain = list(profile.suggest_layout(1).values())
+    return chain, build_circuits(profile, chain)
+
+
+def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int]) -> list[int]:
     n = len(layout)
     if not 1 <= n <= MAX_QUBITS:
         raise LayoutError(f"a check layout has 1 to {MAX_QUBITS} qubits, got {n}")
@@ -288,15 +303,6 @@ def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int] | No
                     " (profile.suggest_layout(n) gives one)"
                 )
     return chain
-
-
-def _longest_suggested_chain(profile: Profile) -> list[int]:
-    for n in range(min(MAX_QUBITS, profile.device.num_qubits), 1, -1):
-        try:
-            return _chain(profile, profile.suggest_layout(n))
-        except LayoutError:
-            continue
-    return list(profile.suggest_layout(1).values())
 
 
 def build_circuits(
