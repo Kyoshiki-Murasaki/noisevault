@@ -486,6 +486,8 @@ def test_symmetrized_readout_and_reset_errors_in_each_basis():
         ("MPP Z0*Z1*Z0", {"MPP(0.06) Z0*Z1*Z0": 0.06}),
         ("MPP Y0*Z1*Y0*Z2*Z2", {"MPP(0.06) Y0*Z1*Y0*Z2*Z2": 0.06}),
         ("MPP Z0*Z0", {"MPP Z0*Z0": 0.0}),
+        ("MPP !X0*X0", {"MPP !X0*X0": 1.0}),
+        ("MPP X0*Z0*X0*Z0*Z1", {"MPP(0.06) X0*Z0*X0*Z0*Z1": 0.94}),
         ("MPP Z0*Z0 Z1*Z2", {"MPP Z0*Z0": 0.0, "MPP(0.1128) Z1*Z2": 0.1128}),
     ],
 )
@@ -603,9 +605,53 @@ def test_exact_readout_ghz_matches_asymmetric_reference_on_manila():
     _assert_within_5_sigma(sample_with_readout(out, 200_000, seed=11), expected)
 
 
+def _readout_on_qubit_1(p1_given_0: float, p0_given_1: float) -> Profile:
+    qubit = {"index": 1, "readout": {"p1_given_0": p1_given_0, "p0_given_1": p0_given_1}}
+    return _readout_profile(qubits=[qubit])
+
+
+@pytest.mark.parametrize(
+    ("circuit", "flips"),
+    [
+        ("MPP Z0*Z1*Z0", [[0.2, 0.3]]),
+        ("MPP !Z0*Z1*Z0", [[0.3, 0.2]]),
+        ("MPP X0*Z0*X0*Z0*Z1", [[0.3, 0.2]]),  # X0*Z0*X0*Z0 is -I
+        ("MPP Z0*Z0 !X0*X0", [[0.0, 0.0], [0.0, 0.0]]),
+        ("MPP Z0*Z0 Z1 !X1*X2*X2", [[0.0, 0.0], [0.2, 0.3], [0.3, 0.2]]),
+    ],
+)
+def test_exact_readout_flips_each_reduced_product_by_its_qubit_and_sign(circuit, flips):
+    out = to_stim(_readout_on_qubit_1(0.2, 0.3), circuit, readout="exact")
+    assert str(out) == circuit
+    assert out.readout_flips.tolist() == flips
+
+
+def test_exact_readout_of_reduced_products_agrees_with_the_results_stim_records():
+    out = to_stim(
+        _readout_on_qubit_1(0.2, 0.3), "X 1\nMPP Z0*Z1*Z0 X0*Z0*X0*Z0*Z1 !Z0*Z0", readout="exact"
+    )
+    shots = 100_000
+    ones = sample_with_readout(out, shots, seed=5).mean(axis=0)
+    # Qubit 1 is in |1> and reads 0 with P(0|1) = 0.3; ideally Z1 records 1, -Z1 0 and -I 1.
+    want = np.array([0.7, 0.3, 1.0])
+    assert np.all(np.abs(ones - want) <= 5 * np.sqrt(want * (1 - want) / shots))
+
+
+def test_an_anti_hermitian_product_is_left_for_stim_to_refuse():
+    out = to_stim(_readout_profile(), "MPP X0*Z0", readout="exact")
+    assert str(out) == "MPP X0*Z0"
+    with pytest.raises(ValueError, match="anti-Hermitian"):
+        sample_with_readout(out, 1)
+
+
 @pytest.mark.parametrize(
     ("circuit", "reason"),
-    [("M 0\nCX rec[-1] 1\nM 1", "feeds a measurement"), ("MPP X0*X1", "multi-qubit product")],
+    [
+        ("M 0\nCX rec[-1] 1\nM 1", "feeds a measurement"),
+        ("MPP X0*X1", "multi-qubit product"),
+        ("MPP Z0*Z1*Z1*Z2", "multi-qubit product"),
+        ("MZZ 0 1", "multi-qubit product"),
+    ],
 )
 def test_exact_readout_refuses_what_it_cannot_do_exactly(circuit, reason):
     with pytest.raises(ValueError, match=reason):

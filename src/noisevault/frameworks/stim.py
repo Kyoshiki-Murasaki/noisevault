@@ -48,6 +48,9 @@ EventCounts = tuple[tuple[str, str, int], ...]  # (event, key, count) that one g
 _ANNOTATIONS = frozenset({"DETECTOR", "OBSERVABLE_INCLUDE", "QUBIT_COORDS", "SHIFT_COORDS"})
 _HERALDED = frozenset({"HERALDED_ERASE", "HERALDED_PAULI_CHANNEL_1"})
 _COMBINED = frozenset({"MPP", "SPP", "SPP_DAG"})  # a target group is joined by combiners
+# Powers of i in Pauli products, with Paulis coded x + 2z (X=1, Z=2, Y=3). X*Y = iZ, Y*Z = iX
+# and Z*X = iY; the reverse order gives -i.
+_I_POWER = {(1, 3): 1, (3, 2): 1, (2, 1): 1, (3, 1): 3, (2, 3): 3, (1, 2): 3}
 # The registry gate each Stim gate equals and, for an MS gate at fixed phases, the rotation it
 # also equals; conversion.native_name picks the one a profile calibrates.
 _NAMES: dict[str, tuple[str, str | None]] = {
@@ -273,7 +276,7 @@ def _scan(circuit: stim.Circuit, found: _Scan | None = None) -> _Scan:
                 found.feedback = found.feedback or _short(item)
             elif kind == "gate" and len(acted := _acted_on(item.name, group)) == 2:
                 found.pairs.add((acted[0], acted[1]))
-            if kind == "measure" and len(qubits) > 1:
+            if kind == "measure" and len(_acted_on(item.name, group)) > 1:
                 found.product = found.product or _short(item)
     return found
 
@@ -558,9 +561,14 @@ class _Exporter:
             if inst.name in _HERALDED or inst.name == "MPAD":
                 rows += [(0.0, 0.0)] * len(inst.targets_copy())
             elif kind == "measure":
-                for t in inst.targets_copy():
-                    a, b = self._readout(t.value)  # a = P(1|0), b = P(0|1)
-                    rows.append((b, a) if t.is_inverted_result_target else (a, b))
+                for group in inst.target_groups():
+                    if inst.name in _COMBINED:
+                        qubits, negative = _pauli_product(group)
+                    else:  # the scan refused MXX, MYY and MZZ, so the group is one target
+                        (target,) = group
+                        qubits, negative = [target.value], target.is_inverted_result_target
+                    a, b = self._readout(qubits[0]) if qubits else (0.0, 0.0)  # P(1|0), P(0|1)
+                    rows.append((b, a) if negative else (a, b))
         return np.array(rows, dtype=float).reshape(-1, 2)
 
     def finish(self) -> None:
@@ -692,16 +700,30 @@ def _disjoint_chunks(groups: list[list[stim.GateTarget]]) -> list[list[list[stim
 
 def _acted_on(name: str, group: Sequence[stim.GateTarget]) -> list[int]:
     """Qubits a target group of instruction ``name`` acts on; sweep bits and measurement
-    records are classical controls, not qubits. A Pauli product is reduced first: factors on
-    one qubit multiply (X*Z is Y up to phase), and a qubit whose factors cancel is not acted
-    on."""
+    records are classical controls, not qubits. A Pauli product is reduced first (see
+    :func:`_pauli_product`)."""
     if name not in _COMBINED:
         return [t.value for t in group if t.qubit_value is not None]
-    bits: dict[int, int] = {}
+    return _pauli_product(group)[0]
+
+
+def _pauli_product(group: Sequence[stim.GateTarget]) -> tuple[list[int], bool]:
+    """The qubits a Pauli product acts on once reduced, and whether its sign is negative.
+
+    Factors on one qubit multiply (X*Z is Y up to phase), and a qubit whose factors cancel is
+    not acted on. The sign is negative for an odd number of ``!`` targets. Factors that multiply
+    to -1, such as ``X0*Z0*X0*Z0``, flip it again. Stim's simulators refuse a product with an
+    imaginary phase, such as ``X0*Z0``, so its sign does not matter.
+    """
+    paulis: dict[int, int] = {}
+    power, negative = 0, False
     for t in group:
-        x, z = t.is_x_target or t.is_y_target, t.is_z_target or t.is_y_target
-        bits[t.value] = bits.get(t.value, 0) ^ (x + 2 * z)
-    return [q for q, b in bits.items() if b]
+        pauli = (t.is_x_target or t.is_y_target) + 2 * (t.is_z_target or t.is_y_target)
+        before = paulis.get(t.value, 0)
+        power += _I_POWER.get((before, pauli), 0)
+        paulis[t.value] = before ^ pauli
+        negative ^= t.is_inverted_result_target
+    return [q for q, p in paulis.items() if p], negative != (power % 4 == 2)
 
 
 def _text(
