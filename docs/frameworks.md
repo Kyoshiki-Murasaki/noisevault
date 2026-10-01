@@ -93,7 +93,8 @@ What the report can list:
   insert delays on idle qubits. Effects. Natives Qiskit cannot target, such as Google's
   `sycamore`, are left out of the simulator and named in the report.
 - **Unknown.** Values the profile lacks. The bundled IBM snapshots have no preparation error, so
-  resets add none.
+  resets add none. A `delay` on a qubit with no T1, T2 or dephasing rate adds no noise, and the
+  report names the qubit.
 
 `readout=False` leaves measurements noiseless.
 

@@ -639,6 +639,70 @@ def test_unbound_delay_duration_says_to_bind_it_first() -> None:
     assert sim.run(bound, shots=1).result().success
 
 
+def _coherence_on_qubit_0(**coherence: float) -> Profile:
+    """Three qubits with noiseless x and sx and perfect resets; only qubit 0 has coherence data."""
+    return Profile.model_validate(
+        toy(
+            gates={
+                "rz": {"virtual": True},
+                "x": {"avg_infidelity": 0},
+                "sx": {"avg_infidelity": 0},
+                "cz": {"avg_infidelity": 1e-2, "duration_ns": 70},
+            },
+            qubits=[{"index": 0, **coherence}],
+            prep={"error": 0},
+        )
+    )
+
+
+def test_delays_report_each_qubit_without_relaxation_data_as_unknown() -> None:
+    sim = quiet_export(_coherence_on_qubit_0(t1_us=50, t2_us=40), readout=False)
+    sim.set_options(method="density_matrix")
+    assert sim.report.unknown == []
+    circuit = QuantumCircuit(3)
+    circuit.x([0, 1])
+    circuit.delay(100_000, [0, 1], unit="ns")
+    decayed = np.exp(-100_000 / 50_000)
+    assert aer_probabilities(sim, circuit, [0, 1]) == pytest.approx(
+        [0, 1 - decayed, 0, decayed], abs=1e-12
+    )
+    sim.run(circuit).result()
+    sim.run([circuit, circuit]).result()
+    unknown_1 = "T1 and T2 of qubit 1 (no delay relaxation)"
+    assert sim.report.unknown == [unknown_1]
+    assert "delay: thermal relaxation and dephasing over its duration" in sim.report.exact
+    other = QuantumCircuit(3)
+    other.delay(500, 2, unit="ns")
+    sim.run(other).result()
+    assert sim.report.unknown == [unknown_1, "T1 and T2 of qubit 2 (no delay relaxation)"]
+    assert f"unknown (no noise applied): {unknown_1}, T1 and T2 of qubit 2" in (
+        sim.report.summary()
+    )
+
+
+@pytest.mark.parametrize(
+    ("coherence", "factor"),
+    [
+        ({"t1_us": 50}, np.exp(-10_000 / (2 * 50_000))),
+        ({"t2_us": 40}, np.exp(-10_000 / 40_000)),
+        ({"dephasing_rate_per_s": 2000}, 1 - 2 * 2000 * 10_000e-9),
+    ],
+    ids=["t1-only", "t2-only", "dephasing-only"],
+)
+def test_delays_relax_with_partial_coherence_data_and_report_nothing_unknown(
+    coherence: dict, factor: float
+) -> None:
+    sim = quiet_export(_coherence_on_qubit_0(**coherence), readout=False)
+    sim.set_options(method="density_matrix")
+    circuit = QuantumCircuit(3)
+    circuit.sx(0)
+    circuit.delay(10_000, 0, unit="ns")
+    circuit.save_density_matrix([0])
+    rho = np.asarray(sim.run(circuit).result().data()["density_matrix"])
+    assert abs(rho[0, 1]) == pytest.approx(0.5 * factor, rel=1e-9)
+    assert sim.report.unknown == []
+
+
 # report --------------------------------------------------------------------------------------
 
 

@@ -192,7 +192,7 @@ class NoiseVaultSimulator(AerSimulator):
         self._events = {(p.export.name, p.qargs): p.events for p in placements}
         self._passes = PassManager(
             [
-                LocalNoisePass(_delay_relaxation(profile.table), op_types=Delay),
+                LocalNoisePass(_delay_relaxation(profile.table, report), op_types=Delay),
                 *_aer_unitary_passes(target),
             ]
         )
@@ -638,14 +638,20 @@ def little_endian(op: np.ndarray) -> np.ndarray:
 # circuit passes -----------------------------------------------------------------------------
 
 
-def _delay_relaxation(table: NoiseTable) -> Callable[[Delay, Sequence[int]], QuantumError | None]:
+def _delay_relaxation(
+    table: NoiseTable, report: Report
+) -> Callable[[Delay, Sequence[int]], QuantumError | None]:
     """LocalNoisePass callback: thermal relaxation and dephasing over a delay's duration."""
 
     def relax(op: Delay, qubits: Sequence[int]) -> QuantumError | None:
         (q,) = qubits
         noise = table.qubit(q)
+        duration = _delay_ns(op, q)
+        if noise.t1_ns is None and noise.t2_ns is None and not noise.dephasing_rate_per_s:
+            report.mark_unknown(f"T1 and T2 of qubit {q} (no delay relaxation)")
+            return None
         kraus = thermal_relaxation_kraus(
-            noise.t1_ns, noise.t2_ns, _delay_ns(op, q), noise.dephasing_rate_per_s
+            noise.t1_ns, noise.t2_ns, duration, noise.dephasing_rate_per_s
         )
         return None if len(kraus) == 1 else kraus_error(kraus)
 
