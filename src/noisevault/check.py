@@ -220,9 +220,10 @@ def check(
     """Run the check circuits through every installed export (or ``frameworks``).
 
     ``layout`` gives the chain of physical qubits to use (1 to 4 qubits, neighbors connected);
-    by default ``profile.suggest_layout(4)``. ``shots`` and ``seed`` apply to sampled
-    frameworks (Stim). A framework that is not installed, or cannot express any check circuit,
-    is listed in ``skipped`` with the reason.
+    by default ``profile.suggest_layout(n)`` for the largest such ``n`` it can connect from
+    enabled qubits. ``shots`` and ``seed`` apply to sampled frameworks (Stim). A framework that
+    is not installed, or cannot express any check circuit, is listed in ``skipped`` with the
+    reason.
     """
     names = list(FRAMEWORKS if frameworks is None else frameworks)
     unknown = [n for n in names if n not in FRAMEWORKS]
@@ -272,8 +273,8 @@ def check(
 
 def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int] | None) -> list[int]:
     if layout is None:
-        n = min(MAX_QUBITS, profile.device.num_qubits)
-        chain = list(profile.suggest_layout(n).values())
+        chain = _suggested(profile)
+        n = len(chain)
     else:
         n = len(layout)
         if not 1 <= n <= MAX_QUBITS:
@@ -289,6 +290,16 @@ def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int] | No
                     " (profile.suggest_layout(n) gives one)"
                 )
     return chain
+
+
+def _suggested(profile: Profile) -> list[int]:
+    """``profile.suggest_layout``'s chain of the most qubits it can connect, up to MAX_QUBITS."""
+    for n in range(min(MAX_QUBITS, profile.device.num_qubits), 1, -1):
+        try:
+            return list(profile.suggest_layout(n).values())
+        except LayoutError:
+            continue
+    return list(profile.suggest_layout(1).values())
 
 
 def build_circuits(

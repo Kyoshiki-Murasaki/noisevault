@@ -378,6 +378,45 @@ def test_a_layout_with_unconnected_neighbors_says_how_to_fix_it() -> None:
         check(nv.load("ibm_manila"), layout=[0, 2])
 
 
+def _disabled(profile: Profile, *qubits: int) -> Profile:
+    data = profile.model_dump(mode="json", exclude_none=True)
+    data["qubits"] = [{"index": q, "disabled": True} for q in qubits]
+    return Profile.model_validate(data)
+
+
+def test_the_default_chain_leaves_out_disabled_qubits() -> None:
+    uniform = Profile.uniform(
+        "u",
+        technology="superconducting",
+        num_qubits=3,
+        one_qubit_error=0.01,
+        two_qubit_error=0.02,
+        readout_error=0.03,
+    )
+    result = check(_disabled(uniform, 0))
+    assert result.layout == {0: 1, 1: 2}
+    assert result.passed, result
+    assert [f.framework for f in result.frameworks] == ["qiskit", "cirq", "pennylane", "stim"]
+
+
+@pytest.mark.parametrize(("num_qubits", "layout"), [(4, {0: 2, 1: 3}), (2, {0: 0})])
+def test_the_default_chain_is_the_longest_the_enabled_qubits_connect(num_qubits, layout) -> None:
+    line = toy(
+        device={"name": "line", "technology": "superconducting", "num_qubits": num_qubits},
+        connectivity={"edges": [[i, i + 1] for i in range(num_qubits - 1)]},
+        readout={"error": 0.01},
+    )
+    result = check(_disabled(Profile.model_validate(line), 1), frameworks=["cirq"])
+    assert result.layout == layout
+    assert result.passed, result
+
+
+def test_a_device_with_every_qubit_disabled_has_no_default_chain() -> None:
+    profile = _disabled(Profile.model_validate(toy()), 0, 1, 2)
+    with pytest.raises(LayoutError, match=r"^test_toy has only 0 usable qubits, not 1$"):
+        check(profile)
+
+
 def test_bad_arguments_name_the_choices() -> None:
     profile = nv.load("ibm_manila")
     with pytest.raises(ValueError, match="choose from qiskit, cirq, pennylane, stim"):
