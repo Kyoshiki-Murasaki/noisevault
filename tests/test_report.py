@@ -56,7 +56,27 @@ def test_report_serializes_and_summarizes() -> None:
     assert data["events"] == {"typical_noise_used": {"h": 4}}
     assert len(data["approximated"]) == 1
     text = report.summary()
-    assert profile.id in text and "typical_noise_used: h=4" in text and text.endswith(HONESTY)
+    assert profile.id in text and text.endswith(HONESTY)
+    assert "counts: h took the typical native gate's noise 4 times" in text
+
+
+def test_summary_states_each_count_as_a_sentence() -> None:
+    _, report = _report()
+    report.count("typical_noise_used", "cx", 40)
+    report.count("typical_noise_used", "h")
+    report.count("reversed_record_used", "cz", 20)
+    report.count("circuit_channel_kept", "BitFlipChannel", 2)
+    report.count("future_event", "q3", 5)
+    counts = [line for line in report.summary().splitlines() if line.startswith("counts:")]
+    assert counts == [
+        "counts: cx took the typical native gate's noise 40 times;"
+        " h took the typical native gate's noise once;"
+        " cz used the calibration recorded for the opposite qubit order 20 times;"
+        " the circuit's own BitFlipChannel was kept as written, with no noise added, 2 times;"
+        " future event: q3 5 times"
+    ]
+    assert "=" not in counts[0]
+    assert report.to_dict()["events"]["reversed_record_used"] == {"cz": 20}
 
 
 def test_calibration_qualifiers_of_used_gates_are_reported() -> None:

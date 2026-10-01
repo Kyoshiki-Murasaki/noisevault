@@ -7,6 +7,7 @@ every framework reports the same way.
 
 from __future__ import annotations
 
+import sys
 import warnings
 from collections import Counter
 from dataclasses import dataclass, field
@@ -15,7 +16,8 @@ from typing import TYPE_CHECKING, Any
 from .errors import NoiseApproximationWarning, UnsupportedEffect
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Collection, Iterable
+    from types import FrameType
 
     from .channels import GateChannels
     from .profile import Effect, GateSpec, Profile
@@ -25,6 +27,15 @@ _INCLUDES = {  # includes item -> what the model does with it
     "1q_dressing": "explicit single-qubit gates in the circuit add their own error on top",
     "leakage": "applied as depolarizing noise; no population leaves the qubit",
     "spam": "readout and preparation noise, where applied, count state prep and measurement again",
+}
+_EVENTS = {  # event -> how summary() states one key's count
+    "typical_noise_used": "{key} took the typical native gate's noise {times}",
+    "reversed_record_used": (
+        "{key} used the calibration recorded for the opposite qubit order {times}"
+    ),
+    "circuit_channel_kept": (
+        "the circuit's own {key} was kept as written, with no noise added, {times}"
+    ),
 }
 
 
@@ -139,7 +150,8 @@ class Report:
     def warn_once(self, key: str, message: str) -> None:
         if key not in self._warned:
             self._warned.add(key)
-            warnings.warn(message, NoiseApproximationWarning, stacklevel=3)
+            # every export's framework label is also its top-level package name
+            warn_from_caller(message, NoiseApproximationWarning, packages=(self.framework,))
 
     # output ---------------------------------------------------------------------------------
 
@@ -196,15 +208,44 @@ class Report:
                 f"clamped: {len(quieter)} gate(s) less noisy than stated because the strongest"
                 f" depolarizing noise on top of relaxation falls short; largest {_worst(quieter)}"
             )
-        for name, counts in self.events.items():
-            lines.append(f"{name}: " + ", ".join(f"{k}={v}" for k, v in counts.most_common()))
+        if self.events:
+            lines.append(
+                "counts: "
+                + "; ".join(
+                    _count_sentence(name, key, n)
+                    for name, counts in self.events.items()
+                    for key, n in counts.most_common()
+                )
+            )
         lines.append(HONESTY)
         return "\n".join(lines)
+
+
+def warn_from_caller(message: str, category: type[Warning], packages: Collection[str] = ()) -> None:
+    """Warn at the first calling frame outside NoiseVault and ``packages`` (top-level names).
+
+    An export runs inside the framework's own calls (``with_noise``, ``qml.add_noise``), so a
+    fixed stacklevel lands on library code; the user's own line is what they can act on.
+    """
+    skipped = {"noisevault", *packages}
+    frame, level = sys._getframe(1), 2
+    while frame.f_back is not None and _package(frame) in skipped:
+        frame, level = frame.f_back, level + 1
+    warnings.warn(message, category, stacklevel=level)
+
+
+def _package(frame: FrameType) -> str:
+    return frame.f_globals.get("__name__", "").partition(".")[0]
 
 
 def _worst(clamps: list[Clamp]) -> str:
     c = max(clamps, key=lambda c: abs(c.achieved - c.requested))
     return f"{c.gate}{list(c.qubits)} {c.requested:.3g} -> {c.achieved:.3g}"
+
+
+def _count_sentence(event: str, key: str, n: int) -> str:
+    template = _EVENTS.get(event, event.replace("_", " ") + ": {key} {times}")
+    return template.format(key=key, times="once" if n == 1 else f"{n} times")
 
 
 def _append_new(items: list, item: Any) -> None:

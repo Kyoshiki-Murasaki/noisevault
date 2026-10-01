@@ -8,7 +8,8 @@ reset and delays follow their own rules and do not come through here.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Container, Mapping, Sequence
+from types import MappingProxyType
 from typing import Literal
 
 from . import gates
@@ -19,6 +20,33 @@ from .table import GateNoise, NoiseTable, Unavailable
 
 UnknownGates = Literal["typical", "error"]
 TYPICAL_FIX = "compile to native gates for realistic gate counts, or pass unknown_gates='error'"
+
+
+# Parameterless registry gates equal, up to global phase, to a rotation native at one angle.
+_ROTATION_OF: Mapping[str, str] = MappingProxyType(
+    {
+        **dict.fromkeys(("x", "sx", "sxdg"), "rx"),
+        "y": "ry",
+        **dict.fromkeys(("z", "s", "sdg", "t", "tdg"), "rz"),
+        "zz": "rzz",
+    }
+)
+
+
+def native_name(name: str, defined: Container[str], rotation: str | None = None) -> str:
+    """The gate whose calibration an operation equal to registry gate ``name`` uses.
+
+    ``defined`` holds a profile's gate names. The profile's ``name`` comes first, then the
+    rotation the operation equals at its angle: ``rx`` for ``sx`` and the other fixed gates
+    above, or ``rotation`` for a native with parameters (``rxx`` or ``ryy`` for an ``ms``).
+    With neither defined, a fixed gate keeps its own name and a native with parameters gives
+    way to the rotation, so errors and reports name the gate the circuit wrote.
+    """
+    rotation = rotation or _ROTATION_OF.get(name)
+    if rotation is None or name in defined:
+        return name
+    info = gates.lookup(name)
+    return rotation if rotation in defined or (info and info.params) else name
 
 
 def resolve_op(

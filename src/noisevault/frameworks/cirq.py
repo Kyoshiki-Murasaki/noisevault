@@ -29,7 +29,7 @@ except ImportError as exc:
 
 from .. import gates
 from ..channels import readout_matrix, thermal_relaxation_kraus
-from ..conversion import UnknownGates, resolve_op
+from ..conversion import UnknownGates, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
@@ -43,8 +43,8 @@ class _PowFamily:
     """Canonical names of a Cirq EigenGate class by exponent, compared modulo ``period``.
 
     Exponents that name no gate map to ``other``; when ``other`` is None the gate is unknown
-    and is reported as ``base**exponent``. A named exponent also maps to ``other`` when
-    ``defined`` (the profile's gates) has ``other`` but not that name.
+    and is reported as ``base**exponent``. A named exponent takes its name under
+    :func:`~noisevault.conversion.native_name`, with ``other`` as the rotation it equals.
     """
 
     base: str
@@ -57,9 +57,7 @@ class _PowFamily:
             for value, name in self.names:
                 gap = (float(exponent) - value) % self.period
                 if min(gap, self.period - gap) < _ANGLE_TOL:
-                    if name in defined or self.other not in defined:
-                        return name
-                    break
+                    return native_name(name, defined, self.other)
         if self.other is not None:
             return self.other
         shown = f"{exponent:.6g}" if isinstance(exponent, numbers.Real) else str(exponent)
@@ -68,7 +66,8 @@ class _PowFamily:
 
 # Up to a global phase these gates repeat with period 2 in the exponent (iSWAP with 4), so
 # inverses such as X**-1, S**-1 or CZ**-1 from cirq.inverse map to their gates. MS(pi, 0) is
-# XX**-0.5, so both signs are the native MS; MSGate is an XXPowGate and is named the same way.
+# XX**-0.5 and MS(pi/2, +-pi/2) is YY**+-0.5, so both signs are the native MS; MSGate is an
+# XXPowGate and is named the same way.
 _XX = _PowFamily("rxx", 2, ((0.5, "ms"), (-0.5, "ms")), "rxx")
 _POW: dict[type, _PowFamily] = {
     cirq.XPowGate: _PowFamily("x", 2, ((1, "x"), (0.5, "sx"), (-0.5, "sxdg")), "rx"),
@@ -88,7 +87,7 @@ _POW: dict[type, _PowFamily] = {
     cirq.ZZPowGate: _PowFamily("rzz", 2, ((0.5, "zz"),), "rzz"),
     cirq.XXPowGate: _XX,
     cirq.MSGate: _XX,
-    cirq.YYPowGate: _PowFamily("ryy", 2, (), "ryy"),
+    cirq.YYPowGate: _PowFamily("ryy", 2, ((0.5, "ms"), (-0.5, "ms")), "ryy"),
     cirq.CCXPowGate: _PowFamily("ccx", 2, ((1, "ccx"),), None),
 }
 
@@ -139,12 +138,13 @@ def gate_name(gate: cirq.Gate, defined: Container[str] = ()) -> str:
 
     The most specific class decides: this module's own gates (:class:`ECRGate`), an exponent
     table for the power gates, else the gate registry's Cirq column. A power gate at a fixed
-    angle (``ZZ**0.5`` is ``zz``, ``X`` is ``x``) takes its rotation's name instead (``rzz``,
-    ``rx``) when ``defined``, a profile's gate names, has the rotation but not the fixed
-    gate. Any other gate is named
-    after its class in snake case without the ``Gate`` suffix (``FSimGate`` -> ``fsim``,
-    ``MatrixGate`` -> ``matrix``), so a profile can calibrate it under that name; otherwise it
-    gets the typical-noise rule. A power gate whose name depends on an unresolved exponent
+    angle (``ZZ**0.5`` is ``zz``, ``X`` is ``x``, ``XX**0.5`` and ``YY**0.5`` are ``ms``) takes
+    its rotation's name instead (``rzz``, ``rx``, ``rxx``, ``ryy``) when ``defined``, a
+    profile's gate names, has the rotation but not the fixed gate (see
+    :func:`~noisevault.conversion.native_name`). Any other gate is named after its class in
+    snake case without the ``Gate`` suffix (``FSimGate`` -> ``fsim``, ``MatrixGate`` ->
+    ``matrix``), so a profile can calibrate it under that name; otherwise it gets the
+    typical-noise rule. A power gate whose name depends on an unresolved exponent
     (``X**t`` is ``x`` at t=1) raises ValueError.
     """
     for cls in type(gate).__mro__:

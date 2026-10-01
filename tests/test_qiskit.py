@@ -580,6 +580,12 @@ def _reported_profile(**extra: Any) -> Profile:
     )
 
 
+def test_typical_noise_warnings_point_at_the_callers_line() -> None:
+    with pytest.warns(NoiseApproximationWarning, match="x on qubits") as caught:
+        to_qiskit(_reported_profile())
+    assert [w.filename for w in caught] == [__file__] * len(caught)
+
+
 def test_report_lists_what_the_export_did() -> None:
     profile = _reported_profile(effects=[{"type": "leakage", "gate": "cz", "prob": 1e-4}])
     with pytest.warns(NoiseApproximationWarning, match="x on qubits") as caught:

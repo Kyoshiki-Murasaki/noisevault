@@ -182,9 +182,11 @@ What the report can list:
 noise is on, so the model raises an error for shot vectors instead of returning wrong numbers.
 Run each shot count separately, or pass `readout=False`.
 
-PennyLane has no operation named after the `r` and `zz` natives of trapped-ion profiles. A
-`qml.Rot(a, theta, -a)` gets the profile's `r` noise and `qml.IsingZZ(pi/2)` its `zz` noise;
-other angles, and `ms`, get typical noise. The report counts each use.
+PennyLane has no operation named after the `r`, `zz` and `ms` natives of trapped-ion profiles.
+A `qml.Rot(a, theta, -a)` gets the profile's `r` noise and `qml.IsingZZ(pi/2)` its `zz` noise.
+On a profile with an `ms` native, `qml.IsingXX(±pi/2)` and `qml.IsingYY(±pi/2)` get its `ms`
+noise. Other angles, and gates the profile has no native for, get typical noise with a warning,
+and the report counts each use.
 
 ## Stim
 

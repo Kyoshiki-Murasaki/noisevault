@@ -220,7 +220,6 @@ _HALF = (np.pi / 2,)
         ({"rzz": _RZZ, "zz": _ZZ}, "SQRT_ZZ", "zz", ()),
         ({"rzz": _RZZ, "zz": _ZZ}, "SQRT_ZZ_DAG", "rzz", (-np.pi / 2,)),
         ({"zz": _ZZ}, "SQRT_ZZ", "zz", ()),
-        ({"zz": _ZZ}, "SQRT_ZZ_DAG", "zz", None),  # zz followed by virtual Z gates
         ({"ms": _MS}, "SQRT_XX", "ms", (0.0, 0.0)),
         ({"ms": _MS, "rxx": _RXX}, "SQRT_XX", "ms", (0.0, 0.0)),
         ({"ms": _MS, "rxx": _RXX}, "SQRT_XX_DAG", "ms", (np.pi, 0.0)),
@@ -246,6 +245,13 @@ def test_fixed_angle_gates_take_the_calibrated_native_they_equal(
     assert not out.report.events.get("typical_noise_used")
 
 
+def test_sqrt_zz_dag_is_no_zz_gate():
+    natives = {"rz": {"virtual": True}, "zz": _ZZ}
+    profile = Profile.model_validate(toy(gates=natives))
+    with pytest.raises(MissingCalibrationError, match="rzz on qubits"):
+        to_stim(profile, "SQRT_ZZ_DAG 0 1", unknown_gates="error")
+
+
 def test_fixed_angle_gates_without_their_natives_are_named_after_the_rotation():
     out = to_stim(_manila(), "SQRT_XX 0 1\nSQRT_YY 0 1\nSQRT_ZZ_DAG 0 1")
     assert set(out.report.events["typical_noise_used"]) == {"rxx", "ryy", "rzz"}
@@ -256,14 +262,29 @@ def test_z_family_gates_are_free_when_rz_is_virtual():
     assert str(out) == "S 0\nZ 1\nS_DAG 2\nM 0 1 2"
 
 
+def test_typical_noise_warnings_point_at_the_callers_line():
+    with pytest.warns(NoiseApproximationWarning) as caught:
+        to_stim(_manila(), "H 0\nCZ 0 1")
+    assert [w.filename for w in caught] == [__file__] * 2
+
+
+def test_default_warning_filter_shows_each_typical_noise_cause_once():
+    profile = _manila()  # loading resets the warning registries, which would hide repeats
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("default")
+        for _ in range(3):
+            to_stim(profile, "H 0\nCZ 0 1\nH 0")
+    assert sorted(str(w.message).split(" on ")[0] for w in caught) == ["cz", "h"]
+
+
 def test_unknown_gates_get_typical_noise_or_raise():
     profile = _manila()
-    with pytest.warns(NoiseApproximationWarning, match="sqrt_y"):
-        out = to_stim(profile, "SQRT_Y 0")
+    with pytest.warns(NoiseApproximationWarning, match="c_xyz"):
+        out = to_stim(profile, "C_XYZ 0")
     assert list(out)[1].name == "PAULI_CHANNEL_1"
-    assert out.report.events["typical_noise_used"]["sqrt_y"] == 1
+    assert out.report.events["typical_noise_used"]["c_xyz"] == 1
     with pytest.raises(MissingCalibrationError, match="unknown_gates='typical'"):
-        to_stim(profile, "SQRT_Y 0", unknown_gates="error")
+        to_stim(profile, "C_XYZ 0", unknown_gates="error")
 
 
 @pytest.mark.parametrize("tick_ns", [None, 50.0])

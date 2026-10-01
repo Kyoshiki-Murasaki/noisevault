@@ -613,6 +613,14 @@ def test_report_describes_the_conversion() -> None:
         to_cirq(strict)
 
 
+def test_typical_noise_warnings_point_at_the_callers_line() -> None:
+    q = cirq.LineQubit.range(2)
+    model = migrated(MANILA_V01).to_cirq()
+    with pytest.warns(NoiseApproximationWarning) as caught:
+        cirq.Circuit(cirq.H(q[0]), cirq.CZ(*q)).with_noise(model)
+    assert [w.filename for w in caught] == [__file__] * 2
+
+
 def test_first_call_just_works_on_a_bundled_profile() -> None:
     profile = nv.load("ibm_manila")
     model = profile.to_cirq()

@@ -652,6 +652,21 @@ def test_reset_gets_the_preparation_error(qml) -> None:
 # unknown gates, report -----------------------------------------------------------------------
 
 
+def test_typical_noise_warnings_point_at_the_callers_line(qml, manila) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit():
+        qml.Hadamard(0)
+        qml.CZ([0, 1])
+        return qml.expval(qml.PauliX(0) @ qml.PauliZ(1) + qml.PauliZ(0))
+
+    with pytest.warns(NoiseApproximationWarning) as caught:
+        qml.add_noise(circuit, to_pennylane(manila))()
+    assert len(caught) == 3  # h, cz, and the readout the observable rules out
+    assert [w.filename for w in caught] == [__file__] * 3
+
+
 def test_unknown_gate_warns_once_and_counts_every_use(qml, manila) -> None:
     from noisevault.frameworks.pennylane import to_pennylane
 

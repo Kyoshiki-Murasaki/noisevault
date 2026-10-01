@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import sys
 from collections import Counter
-from collections.abc import Callable, Hashable, Mapping, Sequence
+from collections.abc import Callable, Container, Hashable, Mapping, Sequence
 from math import pi
 from typing import Any
 
@@ -39,7 +39,7 @@ from pennylane.ops.op_math import Conditional
 
 from .. import gates
 from ..channels import readout_matrix
-from ..conversion import UnknownGates, resolve_op
+from ..conversion import UnknownGates, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
@@ -57,6 +57,7 @@ _CANONICAL = {info.pennylane: info.name for info in gates.GATES.values() if info
 _AT_ANGLE: dict[str, tuple[str, Callable[[Sequence[Any]], Any], tuple[float, ...]]] = {
     "IsingZZ": ("zz", lambda p: p[0], (pi / 2,)),
     "IsingXX": ("ms", lambda p: p[0], (pi / 2, -pi / 2)),  # ms(0, 0) and ms(pi, 0)
+    "IsingYY": ("ms", lambda p: p[0], (pi / 2, -pi / 2)),  # ms(pi/2, pi/2) and ms(pi/2, -pi/2)
     "Rot": ("r", lambda p: p[0] + p[2], (0.0,)),  # Rot(a, theta, -a) = r(theta, pi/2 - a)
 }
 _BUILDERS: dict[str, Callable[..., Operator]] = {
@@ -168,14 +169,8 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             )
         physical = tuple(self.physical_qubit(w) for w in op.wires)
         wire_of = dict(zip(physical, op.wires, strict=True))
-        for kraus, qubits in self._channels(self._gate_name(gate), physical):
+        for kraus, qubits in self._channels(gate_name(gate, self.profile.gates), physical):
             qml.QubitChannel(list(kraus), wires=[wire_of[q] for q in qubits])
-
-    def _gate_name(self, op: Operator) -> str:
-        """The registry name of ``op``; an operation that is a profile native at its angle
-        (``IsingZZ(pi/2)`` as ``zz``, ``Rot(a, theta, -a)`` as ``r``) takes that native's name."""
-        native = _native_at_angle(op)
-        return native if native in self.profile.gates else _CANONICAL.get(op.name, op.name)
 
     def _reset_noise(self, op: MidMeasureMP, **_: Any) -> None:
         qubit = self.physical_qubit(op.wires[0])
@@ -273,14 +268,28 @@ def to_pennylane(
     templates first, so they are noised gate by gate; pass ``level="top"`` to noise
     ``Adjoint(SX)``, ``Adjoint(S)`` and ``Adjoint(T)`` as the profile's sxdg, sdg and tdg.
 
-    ``qml.IsingZZ(pi/2)`` gets the noise of a profile's ``zz``, ``qml.IsingXX(+-pi/2)`` that of
-    its ``ms``, and ``qml.Rot(a, theta, -a)`` that of its ``r`` (:func:`operation_for` builds
-    zz and r). Traced angles, as under ``jax.jit``, cannot be compared, so those operations
-    then get ``rzz`` or ``rxx`` noise or the typical-noise rule.
+    ``qml.IsingZZ(pi/2)`` gets the noise of a profile's ``zz``, ``qml.IsingXX(+-pi/2)`` and
+    ``qml.IsingYY(+-pi/2)`` that of its ``ms``, and ``qml.Rot(a, theta, -a)`` that of its ``r``
+    (:func:`operation_for` builds zz and r); see :func:`gate_name`. Traced angles, as under
+    ``jax.jit``, cannot be compared, so those operations then get ``rzz``, ``rxx`` or ``ryy``
+    noise or the typical-noise rule.
     """
     return NoiseVaultPennyLaneModel(
         profile, layout=layout, unknown_gates=unknown_gates, readout=readout
     )
+
+
+def gate_name(op: Operator, defined: Container[str] = ()) -> str:
+    """The registry name of ``op`` under :func:`~noisevault.conversion.native_name`.
+
+    An operation that equals a registry gate at its angle is named after it (``IsingZZ(pi/2)``
+    as ``zz``, ``IsingXX(pi/2)`` and ``IsingYY(pi/2)`` as ``ms``, ``Rot(a, theta, -a)`` as
+    ``r``), and a fixed gate on a profile with only the rotation it equals after the rotation
+    (``SX`` as ``rx``); ``defined`` is a profile's gate names.
+    """
+    own = _CANONICAL.get(op.name, op.name)
+    native = _native_at_angle(op)
+    return native_name(own, defined) if native is None else native_name(native, defined, own)
 
 
 def operation_for(name: str) -> Callable[..., Operator] | None:
