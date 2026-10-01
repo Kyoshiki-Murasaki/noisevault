@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import difflib
+from collections.abc import Iterable
+
 
 class NoiseVaultError(Exception):
     """Base class for every expected NoiseVault failure."""
@@ -37,6 +40,12 @@ class FingerprintMismatch(NoiseVaultError, ValueError):
 
 class SourceUnavailable(NoiseVaultError):
     """A calibration source cannot be reached or is not installed."""
+
+
+def did_you_mean(given: str, choices: Iterable[str]) -> str:
+    """``did you mean X? `` for the choice closest to a mistyped value, or '' when none is close."""
+    close = difflib.get_close_matches(given, list(choices), n=1)
+    return f"did you mean {close[0]}? " if close else ""
 
 
 class NoiseVaultWarning(UserWarning):

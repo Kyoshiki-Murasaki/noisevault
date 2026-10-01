@@ -17,7 +17,10 @@ from datetime import date, datetime
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from stat import S_ISREG
 from typing import Any, Literal, NamedTuple
+
+from pydantic import ValidationError
 
 from .errors import (
     AmbiguousRef,
@@ -25,6 +28,7 @@ from .errors import (
     NoiseVaultWarning,
     ProfileNotFound,
     SourceUnavailable,
+    did_you_mean,
 )
 from .profile import Profile, Ref, load_bytes, load_file, parse_ref, write_atomically
 
@@ -32,6 +36,18 @@ _PULL_SOURCES = {
     "ibm": "noisevault.sources.ibm_public",
     "ibm-account": "noisevault.sources.ibm_account",
     "ionq": "noisevault.sources.ionq",
+}
+
+# The ProfileInfo fields an index entry carries; whatever else it holds is ignored.
+_ENTRY_TYPES: dict[str, Any] = {
+    "id": str,
+    "calibrated_at": str | None,
+    "technology": str,
+    "vendor": str | None,
+    "num_qubits": int,
+    "fingerprint": str,
+    "data_kind": str,
+    "license": str | None,
 }
 
 
@@ -63,20 +79,20 @@ class ProfileInfo:
     def from_entry(
         cls, entry: dict[str, Any], location: Literal["vault", "bundled"], path: Path | Traversable
     ) -> ProfileInfo:
-        """From a line of a catalog index (see :func:`index_entry`)."""
-        stamp = entry.get("calibrated_at")
-        return cls(
-            id=entry["id"],
-            calibrated_at=datetime.fromisoformat(stamp) if stamp else None,
-            technology=entry["technology"],
-            vendor=entry.get("vendor"),
-            num_qubits=entry["num_qubits"],
-            fingerprint=entry["fingerprint"],
-            location=location,
-            path=path,
-            data_kind=entry.get("data_kind", "unknown"),
-            license=entry.get("license"),
-        )
+        """From a line of a catalog index (see :func:`index_entry`); ValueError if it is damaged."""
+        fields = {"calibrated_at": None, "vendor": None, "data_kind": "unknown", "license": None}
+        fields |= {key: entry[key] for key in _ENTRY_TYPES if key in entry}
+        for key, kind in _ENTRY_TYPES.items():
+            value = fields.get(key)
+            if isinstance(value, bool) or not isinstance(value, kind):
+                raise ValueError(f"index entry {key} is {value!r}")
+        stamp = fields.pop("calibrated_at")
+        when = datetime.fromisoformat(stamp) if stamp else None
+        if when is not None and when.tzinfo is None:
+            raise ValueError(f"index entry time {stamp} has no time zone")
+        if not re.fullmatch(r"[0-9a-f]{64}", fields["fingerprint"]):
+            raise ValueError(f"index entry fingerprint {fields['fingerprint']!r} is not sha256 hex")
+        return cls(**fields, calibrated_at=when, location=location, path=path)
 
 
 def index_entry(profile: Profile) -> dict[str, Any]:
@@ -142,18 +158,11 @@ def vault_profiles() -> list[ProfileInfo]:
     for path in sorted(folder.glob("*.json*")):
         if path.name.startswith("."):  # the index cache and in-flight temporary files
             continue
-        stat = path.stat()
-        signature = [stat.st_size, stat.st_mtime_ns]
-        entry = cached.get(path.name)
-        info = _cached_info(entry, signature, path)
-        if info is None:
-            try:
-                profile = load_file(path)
-            except Exception as exc:  # one unreadable file must not hide the rest
-                warnings.warn(f"skipping {path}: {exc}", NoiseVaultWarning, stacklevel=2)
-                continue
-            entry = {"signature": signature, **index_entry(profile)}
-            info = ProfileInfo.from_entry(entry, "vault", path)
+        try:
+            entry, info = _vault_entry(path, cached.get(path.name))
+        except Exception as exc:  # one damaged or odd entry must not hide the rest
+            warnings.warn(_skipped(path, exc), NoiseVaultWarning, stacklevel=2)
+            continue
         index[path.name] = entry
         out.append(info)
     if index != cached:
@@ -161,14 +170,33 @@ def vault_profiles() -> list[ProfileInfo]:
     return out
 
 
-def _cached_info(entry: Any, signature: list[int], path: Path) -> ProfileInfo | None:
-    """The cached listing of an unchanged file, or None when the entry is stale or damaged."""
-    if not isinstance(entry, dict) or entry.get("signature") != signature:
-        return None
-    try:
-        return ProfileInfo.from_entry(entry, "vault", path)
-    except (KeyError, TypeError, ValueError):
-        return None
+def _vault_entry(path: Path, cached: Any) -> tuple[dict[str, Any], ProfileInfo]:
+    """The index entry and listing of one vault file, from the cache while the file is unchanged."""
+    stat = path.stat()
+    if not S_ISREG(stat.st_mode):  # opening a pipe would block the listing
+        raise OSError("not a regular file")
+    signature = [stat.st_size, stat.st_mtime_ns]
+    if isinstance(cached, dict) and cached.get("signature") == signature:
+        try:
+            return cached, ProfileInfo.from_entry(cached, "vault", path)
+        except ValueError:
+            pass
+    entry = {"signature": signature, **index_entry(load_file(path))}
+    return entry, ProfileInfo.from_entry(entry, "vault", path)
+
+
+def _skipped(path: Path, exc: Exception) -> str:
+    """One line naming a vault entry that cannot be listed, and why."""
+    if path.is_symlink() and not path.exists():
+        why = f"it links to {path.readlink()}, which does not exist; remove the link"
+    elif isinstance(exc, ValidationError):
+        n = exc.error_count()
+        why = f"not a valid profile ({n} problem{'s' * (n != 1)}); run `nv validate {path}`"
+    elif isinstance(exc, OSError):
+        why = exc.strerror or str(exc)
+    else:
+        why = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+    return f"skipped {path}: {why}"
 
 
 def _read_vault_index(folder: Path) -> dict[str, dict[str, Any]]:
@@ -299,9 +327,9 @@ def pull_and_save(
     output: str | Path | None = None,
 ) -> Pulled:
     """:func:`pull`, also saying where the profile is and whether this call wrote it."""
-    source = source or _default_source(device)
+    source = source.strip().lower() if source else _default_source(device)
     if source not in _PULL_SOURCES:
-        raise ValueError(f"unknown source {source!r}; choose one of {', '.join(_PULL_SOURCES)}")
+        raise ValueError(_unknown_source(source))
     module = importlib.import_module(_PULL_SOURCES[source])
     profile = module.pull(device, at=at)
     if output is not None:
@@ -347,6 +375,19 @@ def _default_source(device: str) -> str:
         f"no live source pulls {device!r}: pull reads IBM devices (ibm_..., source='ibm' or"
         f" 'ibm-account') and IonQ devices (ionq..., source='ionq'){hint}"
     )
+
+
+def _unknown_source(source: str) -> str:
+    choices = ", ".join(_PULL_SOURCES)
+    guess = did_you_mean(source, _PULL_SOURCES)
+    offline = sorted({i.vendor for i in bundled_profiles() if i.vendor} - _PULL_SOURCES.keys())
+    vendor = next((v for v in offline if did_you_mean(source, [v])), None)
+    if vendor and not guess:
+        return (
+            f"unknown source {source!r}; {vendor} devices have no live source;"
+            f" `nv list --vendor {vendor}` shows the bundled ones (sources: {choices})"
+        )
+    return f"unknown source {source!r}; {guess}choose one of {choices}"
 
 
 def _expect_prefix(expect: str) -> str:

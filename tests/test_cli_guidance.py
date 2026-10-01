@@ -1,0 +1,114 @@
+"""A mistyped name, an ambiguous ref or an odd vault entry gets one line that says what to type."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+import noisevault as nv
+from noisevault.catalog import vault_path
+from noisevault.cli import app
+from noisevault.sources import ibm_public, ionq
+
+runner = CliRunner()
+
+
+def _one_error(args: list[str], code: int = 1) -> str:
+    result = runner.invoke(app, args, env={"COLUMNS": "80"}, prog_name="nv")
+    assert result.exit_code == code and result.stdout == ""
+    assert result.stderr.startswith("error: ") and result.stderr.count("\n") == 1, result.stderr
+    return result.stderr
+
+
+def test_pull_of_a_mistyped_ibm_device_names_the_close_one(monkeypatch) -> None:
+    listing = json.dumps([{"name": "ibm_fez"}, {"name": "ibm_kingston"}]).encode()
+
+    def fetch(url: str) -> bytes:
+        if url == ibm_public.BASE_URL:
+            return listing
+        raise ibm_public._NotFound(url)
+
+    monkeypatch.setattr(ibm_public, "fetch", fetch)
+    assert "did you mean ibm_fez?" in _one_error(["pull", "ibm_fezz"])
+
+
+def test_pull_of_a_mistyped_ionq_device_names_the_close_one(monkeypatch) -> None:
+    backends = [{"backend": "qpu.forte-1"}, {"backend": "qpu.aria-1"}, {"backend": "simulator"}]
+    monkeypatch.setattr(ionq, "_get", lambda url: json.dumps(backends).encode())
+    with pytest.raises(nv.SourceUnavailable, match=r"did you mean qpu\.forte-1\?"):
+        ionq.pull("ionq_forte-11")
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("ibmm", "unknown source 'ibmm'; did you mean ibm? choose one of ibm, ibm-account, ionq"),
+        ("IBM-Account", None),
+        ("googel", "google devices have no live source; `nv list --vendor google` shows"),
+        ("google", "google devices have no live source; `nv list --vendor google` shows"),
+        ("xyz", "unknown source 'xyz'; choose one of ibm, ibm-account, ionq\n"),
+    ],
+)
+def test_pull_with_a_mistyped_source_says_what_to_type(monkeypatch, source, expected) -> None:
+    monkeypatch.setattr(
+        "noisevault.sources.ibm_account.pull",
+        lambda device, at=None: (_ for _ in ()).throw(nv.SourceUnavailable("reached the account")),
+    )
+    error = _one_error(["pull", "ibm_fez", "--source", source])
+    assert (expected or "reached the account") in error
+
+
+def _same_time_pair(vault: Path) -> list[Path]:
+    manila = nv.load("ibm_manila").to_dict()
+    paths = []
+    for name, error in (("first", 5e-4), ("second", 6e-4)):
+        manila["gates"]["sx"]["avg_infidelity"] = error
+        paths.append(nv.Profile.model_validate(manila).save(vault / f"{name}.json.gz"))
+    return paths
+
+
+def test_an_ambiguous_ref_on_the_command_line_says_what_to_type(vault: Path) -> None:
+    vault.mkdir(parents=True)
+    first, second = _same_time_pair(vault)
+    error = _one_error(["show", "ibm_manila@2024-05-27T18:27:23Z"])
+    assert "expect=" not in error
+    assert f"give one of their files instead: {first}, {second}" in error
+    assert runner.invoke(app, ["show", str(first)]).exit_code == 0
+
+
+def test_an_ambiguous_ref_in_python_keeps_the_python_fix(vault: Path) -> None:
+    vault.mkdir(parents=True)
+    _same_time_pair(vault)
+    with pytest.raises(nv.AmbiguousRef, match="expect='nv:...'"):
+        nv.load("ibm_manila@2024-05-27T18:27:23Z")
+
+
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        (["--bogus"], "error: no such option: --bogus; see `nv --help`\n"),
+        (["--vresion"], "error: no such option: --vresion (Possible options: --version)\n"),
+        (["--bogus", "list"], "error: no such option: --bogus; see `nv --help`\n"),
+    ],
+)
+def test_a_mistyped_top_level_option_is_one_line(args: list[str], error: str) -> None:
+    assert _one_error(args, code=2) == error
+
+
+def test_list_and_doctor_name_a_dangling_vault_link_in_one_line(vault: Path) -> None:
+    toy = nv.load("ibm_manila")
+    toy.save(vault_path(toy))
+    (vault / "gone.json.gz").symlink_to(vault.parent / "moved.json.gz")
+    expected = (
+        f"warning: skipped {vault / 'gone.json.gz'}: it links to"
+        f" {vault.parent / 'moved.json.gz'}, which does not exist; remove the link\n"
+    )
+    listed = runner.invoke(app, ["list"], env={"COLUMNS": "200"})
+    assert listed.exit_code == 0 and "* ibm_manila" in listed.stdout
+    assert listed.stderr == expected
+    doctor = runner.invoke(app, ["doctor"], env={"COLUMNS": "200"})
+    assert doctor.exit_code == 0 and f"vault: {vault} (1 profiles)" in doctor.stdout
+    assert doctor.stderr == expected

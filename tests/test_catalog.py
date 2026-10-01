@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import re
 import subprocess
 import sys
@@ -303,8 +304,29 @@ def test_a_failed_pull_to_a_file_leaves_the_existing_file_whole(
         lambda entry: "stale",
         lambda entry: {k: v for k, v in entry.items() if k != "id"},
         lambda entry: {**entry, "calibrated_at": 5},
+        lambda entry: {**entry, "id": []},
+        lambda entry: {**entry, "num_qubits": "3"},
+        lambda entry: {**entry, "num_qubits": True},
+        lambda entry: {**entry, "fingerprint": None},
+        lambda entry: {**entry, "fingerprint": "nv:1234"},
+        lambda entry: {**entry, "vendor": 7},
+        lambda entry: {**entry, "license": ["MIT"]},
+        lambda entry: {**entry, "calibrated_at": "2025-01-01T00:00:00"},
     ],
-    ids=["list", "string", "missing id", "bad timestamp"],
+    ids=[
+        "list",
+        "string",
+        "missing id",
+        "bad timestamp",
+        "list id",
+        "string qubits",
+        "bool qubits",
+        "no fingerprint",
+        "short fingerprint",
+        "int vendor",
+        "list license",
+        "naive timestamp",
+    ],
 )
 def test_a_damaged_index_entry_is_rebuilt_from_its_file(vault: Path, damage) -> None:
     profile = _dated("2025-01-01T00:00:00Z")
@@ -313,8 +335,31 @@ def test_a_damaged_index_entry_is_rebuilt_from_its_file(vault: Path, damage) -> 
     index = vault / ".index.json"
     entry = json.loads(index.read_text())[path.name]
     index.write_text(json.dumps({path.name: damage(entry)}))
-    assert [i.fingerprint for i in catalog.vault_profiles()] == [profile.fingerprint]
+    assert catalog.vault_profiles() == [catalog.ProfileInfo.of(profile, "vault", path)]
     assert nv.load("test_toy") == profile
+    assert nv.load("ibm_manila").id == "ibm_manila"
+    assert json.loads(index.read_text())[path.name] == entry
+
+
+def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    profile.save(vault_path(profile))
+    (vault / "gone.json.gz").symlink_to(vault.parent / "moved_away.json.gz")
+    (vault / "folder.json").mkdir()
+    os.mkfifo(vault / "pipe.json")
+    (vault / "empty.json").write_text("{}")
+    with pytest.warns(nv.NoiseVaultWarning) as caught:
+        found = {i.id for i in nv.profiles()}
+        assert nv.load("test_toy") == profile
+    assert {"test_toy", "ibm_manila"} <= found
+    messages = sorted({str(w.message) for w in caught})
+    assert [m.split(":")[0] for m in messages] == [
+        f"skipped {vault / name}"
+        for name in ("empty.json", "folder.json", "gone.json.gz", "pipe.json")
+    ]
+    assert all("\n" not in m for m in messages)
+    assert f"links to {vault.parent / 'moved_away.json.gz'}, which does not exist" in messages[2]
+    assert f"run `nv validate {vault / 'empty.json'}`" in messages[0]
 
 
 def test_concurrent_pulls_of_one_calibration_both_succeed(

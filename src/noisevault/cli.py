@@ -7,7 +7,6 @@ machines and never contains color. NO_COLOR and COLUMNS are read at each invocat
 
 from __future__ import annotations
 
-import difflib
 import errno
 import gzip
 import json
@@ -23,7 +22,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Annotated, Any, get_args
+from typing import Annotated, Any, NoReturn, get_args
 
 import typer
 from pydantic import ValidationError
@@ -38,6 +37,7 @@ from .errors import (
     FingerprintMismatch,
     NoiseVaultError,
     ProfileNotFound,
+    did_you_mean,
     install_hint,
 )
 from .profile import Profile, Ref, Technology, json_schema, load_file, parse_ref
@@ -51,16 +51,17 @@ class _Commands(TyperGroup):
     """A usage mistake or an unexpected failure ends in one ``error:`` line, never a box or a
     traceback. NOISEVAULT_DEBUG=1 lets an unexpected failure raise."""
 
+    def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
+        try:
+            return super().parse_args(ctx, args)
+        except _USAGE_ERROR as exc:
+            _usage_error(exc)
+
     def invoke(self, ctx: Any) -> Any:
         try:
             return super().invoke(ctx)
         except _USAGE_ERROR as exc:
-            message = exc.format_message().rstrip(".").replace(". Did you mean", "; did you mean")
-            message = message[:1].lower() + message[1:]
-            if not re.search(r"did you mean|possible options", message, re.I):
-                message += f"; see `{exc.ctx.command_path if exc.ctx else 'nv'} --help`"
-            err.print(f"error: {message}", markup=False)
-            raise typer.Exit(2) from None
+            _usage_error(exc)
         except Exception as exc:
             # Exit and Abort, from typer or click, carry an exit code: they are control flow.
             if hasattr(exc, "exit_code") or os.environ.get("NOISEVAULT_DEBUG"):
@@ -71,6 +72,15 @@ class _Commands(TyperGroup):
                 markup=False,
             )
             raise typer.Exit(1) from None
+
+
+def _usage_error(exc: Any) -> NoReturn:
+    message = exc.format_message().rstrip(".").replace(". Did you mean", "; did you mean")
+    message = message[:1].lower() + message[1:]
+    if not re.search(r"did you mean|possible options", message, re.I):
+        message += f"; see `{exc.ctx.command_path if exc.ctx else 'nv'} --help`"
+    err.print(f"error: {message}", markup=False)
+    raise typer.Exit(2) from None
 
 
 app = typer.Typer(
@@ -161,15 +171,14 @@ def list_profiles(
         if tech is not None:
             tech = tech.lower().replace("-", "_")
         if tech is not None and tech not in technologies:
-            guess = _guess(tech, technologies)
+            guess = did_you_mean(tech, technologies)
             raise ValueError(f"--tech {tech!r}: {guess}choose from {', '.join(technologies)}")
         vendors = sorted({i.vendor for i in catalog.profiles() if i.vendor})
         if vendor is not None:
             vendor = next((v for v in vendors if v.lower() == vendor.lower()), vendor)
         if vendor is not None and vendor not in vendors:
-            raise ValueError(
-                f"--vendor {vendor!r}: {_guess(vendor, vendors)}choose from {', '.join(vendors)}"
-            )
+            guess = did_you_mean(vendor, vendors)
+            raise ValueError(f"--vendor {vendor!r}: {guess}choose from {', '.join(vendors)}")
         infos = catalog.profiles(technology=tech, vendor=vendor)
         rows = [_list_row(info) for info in infos]
         if as_json:
@@ -715,7 +724,7 @@ def check(
             if not names or unknown:
                 given = unknown[0] if unknown else framework
                 raise ValueError(
-                    f"--framework {given!r}: {_guess(given, list(FRAMEWORKS))}give one or more"
+                    f"--framework {given!r}: {did_you_mean(given, FRAMEWORKS)}give one or more"
                     f" of {','.join(FRAMEWORKS)}"
                 )
         profile = _load(ref)
@@ -832,7 +841,8 @@ def doctor() -> None:
             missing.append(package)
     out.print(table)
     vault = catalog.vault_dir()
-    count = len(catalog.vault_profiles()) if vault.is_dir() else 0
+    with _friendly():
+        count = len(catalog.vault_profiles()) if vault.is_dir() else 0
     out.print(f"vault: {vault} ({count} profiles)", markup=False, soft_wrap=True)
     out.print(f"bundled profiles: {len(catalog.bundled_profiles())}")
     extras = sorted({extra for p in missing if (extra := _PACKAGES[p])})
@@ -939,6 +949,7 @@ _CLI_TERMS = (
     (re.compile(r"""nv\.load\((['"])([\w.@:-]+)\1\)"""), r"`nv show \2`"),
     (re.compile(r"\bat=(?= )"), "--at"),
     (re.compile(r"\bat=(?=['\"])"), "--at "),
+    (re.compile(r"pass expect='nv:\.\.\.' or load a file:"), "give one of their files instead:"),
 )
 
 
@@ -946,11 +957,6 @@ def _cli_terms(message: str) -> str:
     for pattern, replacement in _CLI_TERMS:
         message = pattern.sub(replacement, message)
     return message
-
-
-def _guess(given: str, choices: Sequence[str]) -> str:
-    close = difflib.get_close_matches(given, choices, n=1)
-    return f"did you mean {close[0]}? " if close else ""
 
 
 def _count(n: int, noun: str) -> str:

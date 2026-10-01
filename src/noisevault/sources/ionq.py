@@ -19,7 +19,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from .. import __version__
-from ..errors import SourceUnavailable
+from ..errors import SourceUnavailable, did_you_mean
 from ..profile import Profile
 
 API = "https://api.ionq.co/v0.4"
@@ -255,7 +255,9 @@ def _listing(backend: str) -> Mapping[str, Any]:
         if entry.get("backend") == backend:
             return entry
     qpus = sorted(e["backend"] for e in entries if str(e.get("backend", "")).startswith("qpu."))
-    raise SourceUnavailable(f"IonQ has no backend {backend!r}; it lists {', '.join(qpus)}")
+    raise SourceUnavailable(
+        f"IonQ has no backend {backend!r}; {did_you_mean(backend, qpus)}it lists {', '.join(qpus)}"
+    )
 
 
 def _newest_usable(

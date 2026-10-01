@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import date, datetime
 
 from .. import __version__
-from ..errors import SourceUnavailable
+from ..errors import SourceUnavailable, did_you_mean
 from ..profile import Profile
 from .qiskit_backend import (
     as_utc,
@@ -117,11 +117,13 @@ def _not_found_message(name: str, at: str | date | datetime | None) -> str:
     from ..catalog import bundled_profiles as bundled
 
     known = f" (it lists {', '.join(listed)})" if listed else ""
+    guess = did_you_mean(name, listed or [])
     if any(info.id == name for info in bundled()):
         fix = f'try nv.load("{name}") for the bundled snapshot or source="ibm-account"'
     else:
         fix = 'try source="ibm-account" if your IBM account can see it'
-    return f"{name} is not listed on the public endpoint{known}; it may be retired: {fix}"
+    retired = "if not, it may be retired" if guess else "it may be retired"
+    return f"{name} is not listed on the public endpoint{known}; {guess}{retired}: {fix}"
 
 
 def bundled_profiles() -> list[Profile]:
