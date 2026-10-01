@@ -255,7 +255,10 @@ def _append_new(items: list, item: Any) -> None:
 
 def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
+        if len({str(k) for k in value}) == len(value):
+            return {str(k): _jsonable(v) for k, v in value.items()}
+        # Keys equal as strings, such as wire 0 and wire "0", would merge into one entry.
+        return [[_jsonable(k), _jsonable(v)] for k, v in value.items()]
     if isinstance(value, list | tuple):
         return [_jsonable(v) for v in value]
     if value is None or isinstance(value, bool | int | float | str):

@@ -9,17 +9,20 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from math import pi
 
 import numpy as np
 
 from . import gates
 from .channels import readout_matrix
-from .conversion import UnknownGates, resolve_op
+from .conversion import UnknownGates, native_name, resolve_op
 from .layout import normalize_layout
 from .profile import Profile
 from .report import Report
 
 MAX_QUBITS = 10
+# The rotations an ms gate equals at some phases, as the exports read XX and YY gates.
+_MS_ROTATIONS = ("rxx", "ryy")
 
 
 @dataclass(frozen=True)
@@ -56,9 +59,16 @@ def probabilities(
         info = gates.lookup(op.name)
         if info is None or info.unitary is None:
             raise ValueError(f"the reference simulator has no unitary for {op.name!r}")
-        rho = _apply(rho, [info.unitary(*op.params)], op.qubits, num_qubits)
+        unitary = info.unitary(*op.params)
+        rho = _apply(rho, [unitary], op.qubits, num_qubits)
         targets = tuple(physical[q] for q in op.qubits)
-        built = resolve_op(table, op.name, targets, unknown_gates=unknown_gates, report=report)
+        built = resolve_op(
+            table,
+            charged_as(profile, op.name, unitary),
+            targets,
+            unknown_gates=unknown_gates,
+            report=report,
+        )
         for channel in built.channels:
             wires = tuple(circuit_of[w] for w in channel.wires)
             rho = _apply(rho, channel.kraus, wires, num_qubits)
@@ -72,6 +82,24 @@ def probabilities(
                 probs = np.moveaxis(np.tensordot(matrix, probs, axes=([1], [c])), 0, c)
     probs = np.clip(probs.reshape(dim), 0.0, None)
     return probs / probs.sum()
+
+
+def charged_as(profile: Profile, name: str, unitary: np.ndarray) -> str:
+    """The gate whose calibration an operation ``name`` with ``unitary`` takes, as the exports
+    decide it."""
+    return native_name(name, profile.gates, _rotation(name, unitary))
+
+
+def _rotation(name: str, unitary: np.ndarray) -> str | None:
+    """The rotation an ``ms`` gate with this unitary equals, or None."""
+    if name != "ms":
+        return None
+    for rotation in _MS_ROTATIONS:
+        for theta in (pi / 2, -pi / 2):
+            v = gates.GATES[rotation].unitary(theta)  # type: ignore[misc]
+            if abs(abs(np.vdot(v, unitary)) - len(unitary)) < 1e-9:  # equal up to global phase
+                return rotation
+    return None
 
 
 def _apply(

@@ -345,3 +345,13 @@ def test_profile_check_spells_out_its_options() -> None:
     assert list(signature.parameters) == ["self", "frameworks", "layout", "shots", "seed"]
     assert signature.return_annotation == "CheckResult"
     assert list(inspect.signature(Profile.diff).parameters) == ["self", "other", "top"]
+
+
+def test_a_profile_with_only_rotations_passes_every_framework() -> None:
+    natives = {"rz": 2e-3, "rx": 3e-2, "rxx": 4e-2, "ryy": 5e-2, "rzz": 6e-2}
+    gates = {name: {"avg_infidelity": error} for name, error in natives.items()}
+    profile = Profile.model_validate(toy(gates=gates, readout={"error": 0.01}))
+    result = check(profile, layout=[0, 1])
+    assert result.passed, result
+    assert [f.framework for f in result.frameworks] == ["qiskit", "cirq", "pennylane", "stim"]
+    assert all(not f.not_run for f in result.frameworks), result

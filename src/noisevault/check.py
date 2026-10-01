@@ -27,7 +27,7 @@ from .channels import pauli_kraus, pauli_twirl, readout_matrix
 from .conversion import resolve_op
 from .errors import LayoutError, NoiseApproximationWarning, NoiseVaultError, install_hint
 from .layout import normalize_layout
-from .reference import Op, _apply
+from .reference import Op, _apply, charged_as
 from .reference import probabilities as reference_probabilities
 from .report import Report
 from .table import GateNoise
@@ -413,9 +413,11 @@ def _twirled(profile: Profile, circuit: Circuit, layout: list[int]) -> np.ndarra
     rho = np.zeros((2,) * (2 * n), dtype=complex)
     rho[(0,) * (2 * n)] = 1.0
     for op in circuit.ops:
-        rho = _apply(rho, [_unitary(op)], op.qubits, n)
+        unitary = _unitary(op)
+        rho = _apply(rho, [unitary], op.qubits, n)
         wires = tuple(layout[q] for q in op.qubits)
-        built = resolve_op(table, op.name, wires, unknown_gates="error", report=report)
+        name = charged_as(profile, op.name, unitary)
+        built = resolve_op(table, name, wires, unknown_gates="error", report=report)
         if built.channels:
             rho = _apply(rho, pauli_kraus(pauli_twirl(built.channels, wires)), op.qubits, n)
     probs = np.real(np.diagonal(rho.reshape(2**n, 2**n)))

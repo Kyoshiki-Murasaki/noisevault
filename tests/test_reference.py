@@ -1,8 +1,11 @@
+from math import pi
+
 import numpy as np
 import pytest
-from conftest import require
+from conftest import require, toy
 
 import noisevault as nv
+from noisevault.errors import MissingCalibrationError
 from noisevault.reference import Op, _apply, probabilities
 
 
@@ -78,3 +81,181 @@ def test_matches_aer_from_backend_on_native_circuit():
     aer = DensityMatrix(rho).probabilities()  # little-endian: qubit 0 is the least significant
     aer = aer.reshape((2,) * 3).transpose(2, 1, 0).reshape(8)
     assert 0.5 * np.abs(ours - aer).sum() < 1e-9
+
+
+# fixed-angle gates on a profile that calibrates only rotations --------------------------------
+
+# Each rotation has its own error, so the outcome shows which calibration a fixed gate took.
+_ROTATIONS = toy(
+    device={"name": "rot", "vendor": "test", "technology": "superconducting", "num_qubits": 2},
+    connectivity={"edges": [[0, 1]]},
+    gates={
+        "rz": {"avg_infidelity": 2e-3},
+        "rx": {"avg_infidelity": 3e-2},
+        "rxx": {"avg_infidelity": 4e-2},
+        "ryy": {"avg_infidelity": 5e-2},
+        "rzz": {"avg_infidelity": 6e-2},
+    },
+)
+
+# Each fixed gate and the calibrated rotation it equals up to global phase.
+_FIXED = {
+    "sx": (Op("sx", (0,)), Op("rx", (0,), (pi / 2,))),
+    "x": (Op("x", (0,)), Op("rx", (0,), (pi,))),
+    "s": (Op("s", (0,)), Op("rz", (0,), (pi / 2,))),
+    "t": (Op("t", (0,)), Op("rz", (0,), (pi / 4,))),
+    "zz": (Op("zz", (0, 1)), Op("rzz", (0, 1), (pi / 2,))),
+    "ms_xx": (Op("ms", (0, 1), (0.0, 0.0)), Op("rxx", (0, 1), (pi / 2,))),
+    "ms_yy": (Op("ms", (0, 1), (pi / 2, pi / 2)), Op("ryy", (0, 1), (pi / 2,))),
+}
+
+
+def _sandwiched(gate: Op) -> list[Op]:
+    """``gate`` between rx(pi/2) layers, so a diagonal gate's unitary shows in the outcome."""
+    layer = [Op("rx", (q,), (pi / 2,)) for q in range(len(gate.qubits))]
+    return [*layer, gate, *layer]
+
+
+@pytest.mark.parametrize("unknown_gates", ["typical", "error"])
+@pytest.mark.parametrize("case", sorted(_FIXED))
+def test_a_fixed_gate_takes_the_rotation_it_equals(case, unknown_gates) -> None:
+    profile = nv.Profile.model_validate(_ROTATIONS)
+    gate, rotation = _FIXED[case]
+    n = len(gate.qubits)
+    want = probabilities(profile, _sandwiched(rotation), n, readout=False)
+    got = probabilities(profile, _sandwiched(gate), n, unknown_gates=unknown_gates, readout=False)
+    assert got == pytest.approx(want, abs=1e-12)
+
+
+def test_an_ms_gate_equal_to_no_rotation_takes_no_rotation() -> None:
+    profile = nv.Profile.model_validate(_ROTATIONS)
+    with pytest.raises(MissingCalibrationError, match="ms on qubits"):
+        probabilities(profile, [Op("ms", (0, 1), (0.0, pi / 2))], 2, unknown_gates="error")
+
+
+def _cirq_probs(profile, case: str, n: int) -> np.ndarray:
+    cirq = require("cirq")
+    gate = {
+        "sx": cirq.X**0.5,
+        "x": cirq.X,
+        "s": cirq.S,
+        "t": cirq.T,
+        "zz": cirq.ZZ**0.5,
+        "ms_xx": cirq.ms(pi / 4),
+        "ms_yy": cirq.YY**0.5,
+    }[case]
+    qubits = cirq.LineQubit.range(n)
+    layer = [cirq.rx(pi / 2).on(q) for q in qubits]
+    model = profile.to_cirq(
+        layout=dict(zip(qubits, range(n), strict=True)), unknown_gates="error", readout=False
+    )
+    circuit = cirq.Circuit([*layer, gate.on(*qubits), *layer]).with_noise(model)
+    simulator = cirq.DensityMatrixSimulator(dtype=np.complex128)
+    rho = simulator.simulate(circuit, qubit_order=qubits).final_density_matrix
+    return np.real(np.diag(rho))
+
+
+def _pennylane_probs(profile, case: str, n: int) -> np.ndarray:
+    qml = require("pennylane")
+    make = {
+        "sx": qml.SX,
+        "x": qml.PauliX,
+        "s": qml.S,
+        "t": qml.T,
+        "zz": lambda wires: qml.IsingZZ(pi / 2, wires=wires),
+        "ms_xx": lambda wires: qml.IsingXX(pi / 2, wires=wires),
+        "ms_yy": lambda wires: qml.IsingYY(pi / 2, wires=wires),
+    }[case]
+    wires = list(range(n))
+
+    @qml.qnode(qml.device("default.mixed", wires=n))
+    def run():
+        for w in wires:
+            qml.RX(pi / 2, wires=w)
+        make(wires=wires)
+        for w in wires:
+            qml.RX(pi / 2, wires=w)
+        return qml.probs(wires=wires)
+
+    model = profile.to_pennylane(layout=wires, unknown_gates="error", readout=False)
+    return np.asarray(qml.add_noise(run, model)(), dtype=float)
+
+
+def _qiskit_probs(profile, case: str, n: int) -> np.ndarray:
+    require("qiskit_aer")
+    from qiskit import QuantumCircuit, transpile
+
+    sim = profile.to_qiskit(unknown_gates="error", readout=False)
+    sim.set_options(method="density_matrix")
+    circuit = QuantumCircuit(n)
+    for q in range(n):
+        circuit.rx(pi / 2, q)
+    {
+        "sx": lambda: circuit.sx(0),
+        "x": lambda: circuit.x(0),
+        "s": lambda: circuit.s(0),
+        "t": lambda: circuit.t(0),
+        "zz": lambda: circuit.rzz(pi / 2, 0, 1),
+        "ms_xx": lambda: circuit.rxx(pi / 2, 0, 1),
+        "ms_yy": lambda: circuit.ryy(pi / 2, 0, 1),
+    }[case]()
+    for q in range(n):
+        circuit.rx(pi / 2, q)
+    # Level 0 keeps each gate a single native, so no rx layer merges into the gate under test.
+    native = transpile(circuit, sim, initial_layout=list(range(n)), optimization_level=0)
+    native.save_probabilities(list(range(n)))
+    little = np.asarray(sim.run(native).result().data()["probabilities"])
+    return little.reshape((2,) * n).transpose(range(n - 1, -1, -1)).reshape(-1)
+
+
+_STIM_SHOTS = 200_000
+
+
+def _stim_probs(profile, case: str, n: int) -> np.ndarray:
+    require("stim")
+    from noisevault.frameworks.stim import to_stim
+
+    gate = {
+        "sx": "SQRT_X",
+        "x": "X",
+        "s": "S",
+        "zz": "SQRT_ZZ",
+        "ms_xx": "SQRT_XX",
+        "ms_yy": "SQRT_YY",
+    }[case]
+    targets = " ".join(map(str, range(n)))
+    text = f"SQRT_X {targets}\n{gate} {targets}\nSQRT_X {targets}\nM {targets}"
+    noisy = to_stim(profile, text, unknown_gates="error", readout="none")
+    bits = noisy.compile_sampler(seed=0).sample(_STIM_SHOTS)
+    index = bits.astype(int) @ (1 << np.arange(n)[::-1])
+    return np.bincount(index, minlength=2**n) / _STIM_SHOTS
+
+
+_EXPORT_PROBS = {
+    "cirq": _cirq_probs,
+    "pennylane": _pennylane_probs,
+    "qiskit": _qiskit_probs,
+    "stim": _stim_probs,
+}
+# T is no Clifford gate, so Stim cannot hold it.
+_EXPORT_CASES = [
+    (framework, case)
+    for framework in sorted(_EXPORT_PROBS)
+    for case in sorted(_FIXED)
+    if not (framework == "stim" and case == "t")
+]
+
+
+@pytest.mark.parametrize(("framework", "case"), _EXPORT_CASES)
+def test_every_export_agrees_with_the_reference_on_fixed_gates(framework, case) -> None:
+    profile = nv.Profile.model_validate(_ROTATIONS)
+    gate, _ = _FIXED[case]
+    n = len(gate.qubits)
+    want = probabilities(profile, _sandwiched(gate), n, unknown_gates="error", readout=False)
+    got = _EXPORT_PROBS[framework](profile, case, n)
+    if framework == "stim":
+        # Depolarizing channels are their own Pauli twirl, so Stim samples the plain reference.
+        bound = 5 * np.sqrt(want * (1 - want) / _STIM_SHOTS) + 5 / _STIM_SHOTS
+        assert np.all(np.abs(got - want) <= bound), (got, want)
+    else:
+        assert got == pytest.approx(want, abs=1e-9)

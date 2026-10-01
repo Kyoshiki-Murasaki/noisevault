@@ -4,7 +4,7 @@ import json
 import warnings
 
 import pytest
-from conftest import toy
+from conftest import require, toy
 
 from noisevault.errors import NoiseApproximationWarning, UnsupportedEffect
 from noisevault.profile import Profile
@@ -101,3 +101,26 @@ def test_calibration_qualifiers_of_used_gates_are_reported() -> None:
     for expected in ("cycle", "spam", "leakage", "median", "read as average gate fidelity"):
         assert expected in text
     assert "x error" in report.summary()
+
+
+def _options(**options) -> dict:
+    report = Report.start(Profile.model_validate(toy()), "pennylane", None, **options)
+    return json.loads(json.dumps(report.to_dict()))["options"]
+
+
+def test_keys_that_stay_distinct_as_strings_serialize_as_an_object() -> None:
+    assert _options(layout={0: 2, 1: 0}) == {"layout": {"0": 2, "1": 0}}
+    assert _options(layout={"a": 0, ("b", 1): 1}) == {"layout": {"a": 0, "('b', 1)": 1}}
+
+
+def test_keys_that_collide_as_strings_serialize_as_pairs() -> None:
+    assert _options(layout={0: 0, "0": 1}) == {"layout": [[0, 0], ["0", 1]]}
+    nested = _options(extra={"layout": {1: 0, "1": 2}, "names": {"x": 1}})
+    assert nested == {"extra": {"layout": [[1, 0], ["1", 2]], "names": {"x": 1}}}
+
+
+def test_pennylane_report_keeps_integer_and_string_wires_apart() -> None:
+    require("pennylane")
+    model = Profile.model_validate(toy()).to_pennylane(layout={0: 0, "0": 1})
+    data = json.loads(json.dumps(model.report.to_dict()))
+    assert data["options"]["layout"] == [[0, 0], ["0", 1]]
