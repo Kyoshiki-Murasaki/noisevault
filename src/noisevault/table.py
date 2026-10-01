@@ -131,7 +131,10 @@ class NoiseTable:
     def gate(self, name: str, qubits: Sequence[int]) -> GateNoise | Unavailable:
         key = (name, tuple(qubits))
         if key not in self._gates:
-            self._gates[key] = self._resolve_gate(*key)
+            found = self._resolve_gate(*key)
+            if _without_own_noise(found):
+                found = self._free_z(*key) or found
+            self._gates[key] = found
         return self._gates[key]
 
     def allowed(self, name: str, qubits: Sequence[int]) -> bool:
@@ -141,13 +144,14 @@ class NoiseTable:
     def typical(self, arity: int, qubits: Sequence[int]) -> GateNoise | Unavailable:
         """The calibrated native of ``arity`` with the most records that is usable on ``qubits``.
 
-        Ties go to the alphabetically first name, so the choice depends only on fingerprinted
-        content. A directed 2-qubit gate may use its record on the reversed pair
+        ``id`` comes last: it is an idle slot, not a gate a circuit's operation could stand
+        for. Ties go to the alphabetically first name, so the choice depends only on
+        fingerprinted content. A directed 2-qubit gate may use its record on the reversed pair
         (origin ``reversed_record``).
         """
         qubits = tuple(qubits)
         candidates = [name for name in self.natives(arity) if name in self._with_metric]
-        candidates.sort(key=lambda name: (-self._record_counts[name], name))
+        candidates.sort(key=lambda name: (name == "id", -self._record_counts[name], name))
         for name in candidates:
             found = self.gate(name, qubits)
             if isinstance(found, GateNoise) and found.state in ("calibrated", "disabled"):
@@ -174,11 +178,6 @@ class NoiseTable:
     def _resolve_gate(self, name: str, qubits: tuple[int, ...]) -> GateNoise | Unavailable:
         spec = self.profile.gates.get(name)
         if spec is None:
-            info = gates.lookup(name)
-            if info and info.family == "z" and len(qubits) == 1:
-                rz = self.gate("rz", qubits)
-                if isinstance(rz, GateNoise) and rz.state == "ideal":
-                    return GateNoise(name, qubits, "ideal", None, None, None, "default", rz.spec)
             return Unavailable(name, qubits, "undefined", f"{name} is not defined in this profile")
         problem = self._target_problem(name, qubits)
         if problem:
@@ -194,6 +193,16 @@ class NoiseTable:
             return self._noise(name, qubits, spec, "default")
         reason = f"{name} has no calibration on {qubits} and connectivity does not allow it"
         return Unavailable(name, qubits, "not_connected", reason)
+
+    def _free_z(self, name: str, qubits: tuple[int, ...]) -> GateNoise | None:
+        """A z-family gate is a frame change when ``rz`` is virtual on that qubit."""
+        info = gates.lookup(name)
+        if name == "rz" or not info or info.family != "z" or len(qubits) != 1:
+            return None
+        rz = self.gate("rz", qubits)
+        if isinstance(rz, GateNoise) and rz.state == "ideal":
+            return GateNoise(name, qubits, "ideal", None, None, None, "default", rz.spec)
+        return None
 
     def _target_problem(
         self, name: str, qubits: tuple[int, ...]
@@ -242,6 +251,12 @@ class NoiseTable:
             else:
                 r = metrics.to_avg_infidelity(kind, value, len(qubits))
         return GateNoise(name, qubits, state, r, pauli, spec.duration_ns, origin, spec)
+
+
+def _without_own_noise(found: GateNoise | Unavailable) -> bool:
+    if isinstance(found, Unavailable):
+        return found.kind == "undefined"
+    return found.state == "uncalibrated"
 
 
 def _state(spec: GateSpec) -> GateState:

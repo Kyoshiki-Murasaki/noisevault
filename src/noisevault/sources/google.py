@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 
 from .. import __version__
-from ..errors import SourceUnavailable
+from ..errors import SourceUnavailable, install_hint
 from ..profile import Profile
 
 if TYPE_CHECKING:
@@ -89,7 +89,7 @@ def from_cirq_google(processor_id: str) -> Profile:
         from cirq_google.engine import virtual_engine_factory as factory
     except ImportError:
         raise SourceUnavailable(
-            "cirq_google is not installed; run `pip install 'noisevault[google]'`"
+            f"cirq_google is not installed; run `{install_hint('google')}`"
         ) from None
     # both arrived in cirq-google 1.6; 1.5 has neither, and no willow_pink calibration
     if not hasattr(factory, "load_device_noise_properties") or name not in getattr(

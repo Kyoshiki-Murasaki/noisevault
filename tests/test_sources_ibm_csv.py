@@ -117,3 +117,59 @@ def test_properties_json_passed_as_csv_points_to_the_right_reader() -> None:
 def test_bad_calibrated_at_names_the_parameter() -> None:
     with pytest.raises(ValueError, match="calibrated_at='last week' is not an ISO 8601"):
         nv.from_ibm_csv(EAGLE, device="ibm_example", calibrated_at="last week")
+
+
+def _edited(tmp_path: Path, source: Path, old: str, new: str) -> Path:
+    text = source.read_text(encoding="utf-8")
+    assert old in text
+    path = tmp_path / source.name
+    path.write_text(text.replace(old, new), encoding="utf-8")
+    return path
+
+
+def test_conflicting_pair_in_one_cell_names_line_and_column(tmp_path: Path) -> None:
+    path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', '"1:0.0013;1:0.009","1:68"')
+    with pytest.raises(ValueError, match=r"line 2, 'CZ error'.*0\.0013.*0\.009"):
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
+
+
+def test_a_pair_repeated_with_the_same_value_is_read_once(tmp_path: Path) -> None:
+    path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', '"1:0.0013;1:0.0013","1:68"')
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
+    assert profile.table.gate("cz", (0, 1)).avg_infidelity == 0.0013
+
+
+def test_conflicting_pair_across_rows_names_both_lines(tmp_path: Path) -> None:
+    path = _edited(tmp_path, EAGLE, "2_3:1,2_3:600", "2_3:1; 1_2:0.05,2_3:600; 1_2:560")
+    with pytest.raises(ValueError, match=r"line 5.*ecr on qubits \(1, 2\).*line 4"):
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
+
+
+def test_pair_repeated_across_rows_with_the_same_values_is_read_once(tmp_path: Path) -> None:
+    path = _edited(tmp_path, EAGLE, "2_3:1,2_3:600", "2_3:1; 1_2:0.008,2_3:600; 1_2:560")
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
+    assert _record(profile, "ecr", (1, 2)).avg_infidelity == 0.008
+
+
+def test_a_qubit_listed_twice_is_an_error(tmp_path: Path) -> None:
+    row = "0,200.0,120.0,4.8,-0.30,0.015,0.02,0.01,1300,0.0002,0,0.009,0.0002,,,true,\n"
+    path = tmp_path / "twice.csv"
+    path.write_text(EAGLE.read_text(encoding="utf-8") + row, encoding="utf-8")
+    with pytest.raises(ValueError, match=r"line 6: qubit 0 is already listed on twice.csv line 3"):
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
+
+
+def test_qubit_without_readout_stays_unknown(tmp_path: Path) -> None:
+    path = _edited(tmp_path, HERON, '"0.012","0.016","0.008","2.4"', '"","","","2.4"')
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert profile.table.qubit(0).readout is None
+    assert profile.table.qubit(1).readout == (0.007, 0.013)
+    assert profile.readout is None
+    assert any("Qubits [0] have no readout" in note for note in profile.provenance.notes)
+
+
+def test_qubit_without_t1_takes_the_median_and_says_so(tmp_path: Path) -> None:
+    path = _edited(tmp_path, HERON, '"0","300","250"', '"0","",""')
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert profile.table.qubit(0).t1_ns == pytest.approx(260_000)  # median of qubits 1 to 3
+    assert any("Qubits [0] have no T1" in note for note in profile.provenance.notes)

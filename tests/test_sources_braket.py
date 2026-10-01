@@ -134,3 +134,43 @@ def test_public_api() -> None:
     assert nv.from_braket(IQM).fingerprint == from_braket(IQM).fingerprint
     named = nv.from_braket(json.loads(IQM.read_text()), device="garnet")
     assert named.id == "iqm_garnet"
+
+
+def _rigetti_with(pair: str, entries: list[dict]) -> dict:
+    data = json.loads(RIGETTI.read_text())
+    data["twoQubitProperties"][pair]["twoQubitGateFidelity"] = entries
+    return data
+
+
+def test_each_direction_of_a_directed_gate_keeps_its_own_fidelity() -> None:
+    irb = {"name": "INTERLEAVED_RANDOMIZED_BENCHMARKING"}
+    data = _rigetti_with(
+        "0-1",
+        [
+            {
+                "direction": {"control": 1, "target": 0},
+                "gateName": "CNOT",
+                "fidelity": 0.955,
+                "fidelityType": irb,
+            },
+            {
+                "direction": {"control": 0, "target": 1},
+                "gateName": "CNOT",
+                "fidelity": 0.98,
+                "fidelityType": irb,
+            },
+        ],
+    )
+    profile = from_braket(data, device="rig")
+    cx = {r.qubits: r.avg_infidelity for r in profile.calibrations if r.gate == "cx"}
+    assert cx == {(1, 0): 0.045, (0, 1): 0.02, (1, 3): 0.038}
+    assert profile.table.typical(2, (0, 1)).avg_infidelity == 0.02
+
+
+def test_directionless_fidelity_of_a_directed_gate_covers_both_orders() -> None:
+    irb = {"name": "INTERLEAVED_RANDOMIZED_BENCHMARKING"}
+    data = _rigetti_with("1-3", [{"gateName": "CNOT", "fidelity": 0.962, "fidelityType": irb}])
+    profile = from_braket(data, device="rig")
+    cx = {r.qubits: r.avg_infidelity for r in profile.calibrations if r.gate == "cx"}
+    assert cx == {(1, 0): 0.045, (1, 3): 0.038, (3, 1): 0.038}
+    assert profile.table.gate("cx", (3, 1)).origin == "record"

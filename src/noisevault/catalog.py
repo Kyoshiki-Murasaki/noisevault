@@ -11,13 +11,16 @@ import importlib
 import json
 import os
 import re
+import shutil
+import tempfile
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from .errors import (
     AmbiguousRef,
@@ -106,9 +109,15 @@ def bundled_dir() -> Traversable:
 
 
 def vault_path(profile: Profile) -> Path:
-    """Default vault file for a profile: ``<id>@<UTC timestamp>.json.gz``."""
+    """Default vault file for a profile: ``<id>@<UTC timestamp>.json.gz``.
+
+    Microseconds appear only when nonzero, so whole-second names match older vault files.
+    """
     when = profile.device.calibrated_at
-    stamp = when.strftime("%Y-%m-%dT%H%M%SZ") if when else "undated"
+    if when is None:
+        stamp = "undated"
+    else:
+        stamp = when.strftime("%Y-%m-%dT%H%M%S.%fZ" if when.microsecond else "%Y-%m-%dT%H%M%SZ")
     return vault_dir() / f"{profile.id}@{stamp}.json.gz"
 
 
@@ -139,18 +148,30 @@ def vault_profiles() -> list[ProfileInfo]:
         stat = path.stat()
         signature = [stat.st_size, stat.st_mtime_ns]
         entry = cached.get(path.name)
-        if entry is None or entry.get("signature") != signature:
+        info = _cached_info(entry, signature, path)
+        if info is None:
             try:
                 profile = load_file(path)
             except Exception as exc:  # one unreadable file must not hide the rest
                 warnings.warn(f"skipping {path}: {exc}", NoiseVaultWarning, stacklevel=2)
                 continue
             entry = {"signature": signature, **index_entry(profile)}
+            info = ProfileInfo.from_entry(entry, "vault", path)
         index[path.name] = entry
-        out.append(ProfileInfo.from_entry(entry, "vault", path))
+        out.append(info)
     if index != cached:
         _write_vault_index(folder, index)
     return out
+
+
+def _cached_info(entry: Any, signature: list[int], path: Path) -> ProfileInfo | None:
+    """The cached listing of an unchanged file, or None when the entry is stale or damaged."""
+    if not isinstance(entry, dict) or entry.get("signature") != signature:
+        return None
+    try:
+        return ProfileInfo.from_entry(entry, "vault", path)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _read_vault_index(folder: Path) -> dict[str, dict[str, Any]]:
@@ -163,10 +184,9 @@ def _read_vault_index(folder: Path) -> dict[str, dict[str, Any]]:
 
 def _write_vault_index(folder: Path, index: dict[str, dict[str, Any]]) -> None:
     """Best effort and atomic: a read-only vault or a concurrent writer only loses the cache."""
+    text = json.dumps(index, sort_keys=True)
     try:
-        tmp = folder / f"{_VAULT_INDEX}.{os.getpid()}.tmp"
-        tmp.write_text(json.dumps(index, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, folder / _VAULT_INDEX)
+        _write_atomically(folder / _VAULT_INDEX, lambda tmp: tmp.write_text(text, encoding="utf-8"))
     except OSError:
         pass
 
@@ -252,6 +272,12 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
     return profile
 
 
+class Pulled(NamedTuple):
+    profile: Profile
+    path: Path
+    written: bool  # False when the vault already held this calibration
+
+
 def pull(
     device: str,
     *,
@@ -265,29 +291,51 @@ def pull(
     repeated pulls leave one file per calibration. A pull that converts the same calibration
     differently (say, after a NoiseVault upgrade) replaces the older file, with a warning.
     """
+    return pull_and_save(device, at=at, source=source, output=output).profile
+
+
+def pull_and_save(
+    device: str,
+    *,
+    at: str | date | datetime | None = None,
+    source: str | None = None,
+    output: str | Path | None = None,
+) -> Pulled:
+    """:func:`pull`, also saying where the profile is and whether this call wrote it."""
     source = source or _default_source(device)
     if source not in _PULL_SOURCES:
         raise ValueError(f"unknown source {source!r}; choose one of {', '.join(_PULL_SOURCES)}")
     module = importlib.import_module(_PULL_SOURCES[source])
     profile = module.pull(device, at=at)
     if output is not None:
-        profile.save(output)
-        return profile
-    held = [i for i in vault_profiles() if i.id == profile.id]
-    if any(i.fingerprint == profile.fingerprint for i in held):
-        return profile
-    path = vault_path(profile)
-    for old in held:
-        if old.path == path:
-            warnings.warn(
-                f"replaced {path.name} (nv:{old.fingerprint[:12]}) with this pull"
-                f" ({profile.short_fingerprint}): the same calibration, converted differently;"
-                " update any expect= pins",
-                NoiseVaultWarning,
-                stacklevel=2,
+        _write_atomically(Path(output), profile.save)
+        return Pulled(profile, Path(output), written=True)
+    listed = vault_profiles()
+    held = [i for i in listed if i.id == profile.id]
+    for info in held:
+        if info.fingerprint == profile.fingerprint:
+            return Pulled(profile, Path(str(info.path)), written=False)
+    same_time = [i for i in held if i.calibrated_at == profile.device.calibrated_at]
+    if same_time:
+        old = same_time[0]
+        path = Path(str(old.path))  # may carry an older naming scheme; replace it in place
+        warnings.warn(
+            f"replaced {path.name} (nv:{old.fingerprint[:12]}) with this pull"
+            f" ({profile.short_fingerprint}): the same calibration, converted differently;"
+            " update any expect= pins",
+            NoiseVaultWarning,
+            stacklevel=3,
+        )
+    else:
+        path = vault_path(profile)
+        if path.exists():
+            occupant = next((i.ref for i in listed if i.path == path), "an unreadable profile")
+            raise FileExistsError(
+                f"{path} already holds {occupant}, another calibration; move that file out of"
+                f" {path.parent} and pull again"
             )
-    _save_atomically(profile, path)
-    return profile
+    _write_atomically(path, profile.save)
+    return Pulled(profile, path, written=True)
 
 
 _DEFAULT_SOURCES = {"ibm_": "ibm", "ionq": "ionq"}  # id prefix -> source that pulls it
@@ -305,11 +353,28 @@ def _default_source(device: str) -> str:
     )
 
 
-def _save_atomically(profile: Profile, path: Path) -> None:
-    """A crash mid-write leaves the old file whole; the dot name keeps listings from seeing it."""
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp.json.gz")
-    profile.save(tmp)
-    os.replace(tmp, path)
+def _write_atomically(path: Path, write: Callable[[Path], object]) -> None:
+    """A failed write leaves the old file whole; the dot name keeps listings from seeing it.
+
+    The temporary file ends in ``path``'s suffix, so it is written in the same format.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent, prefix=f".{path.name}.", suffix=f".tmp{path.suffix}", delete=False
+    ) as handle:
+        tmp = Path(handle.name)
+    try:
+        if path.exists():
+            shutil.copymode(path, tmp)
+        else:  # NamedTemporaryFile creates 0600; a new profile should get the usual mode
+            mask = os.umask(0)
+            os.umask(mask)
+            tmp.chmod(0o666 & ~mask)
+        write(tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _expect_prefix(expect: str) -> str:

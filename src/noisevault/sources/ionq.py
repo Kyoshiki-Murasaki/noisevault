@@ -82,7 +82,7 @@ def to_profile(
     """
     backend = record["backend"]
     name = backend.removeprefix("qpu.")
-    num_qubits = int(listing["qubits"])
+    num_qubits = int(record.get("qubits") or listing["qubits"])
     fidelity = record.get("fidelity") or {}
     timing = record.get("timing") or {}
     reason = _rejection(record)
@@ -112,6 +112,11 @@ def to_profile(
         f"the two-qubit native ({natives[0]} -> {two_qubit}) comes from IonQ's current backend"
         " listing, also for older records",
     ]
+    if not record.get("qubits"):
+        notes.append(
+            "the record gives no qubit count, so the current listing's qubit count"
+            f" ({num_qubits}) is used"
+        )
     notes += _skip_notes(skipped)
     spam = _fidelity(fidelity, "spam")
     readout: dict[str, float] | None = None

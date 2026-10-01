@@ -11,6 +11,10 @@ parametric gate that contains them: ``zz`` (exp(-i pi/4 ZZ)) as ``rzz`` and ``ms
 Molmer-Sorensen, MS(0, 0) = RXX(pi/2)) as ``rxx``. Aer keys noise on instruction names, so the
 alias gets the native's noise at any angle; the report says so. When the profile also defines
 the Qiskit gate itself, that definition wins.
+
+Google's ``sqrt_iswap`` has no Qiskit gate either, and no parametric one transpile can target,
+so it is exported as :class:`SqrtISwapGate`. Importing this module adds a cx -> sqrt_iswap rule
+to Qiskit's session equivalence library, which is how ``transpile`` reaches that gate.
 """
 
 from __future__ import annotations
@@ -20,14 +24,25 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from functools import cache
 from itertools import permutations, product
+from math import pi
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import qiskit
-import qiskit_aer
-from qiskit.circuit import Delay, Measure, Parameter, QuantumCircuit, Reset
+
+from ..errors import NoiseVaultError, install_hint
+
+try:
+    import qiskit
+    import qiskit_aer
+except ImportError as exc:
+    raise ImportError(
+        f"the Qiskit export needs Qiskit and Qiskit Aer: {install_hint('qiskit')}"
+    ) from exc
+
+from qiskit.circuit import Delay, Gate, Measure, Parameter, QuantumCircuit, Reset
 from qiskit.circuit import library as qiskit_gates
-from qiskit.circuit.library import PauliGate, UnitaryGate
+from qiskit.circuit.equivalence_library import SessionEquivalenceLibrary
+from qiskit.circuit.library import CXGate, PauliGate, UnitaryGate, XXPlusYYGate
 from qiskit.providers import QubitProperties
 from qiskit.quantum_info import Kraus
 from qiskit.transpiler import InstructionProperties, PassManager, Target
@@ -48,7 +63,6 @@ from qiskit_aer.noise.passes import LocalNoisePass
 from .. import gates
 from ..channels import ChannelSpec, GateChannels, readout_matrix, thermal_relaxation_kraus
 from ..conversion import UnknownGates, resolve_op
-from ..errors import NoiseVaultError
 from ..report import Report
 from ..table import GateNoise, NoiseTable, QubitNoise
 
@@ -57,6 +71,39 @@ if TYPE_CHECKING:
 
 # Canonical natives with no Qiskit instruction, exported as the gate that contains them.
 ALIASES = {"zz": "rzz", "ms": "rxx"}
+
+
+class SqrtISwapGate(Gate):
+    """Google's ``sqrt_iswap`` (iSWAP**0.5), which is Qiskit's ``XXPlusYYGate(-pi/2, 0)``."""
+
+    def __init__(self, label: str | None = None) -> None:
+        super().__init__("sqrt_iswap", 2, [], label=label)
+
+    def _define(self) -> None:
+        circuit = QuantumCircuit(2)
+        circuit.append(XXPlusYYGate(-pi / 2, 0), [0, 1])
+        self.definition = circuit
+
+    def __array__(self, dtype: Any = None, copy: Any = None) -> np.ndarray:
+        # Symmetric, so the registry's big-endian matrix is also Qiskit's little-endian one.
+        return np.asarray(gates.GATES["sqrt_iswap"].unitary(), dtype=dtype)
+
+
+def _cx_via_sqrt_iswap() -> QuantumCircuit:
+    circuit = QuantumCircuit(2, global_phase=pi)
+    circuit.u(3 * pi / 4, -pi, pi / 2, 1)
+    circuit.u(pi / 2, pi / 2, -pi / 4, 0)
+    circuit.append(SqrtISwapGate(), [0, 1])
+    circuit.u(pi, -3 * pi / 2, pi / 2, 0)
+    circuit.append(SqrtISwapGate(), [0, 1])
+    circuit.u(pi / 2, -pi / 4, pi / 2, 0)
+    circuit.u(3 * pi / 4, 3 * pi / 2, pi, 1)
+    return circuit
+
+
+SessionEquivalenceLibrary.add_equivalence(CXGate(), _cx_via_sqrt_iswap())
+# Registry natives Qiskit has no gate for, exported as this module's own.
+_OWN_GATES: dict[str, type[Gate]] = {"sqrt_iswap": SqrtISwapGate}
 # Simulator directives that act on no device resource.
 _DIRECTIVES = (
     SaveData,
@@ -269,6 +316,13 @@ def _exports(profile: Profile, report: Report, omitted: dict[str, str]) -> list[
                 f"exported as Qiskit {gate.name}",
                 f"{gate.name} at any angle gets the calibrated noise of {canonical}",
             )
+        if canonical == "sqrt_iswap":
+            report.approximate(
+                "gate count of transpiled circuits",
+                "transpile reaches sqrt_iswap only through cx, two sqrt_iswap per cx",
+                "a general two-qubit block can take 6 sqrt_iswap where 3 suffice; build"
+                " circuits in sqrt_iswap directly, or use profile.to_cirq() to compile for Google",
+            )
         by_name[gate.name] = Export(canonical, gate)
     return list(by_name.values())
 
@@ -278,12 +332,21 @@ def _is_unitary(name: str) -> bool:
     return info is None or info.unitary is not None
 
 
-def _qiskit_gate(canonical: str) -> qiskit.circuit.Gate | None:
-    info = gates.lookup(ALIASES.get(canonical, canonical))
+def gate_class(name: str) -> type[Gate] | None:
+    """The Qiskit gate class of registry gate ``name``: Qiskit's own, else this module's
+    (:class:`SqrtISwapGate`), else None."""
+    if name in _OWN_GATES:
+        return _OWN_GATES[name]
+    info = gates.lookup(name)
     if info is None or info.qiskit_class is None:
         return None
-    cls = getattr(qiskit_gates, info.qiskit_class)
-    return cls(*(Parameter(p) for p in info.params))
+    return getattr(qiskit_gates, info.qiskit_class)
+
+
+def _qiskit_gate(canonical: str) -> Gate | None:
+    name = ALIASES.get(canonical, canonical)
+    cls = gate_class(name)
+    return None if cls is None else cls(*(Parameter(p) for p in gates.GATES[name].params))
 
 
 def _placements(

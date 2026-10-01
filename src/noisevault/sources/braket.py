@@ -171,17 +171,17 @@ def _per_element(
         best = _preferred(fidelities, 1, skipped)
         records += [_record(g, [index[label]], best, 1) for g in one_natives if best]
     for key, props in two.items():
-        by_gate: dict[str, list[Mapping[str, Any]]] = {}
+        by_locus: dict[tuple[str, tuple[str, str]], list[Mapping[str, Any]]] = {}
         for entry in props.get("twoQubitGateFidelity") or []:
-            by_gate.setdefault(_canonical(entry["gateName"]), []).append(entry)
-        for gate, entries in by_gate.items():
+            gate = _canonical(entry["gateName"])
+            for pair in _directions(entry, key, gate):
+                by_locus.setdefault((gate, pair), []).append(entry)
+        for (gate, pair), entries in by_locus.items():
             best = _preferred(entries, 2, skipped)
             if best is None:
                 continue
-            direction = best[0].get("direction")
-            pair = [direction["control"], direction["target"]] if direction else key.split("-")
             defs.setdefault(gate, {"qubits": 2, "assumption": _ASSUMPTION})
-            records.append(_record(gate, [index[str(q)] for q in pair], best, 2))
+            records.append(_record(gate, [index[q] for q in pair], best, 2))
     _note_skipped(skipped, notes)
     notes += [
         "the one-qubit fidelity is given per qubit, not per gate; it is applied to every"
@@ -313,6 +313,19 @@ def _preferred(
         return None
     _, kind, entry = min(ranked, key=lambda item: item[0])
     return entry, kind
+
+
+def _directions(entry: Mapping[str, Any], key: str, gate: str) -> list[tuple[str, str]]:
+    """The (control, target) orders a two-qubit entry calibrates.
+
+    Braket reads an entry without a direction as bidirectional; a symmetric gate needs only one
+    record for that.
+    """
+    direction = entry.get("direction")
+    if direction:
+        return [(str(direction["control"]), str(direction["target"]))]
+    a, b = key.split("-")
+    return [(a, b)] if gates.is_symmetric(gate) else [(a, b), (b, a)]
 
 
 def _metric(best: tuple[Mapping[str, Any], str], arity: int) -> dict[str, Any]:

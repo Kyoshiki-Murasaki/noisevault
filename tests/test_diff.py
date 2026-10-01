@@ -182,3 +182,85 @@ def test_negative_top_is_refused() -> None:
 )
 def test_time_deltas_read_plainly(delta, text) -> None:
     assert describe_delta(delta) == text
+
+
+def _cx(error_10: float) -> Profile:
+    return Profile.model_validate(
+        toy(
+            connectivity={"edges": [[0, 1], [1, 0]], "directed": True},
+            gates={"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}, "cx": {}},
+            calibrations=[
+                {"gate": "cx", "qubits": [0, 1], "avg_infidelity": 0.01},
+                {"gate": "cx", "qubits": [1, 0], "avg_infidelity": error_10},
+            ],
+        )
+    )
+
+
+def test_each_direction_of_a_directed_gate_is_compared() -> None:
+    result = diff(_cx(0.02), _cx(0.2))
+    assert [(c.where, c.before, c.after) for c in result.pairs] == [("1-0", 0.02, 0.2)]
+    medians = {c.metric: c for c in result.medians}
+    assert medians["error_2q"].before == pytest.approx(0.015)
+    assert medians["error_2q"].after == pytest.approx(0.105)
+
+
+def _ions(default: float) -> Profile:
+    return Profile.model_validate(
+        toy(
+            connectivity="all_to_all",
+            gates={
+                "rz": {"virtual": True},
+                "sx": {"avg_infidelity": 1e-3},
+                "cz": {"avg_infidelity": default},
+            },
+            calibrations=[{"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.02}],
+        )
+    )
+
+
+def test_all_to_all_pairs_on_the_device_default_are_compared() -> None:
+    result = diff(_ions(0.01), _ions(0.1))
+    assert [(c.where, c.before, c.after) for c in result.pairs] == [("default", 0.01, 0.1)]
+    medians = {c.metric: c for c in result.medians}
+    assert (medians["error_2q"].before, medians["error_2q"].after) == (0.01, 0.1)
+
+
+def test_changes_from_zero_or_to_a_missing_value_are_listed_first() -> None:
+    def device(readout_0: float, t1_0: float | None, t1_1: float) -> Profile:
+        qubit_0 = {"index": 0, "readout": {"error": readout_0}}
+        qubit_0 |= {} if t1_0 is None else {"t1_us": t1_0}
+        return _profile(qubits=[qubit_0, {"index": 1, "t1_us": t1_1}], idle=None)
+
+    result = diff(device(0.0, 50, 100), device(0.02, None, 120))
+    rows = [(c.where, c.metric, c.before, c.after) for c in result.qubits]
+    assert rows == [
+        ("0", "readout_error", 0.0, 0.02),
+        ("0", "t1_us", 50, None),
+        ("1", "t1_us", 100, 120),
+    ]
+    assert result.qubits[0].worse and not result.qubits[1].worse
+
+
+def test_a_disabled_gate_definition_is_listed() -> None:
+    def device(disabled: bool) -> Profile:
+        cz = {"avg_infidelity": 1e-2} | ({"disabled": True} if disabled else {})
+        return Profile.model_validate(
+            toy(gates={"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}, "cz": cz})
+        )
+
+    assert diff(device(False), device(True)).newly_disabled == ("cz default",)
+    assert diff(device(True), device(False)).reenabled == ("cz default",)
+
+
+def test_a_lost_pair_calibration_is_drift_but_a_disabled_pair_is_availability() -> None:
+    def device(*records: dict) -> Profile:
+        gates = {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}, "cz": {}}
+        cz12 = {"gate": "cz", "qubits": [1, 2], "avg_infidelity": 0.02}
+        return Profile.model_validate(toy(gates=gates, calibrations=[*records, cz12]))
+
+    calibrated = device({"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.01})
+    lost = diff(calibrated, device())
+    assert [(c.where, c.before, c.after) for c in lost.pairs] == [("0-1", 0.01, None)]
+    disabled = diff(calibrated, device({"gate": "cz", "qubits": [0, 1], "disabled": True}))
+    assert disabled.pairs == () and disabled.newly_disabled == ("cz 0-1",)

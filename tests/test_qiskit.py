@@ -36,6 +36,7 @@ from noisevault import gates  # noqa: E402
 from noisevault.frameworks.qiskit import (  # noqa: E402
     CircuitNotNativeError,
     NoiseVaultSimulator,
+    SqrtISwapGate,
     UnsupportedDevice,
     gate_error,
     to_qiskit,
@@ -277,7 +278,7 @@ def test_all_to_all_trapped_ion_device_transpiles_and_runs() -> None:
     assert tvd(ours, ref) <= 1e-9
 
 
-@pytest.mark.slow
+@pytest.mark.timing
 def test_large_all_to_all_exports_fast() -> None:
     # Eight entanglers on 48 qubits: building every ordered pair's channels took 47 s.
     profile = Profile.uniform(
@@ -296,20 +297,10 @@ def test_large_all_to_all_exports_fast() -> None:
     assert len(sim.target["cz"]) == 48 * 47
 
 
-# Bundled profiles whose only entanglers (sycamore, sqrt_iswap) Qiskit cannot compile to.
-NO_QISKIT_ENTANGLER = {"google_rainbow", "google_weber"}
-
-
 @pytest.mark.slow
 @pytest.mark.parametrize("ref", [info.id for info in nv.profiles()])
 def test_every_bundled_profile_exports_transpiles_and_runs(ref: str) -> None:
     profile = nv.load(ref)
-    if ref in NO_QISKIT_ENTANGLER:
-        with pytest.raises(
-            UnsupportedDevice, match=r"no two-qubit native.*sqrt_iswap.*sycamore.*to_cirq\(\)"
-        ):
-            quiet_export(profile)
-        return
     sim = quiet_export(profile)
     circuit = ghz(4)
     circuit.measure_all()
@@ -608,3 +599,69 @@ def test_profile_method_forwards_options(manila: Profile) -> None:
     assert isinstance(sim, NoiseVaultSimulator) and sim.profile is manila
     assert "readout error (readout=False)" in sim.report.omitted
     assert not [e for e in sim.noise_model.to_dict()["errors"] if e["type"] == "roerror"]
+
+
+# sqrt_iswap ----------------------------------------------------------------------------------
+
+
+def test_sqrt_iswap_gate_and_its_cx_rule_are_exact() -> None:
+    from qiskit.circuit.equivalence_library import SessionEquivalenceLibrary
+    from qiskit.circuit.library import CXGate
+    from qiskit.quantum_info import Operator
+
+    registry = gates.GATES["sqrt_iswap"].unitary()
+    assert np.allclose(Operator(SqrtISwapGate()).data, registry, rtol=0, atol=1e-12)
+    assert np.allclose(Operator(SqrtISwapGate().definition).data, registry, rtol=0, atol=1e-12)
+    (rule,) = [
+        c for c in SessionEquivalenceLibrary.get_entry(CXGate()) if "sqrt_iswap" in c.count_ops()
+    ]
+    assert rule.count_ops()["sqrt_iswap"] == 2
+    assert np.allclose(Operator(rule).data, Operator(CXGate()).data, rtol=0, atol=1e-12)
+
+
+def _sqrt_iswap_line() -> Profile:
+    """Google's gate set on three qubits; sqrt_iswap has an asymmetric Pauli error."""
+    pauli = [0.0] * 15
+    pauli[0], pauli[14] = 0.015, 0.004
+    return Profile.model_validate(
+        toy(
+            gates={
+                "rz": {"virtual": True},
+                "r": {"avg_infidelity": 1e-3, "duration_ns": 25},
+                "sqrt_iswap": {"pauli": pauli, "duration_ns": 32},
+            },
+            idle={"t1_us": 20, "t2_us": 15},
+            readout={"p1_given_0": 0.01, "p0_given_1": 0.04},
+        )
+    )
+
+
+@pytest.mark.parametrize("level", [0, 1, 2, 3])
+def test_circuits_transpile_to_sqrt_iswap_and_match_the_reference(level: int) -> None:
+    from qiskit.quantum_info import Operator, random_unitary
+
+    profile = _sqrt_iswap_line()
+    sim = quiet_export(profile)
+    sim.set_options(method="density_matrix")
+    circuit = ghz(3)
+    circuit.rzz(0.4, 1, 2)
+    circuit.unitary(random_unitary(4, seed=3), [0, 1])
+    layout = [0, 1, 2]
+    compiled = transpile(
+        circuit, sim, initial_layout=layout, optimization_level=level, seed_transpiler=4
+    )
+    assert set(compiled.count_ops()) <= {"r", "rz", "sqrt_iswap"}
+    assert Operator.from_circuit(compiled).equiv(Operator(circuit))
+    ours = with_exported_readout(aer_probabilities(sim, compiled, layout), sim, layout)
+    ref = reference(profile, ops_of(compiled, layout), 3, layout=layout, readout=True)
+    assert tvd(ours, ref) <= 1e-9
+
+
+def test_google_profiles_export_sqrt_iswap_and_report_the_gate_count_cost() -> None:
+    sim = quiet_export(nv.load("google_weber"))
+    assert {"r", "rz", "sqrt_iswap"} <= set(sim.target.operation_names)
+    assert "sycamore" not in sim.target.operation_names
+    assert any(a.what == "gate count of transpiled circuits" for a in sim.report.approximated)
+    assert "native sycamore: no Qiskit instruction for it in this export" in sim.report.omitted
+    (qiskit,) = nv.load("google_weber").check(frameworks=["qiskit"]).frameworks
+    assert qiskit.passed and not qiskit.not_run

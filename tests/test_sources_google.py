@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import warnings
 
 import numpy as np
@@ -176,3 +177,11 @@ def test_cirq_google_before_1_6_says_to_upgrade(monkeypatch: pytest.MonkeyPatch)
     for name in ("rainbow", "willow_pink"):
         with pytest.raises(nv.errors.SourceUnavailable, match="cirq-google>=1.6"):
             google.from_cirq_google(name)
+
+
+def test_missing_cirq_google_gives_an_install_command_that_works(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "cirq_google", None)
+    command = 'pip install "noisevault[google] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
+    with pytest.raises(nv.errors.SourceUnavailable) as info:
+        google.from_cirq_google("rainbow")
+    assert command in str(info.value)

@@ -102,10 +102,8 @@ def test_stim_without_its_readout_flips_fails(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_natives_a_framework_lacks_are_explained() -> None:
-    result = nv.load("quantinuum_h1-1").check(frameworks=["pennylane", "stim"])
+    result = nv.load("quantinuum_h1-1").check(frameworks=["stim"])
     assert dict(result.skipped) == {
-        "pennylane": "no check circuit can be expressed: PennyLane has no r gate;"
-        " PennyLane has no zz gate",
         "stim": "no check circuit can be expressed: r takes an angle; Stim circuits hold only"
         " fixed Clifford gates",
     }
@@ -185,7 +183,10 @@ def test_a_missing_framework_is_skipped_with_the_install_command(monkeypatch) ->
     monkeypatch.setitem(sys.modules, "stim", None)
     result = check(nv.load("ibm_manila"), frameworks=["stim"])
     assert result.frameworks == ()
-    assert result.skipped == (("stim", "not installed: pip install 'noisevault[stim]'"),)
+    command = (
+        'pip install "noisevault[stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
+    )
+    assert result.skipped == (("stim", f"not installed: {command}"),)
     assert not result.passed
 
 

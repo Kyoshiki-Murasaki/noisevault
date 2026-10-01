@@ -129,6 +129,20 @@ def test_implausible_spam_leaves_readout_unknown(served) -> None:
     assert any("SPAM fidelity median 0.7261" in note for note in profile.provenance.notes)
 
 
+def test_a_dated_record_keeps_its_own_qubit_count(served) -> None:
+    body = json.loads(served[ionq._page_url("qpu.forte-1", limit=1, end="2026-09-27T00:00:00Z")])
+    record = body["characterizations"][0]
+    grown = {**RESPONSES["https://api.ionq.co/v0.4/backends"][0], "qubits": 8}
+    profile = ionq.to_profile(record, grown, source_url="u", source_hash="sha256:" + "0" * 64)
+    assert profile.device.num_qubits == record["qubits"] == 4
+    assert profile.connectivity == "all_to_all"
+
+    del record["qubits"]
+    profile = ionq.to_profile(record, grown, source_url="u", source_hash="sha256:" + "0" * 64)
+    assert profile.device.num_qubits == 8
+    assert any("qubit count (8)" in note for note in profile.provenance.notes)
+
+
 def test_errors_say_what_to_do(served) -> None:
     with pytest.raises(SourceUnavailable, match="qpu.aria-1, qpu.forte-1, qpu.harmony"):
         ionq.pull("forte-9")

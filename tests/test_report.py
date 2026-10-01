@@ -57,3 +57,27 @@ def test_report_serializes_and_summarizes() -> None:
     assert len(data["approximated"]) == 1
     text = report.summary()
     assert profile.id in text and "typical_noise_used: h=4" in text and text.endswith(HONESTY)
+
+
+def test_calibration_qualifiers_of_used_gates_are_reported() -> None:
+    from noisevault.channels import gate_channels
+
+    gates = toy()["gates"] | {
+        "x": {
+            "avg_infidelity": 1e-3,
+            "scope": "cycle",
+            "includes": ["spam", "leakage"],
+            "statistic": "median",
+            "assumption": "the vendor number is read as average gate fidelity",
+        }
+    }
+    profile, report = _report(gates=gates)
+    table = profile.table
+    for name in ("x", "sx"):
+        report.record_channels(gate_channels(table.gate(name, (0,)), [table.qubit(0)]))
+    data = report.to_dict()
+    assert {a["what"] for a in data["approximated"]} == {"x error"}
+    text = json.dumps(data["approximated"])
+    for expected in ("cycle", "spam", "leakage", "median", "read as average gate fidelity"):
+        assert expected in text
+    assert "x error" in report.summary()

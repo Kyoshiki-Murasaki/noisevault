@@ -4,7 +4,9 @@ Four bundled calibrations (two IBM superconducting chips, two Quantinuum trapped
 and one hypothetical neutral-atom device. Writes assets/compare_devices.svg, or the path given
 as the first argument.
 
-Needs: pip install 'noisevault[qiskit]' matplotlib
+Needs:
+    pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"
+    pip install matplotlib
 """
 
 import sys

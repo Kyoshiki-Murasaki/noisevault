@@ -49,3 +49,11 @@ class NoiseApproximationWarning(NoiseVaultWarning):
 
 class MigrationWarning(NoiseVaultWarning):
     """A file in an older format was upgraded in memory."""
+
+
+REPOSITORY = "https://github.com/Kyoshiki-Murasaki/noisevault"
+
+
+def install_hint(extra: str) -> str:
+    """The pip command that adds an optional extra, e.g. ``install_hint("cirq")``."""
+    return f'pip install "noisevault[{extra}] @ git+{REPOSITORY}@main"'

@@ -123,7 +123,7 @@ def test_residual_depolarizing_reaches_the_stated_error(name: str, qubits) -> No
     assert [c.kind for c in built.channels][0] == "depolarizing"
     measured = _avg_infidelity(superoperator(built.channels, qubits))
     assert measured == pytest.approx(stated, abs=1e-12)
-    assert built.achieved == pytest.approx(stated, abs=1e-12) and not built.floor
+    assert built.achieved == pytest.approx(stated, abs=1e-12) and not built.inexact
 
 
 def test_relaxation_floor_is_kept_and_recorded() -> None:
@@ -131,7 +131,7 @@ def test_relaxation_floor_is_kept_and_recorded() -> None:
     built = _built(profile, "x", (1,))
     measured = _avg_infidelity(superoperator(built.channels, (1,)))
     assert [c.kind for c in built.channels] == ["thermal_relaxation"]
-    assert built.floor and built.requested == 1e-5
+    assert built.inexact and built.requested == 1e-5
     assert built.achieved == pytest.approx(measured, abs=1e-14)
     assert built.achieved == pytest.approx(built.relaxation, abs=1e-14) and built.achieved > 1e-5
     report = Report.start(profile, "test", None)
@@ -141,6 +141,24 @@ def test_relaxation_floor_is_kept_and_recorded() -> None:
     clamp = report.clamped[0]
     assert (clamp.gate, clamp.qubits, clamp.requested) == ("x", (1,), 1e-5)
     assert clamp.achieved == built.achieved
+
+
+@pytest.mark.parametrize(("name", "qubits", "stated"), [("x", (0,), 0.6), ("cz", (0, 1), 0.79)])
+def test_unreachable_stated_error_is_recorded_not_silently_lowered(name, qubits, stated) -> None:
+    # 10 us of relaxation at T1 = 10 us leaves too little room for depolarizing noise to add
+    profile = _profile(
+        idle={"t1_us": 10, "t2_us": 20},
+        gates={name: {"avg_infidelity": stated, "duration_ns": 10_000}},
+    )
+    built = _built(profile, name, qubits)
+    measured = _avg_infidelity(superoperator(built.channels, qubits))
+    assert built.achieved == pytest.approx(measured, abs=1e-12)
+    assert built.relaxation < built.achieved < stated - 1e-3
+    report = Report.start(profile, "test", None)
+    report.record_channels(built)
+    assert [(c.gate, c.qubits, c.requested) for c in report.clamped] == [(name, qubits, stated)]
+    assert report.clamped[0].achieved == built.achieved
+    assert "less noisy than stated" in report.summary()
 
 
 def test_t2_above_twice_t1_is_clamped_and_recorded() -> None:
@@ -181,7 +199,7 @@ def test_superoperator_respects_wire_order() -> None:
 def test_uncalibrated_gate_gets_relaxation_only() -> None:
     built = _built(_profile(), "reset", (0,))
     assert [c.kind for c in built.channels] == ["thermal_relaxation"]
-    assert built.requested is None and not built.floor
+    assert built.requested is None and not built.inexact
 
 
 def test_ideal_and_disabled_gates() -> None:

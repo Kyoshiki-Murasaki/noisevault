@@ -149,3 +149,25 @@ def test_suggest_layout_on_all_to_all_takes_the_best_qubits_fast() -> None:
     assert sorted(layout) == list(range(100)) and len(set(layout.values())) == 100
     assert set(good) <= set(layout.values()) and 3 not in layout.values()
     assert elapsed < 0.05
+
+
+def _ions(**sections) -> Profile:
+    gates = {"rz": {"virtual": True}, "x": {"avg_infidelity": 1e-3}, "cz": {"avg_infidelity": 1e-2}}
+    sections.setdefault("connectivity", "all_to_all")
+    return Profile.model_validate(toy(gates=sections.pop("gates", gates), **sections))
+
+
+def test_suggest_layout_on_all_to_all_skips_a_disabled_pair() -> None:
+    profile = _ions(calibrations=[{"gate": "cz", "qubits": [0, 1], "disabled": True}])
+    layout = suggest_layout(profile, 2)
+    assert profile.table.allowed("cz", (layout[0], layout[1]))
+
+
+@pytest.mark.parametrize("connectivity", ["all_to_all", {"edges": [[0, 1], [1, 2]]}])
+def test_missing_calibration_ranks_after_calibrated_qubits(connectivity) -> None:
+    gates = {"rz": {"virtual": True}, "x": {}, "cz": {"avg_infidelity": 1e-2}}
+    calibrations = [{"gate": "x", "qubits": [1], "avg_infidelity": 0.5}]
+    profile = _ions(gates=gates, calibrations=calibrations, connectivity=connectivity)
+    assert suggest_layout(profile, 1) == {0: 1}
+    readout = _ions(qubits=[{"index": 2, "readout": {"error": 0.4}}], connectivity=connectivity)
+    assert suggest_layout(readout, 1) == {0: 2}

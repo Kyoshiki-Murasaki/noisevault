@@ -12,17 +12,18 @@ wires the circuit's operations touch, because a noise model never sees the devic
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
+from math import pi
 from typing import Any
 
 import numpy as np
 
+from ..errors import LayoutError, install_hint
+
 try:
     import pennylane as qml
-except ImportError as exc:  # pragma: no cover - exercised only without the extra
-    raise ImportError(
-        "the PennyLane export needs PennyLane: pip install 'noisevault[pennylane]'"
-    ) from exc
+except ImportError as exc:
+    raise ImportError(f"the PennyLane export needs PennyLane: {install_hint('pennylane')}") from exc
 
 from pennylane.measurements import (
     CountsMP,
@@ -38,7 +39,6 @@ from pennylane.ops.op_math import Conditional
 from .. import gates
 from ..channels import readout_matrix
 from ..conversion import UnknownGates, resolve_op
-from ..errors import LayoutError
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
@@ -50,6 +50,18 @@ EventCounts = tuple[tuple[str, str, int], ...]  # (event, key, count) added to t
 CacheEntry = tuple[tuple[PhysicalChannel, ...], EventCounts]
 
 _CANONICAL = {info.pennylane: info.name for info in gates.GATES.values() if info.pennylane}
+# Registry gates PennyLane has only as another operation at a fixed angle: operation name ->
+# (gate, the angle read from the operation's parameters, the value that makes it that gate).
+# Angles compare modulo 2 pi, where both operations repeat up to a global phase.
+_AT_ANGLE: dict[str, tuple[str, Callable[[Sequence[Any]], Any], float]] = {
+    "IsingZZ": ("zz", lambda p: p[0], pi / 2),
+    "Rot": ("r", lambda p: p[0] + p[2], 0.0),  # Rot(a, theta, -a) = r(theta, pi/2 - a)
+}
+_BUILDERS: dict[str, Callable[..., Operator]] = {
+    "zz": lambda wires: qml.IsingZZ(pi / 2, wires=wires),
+    "r": lambda theta, phi, wires: qml.Rot(pi / 2 - phi, theta, phi - pi / 2, wires=wires),
+}
+_ANGLE_TOL = 1e-9
 _NOT_GATES = frozenset({"Barrier", "Snapshot", "GlobalPhase", "WireCut"})
 _READOUT_MEASUREMENTS = (ExpectationMP, VarianceMP, ProbabilityMP, SampleMP, CountsMP)
 _ROTATED_PAULIS = {"X": qml.PauliX, "Y": qml.PauliY}
@@ -137,8 +149,14 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             )
         physical = tuple(self.physical_qubit(w) for w in op.wires)
         wire_of = dict(zip(physical, op.wires, strict=True))
-        for kraus, qubits in self._channels(_CANONICAL.get(gate.name, gate.name), physical):
+        for kraus, qubits in self._channels(self._gate_name(gate), physical):
             qml.QubitChannel(list(kraus), wires=[wire_of[q] for q in qubits])
+
+    def _gate_name(self, op: Operator) -> str:
+        """The registry name of ``op``; an operation that is a profile native at its angle
+        (``IsingZZ(pi/2)`` as ``zz``, ``Rot(a, theta, -a)`` as ``r``) takes that native's name."""
+        native = _native_at_angle(op)
+        return native if native in self.profile.gates else _CANONICAL.get(op.name, op.name)
 
     def _reset_noise(self, op: MidMeasureMP, **_: Any) -> None:
         qubit = self.physical_qubit(op.wires[0])
@@ -235,10 +253,25 @@ def to_pennylane(
     ``qml.add_noise`` at its default ``level="user"`` decomposes ``qml.adjoint`` gates and
     templates first, so they are noised gate by gate; pass ``level="top"`` to noise
     ``Adjoint(SX)``, ``Adjoint(S)`` and ``Adjoint(T)`` as the profile's sxdg, sdg and tdg.
+
+    ``qml.IsingZZ(pi/2)`` gets the noise of a profile's ``zz`` and ``qml.Rot(a, theta, -a)``
+    that of its ``r`` (:func:`operation_for` builds both). Traced angles, as under
+    ``jax.jit``, cannot be compared, so those operations then get ``rzz`` noise or the
+    typical-noise rule.
     """
     return NoiseVaultPennyLaneModel(
         profile, layout=layout, unknown_gates=unknown_gates, readout=readout
     )
+
+
+def operation_for(name: str) -> Callable[..., Operator] | None:
+    """The PennyLane operation for registry gate ``name``, called with the gate's parameters
+    and ``wires=``; None when PennyLane has none. ``operation_for("r")(theta, phi, wires=0)``
+    is a ``qml.Rot`` with the unitary of ``r``, which the noise model recognizes as ``r``."""
+    if name in _BUILDERS:
+        return _BUILDERS[name]
+    info = gates.lookup(name)
+    return getattr(qml, info.pennylane, None) if info is not None and info.pennylane else None
 
 
 def confusion_kraus(matrix: np.ndarray) -> list[np.ndarray]:
@@ -270,6 +303,17 @@ def _describe(report: Report, readout: bool) -> None:
         "noised through their decomposition at qml.add_noise's default level='user'",
         "pass level='top' to qml.add_noise to noise Adjoint(SX), Adjoint(S), Adjoint(T) whole",
     )
+
+
+def _native_at_angle(op: Operator) -> str | None:
+    if op.name not in _AT_ANGLE:
+        return None
+    native, angle_of, value = _AT_ANGLE[op.name]
+    angle = angle_of(op.parameters)
+    if qml.math.is_abstract(angle) or qml.math.ndim(angle) != 0:
+        return None
+    gap = (float(qml.math.toarray(angle)) - value) % (2 * pi)
+    return native if min(gap, 2 * pi - gap) < _ANGLE_TOL else None
 
 
 def _labels(layout: Layout) -> list[Hashable]:

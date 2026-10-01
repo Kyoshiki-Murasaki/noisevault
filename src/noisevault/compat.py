@@ -3,8 +3,9 @@
 0.1 files were IBM-shaped: one record per (gate, qubits) with an average gate error, per-qubit
 T1/T2 and readout. The upgrade keeps every number and turns conventions into explicit fields:
 ``error >= 1`` (IBM's dead-gate sentinel) or ``operational: false`` become ``disabled``, an
-``rz`` whose errors and durations are all zero becomes ``virtual``, a missing value stays
-missing, and the per-qubit readout pair wins over the averaged ``readout_error``.
+``rz`` whose usable errors and durations are all zero becomes ``virtual`` (its disabled records
+stay), a missing value stays missing, and the per-qubit readout pair wins over the averaged
+``readout_error``.
 """
 
 from __future__ import annotations
@@ -35,14 +36,21 @@ def upgrade_v01(old: dict[str, Any]) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     for name in dict.fromkeys([*old["basis_gates"], *by_name]):
         entries = by_name.get(name, [])
-        if name == "rz" and all(not e.get("error") and not e.get("duration_ns") for e in entries):
+        converted = [_record(e) for e in entries]
+        live = [e for e, r in zip(entries, converted, strict=True) if not r.get("disabled")]
+        if name == "rz" and all(not e.get("error") and not e.get("duration_ns") for e in live):
             definitions[name] = {"virtual": True}
+            records += [
+                {"gate": name, "qubits": r["qubits"], "disabled": True}
+                for r in converted
+                if r.get("disabled")
+            ]
             continue
         arity = len(entries[0]["qubits"]) if entries else None
         definitions[name] = {} if gates.lookup(name) else {"qubits": arity or 1}
         if provider in _IBM_PROVIDERS and any(e.get("error") is not None for e in entries):
             definitions[name]["method"] = "rb"
-        records += [_record(e) for e in entries]
+        records += converted
 
     data_kind, source_kind = _KINDS.get(provider, ("unknown", "other"))
     prov = old["provenance"]

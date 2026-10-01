@@ -16,6 +16,7 @@ from noisevault.errors import (
     NoiseApproximationWarning,
     UnsupportedEffect,
 )
+from noisevault.gates import GATES
 from noisevault.profile import Profile
 from noisevault.reference import Op, probabilities
 from noisevault.report import Report
@@ -648,3 +649,128 @@ def test_layered_circuit_converts_and_runs_quickly(qml, manila) -> None:
 
     assert first.sum() == pytest.approx(1) and not np.allclose(first, second)
     assert first_s < 10 and second_s < 5
+
+
+# registry gates PennyLane has only at a fixed angle ------------------------------------------
+
+
+ANGLES = [0.0, 0.37, np.pi / 2, -1.1, 2.9]
+
+
+def _matrix(qml, op) -> np.ndarray:
+    return qml.matrix(op, wire_order=range(len(op.wires)))  # big-endian, like the registry
+
+
+@pytest.mark.parametrize("theta", ANGLES)
+@pytest.mark.parametrize("phi", ANGLES)
+def test_r_is_a_rot_with_the_registry_unitary(qml, theta, phi) -> None:
+    from noisevault.frameworks.pennylane import operation_for
+
+    op = operation_for("r")(theta, phi, wires=[0])
+    assert op.name == "Rot"
+    assert np.allclose(_matrix(qml, op), GATES["r"].unitary(theta, phi), rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("theta", ANGLES)
+def test_rzz_and_zz_are_ising_zz_with_the_registry_unitary(qml, theta) -> None:
+    from noisevault.frameworks.pennylane import operation_for
+
+    rzz = operation_for("rzz")(theta, wires=[0, 1])
+    assert np.allclose(_matrix(qml, rzz), GATES["rzz"].unitary(theta), rtol=0, atol=1e-12)
+    zz = operation_for("zz")(wires=[0, 1])
+    assert zz.name == "IsingZZ"
+    assert np.allclose(_matrix(qml, zz), GATES["zz"].unitary(), rtol=0, atol=1e-12)
+
+
+def test_every_buildable_registry_gate_has_the_registry_unitary(qml) -> None:
+    from noisevault.frameworks.pennylane import operation_for
+
+    params = (0.37, -1.1, 0.8)
+    missing = set()
+    for row in GATES.values():
+        make = operation_for(row.name)
+        if row.unitary is None:
+            continue
+        if make is None:
+            missing.add(row.name)
+            continue
+        args = params[: len(row.params)]
+        theirs = _matrix(qml, make(*args, wires=list(range(row.arity))))
+        overlap = np.trace(theirs.conj().T @ row.unitary(*args)) / 2**row.arity
+        assert abs(abs(overlap) - 1) < 1e-12, row.name
+    # Adjoint(...) is no qml attribute, and PennyLane has no Molmer-Sorensen gate.
+    assert missing == {"sdg", "sxdg", "tdg", "ms"}
+
+
+def _trapped_ion(*, two_qubit: str = "zz") -> Profile:
+    """r and a ZZ native whose noise differs from the typical natives listed first (x, cz)."""
+    data = toy(
+        gates={
+            "rz": {"virtual": True},
+            "x": {"avg_infidelity": 4e-2, "duration_ns": 35},
+            "r": {"avg_infidelity": 1e-3, "duration_ns": 35},
+            "cz": {"avg_infidelity": 9e-2, "duration_ns": 70},
+            two_qubit: {"avg_infidelity": 6e-3, "duration_ns": 70},
+        },
+        idle={"t1_us": 40, "t2_us": 30},
+        qubits=[
+            {"index": i, "readout": {"p1_given_0": 0.01, "p0_given_1": 0.03}} for i in range(3)
+        ],
+    )
+    return Profile.model_validate(data)
+
+
+def test_rot_and_ising_zz_at_native_angles_get_the_natives_noise(qml) -> None:
+    from noisevault.frameworks.pennylane import operation_for, to_pennylane
+
+    profile = _trapped_ion()
+    model = to_pennylane(profile)
+    ops = [Op("r", (0,), (np.pi / 2, 0.4)), Op("zz", (0, 1)), Op("r", (1,), (1.3, -2.0))]
+
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit():
+        for op in ops:
+            operation_for(op.name)(*op.params, wires=list(op.qubits))
+        return qml.probs(wires=[0, 1])
+
+    got = np.asarray(qml.add_noise(circuit, model)())
+    want = probabilities(profile, ops, 2, readout=True)
+    assert _tvd(got, want) < 1e-12
+    assert not model.report.events.get("typical_noise_used")
+
+
+def test_other_angles_keep_their_own_names(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    model = to_pennylane(_trapped_ion())
+
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit():
+        qml.Rot(0.3, 1.0, 0.5, wires=0)  # an r followed by a z rotation
+        qml.IsingZZ(0.7, wires=[0, 1])
+        return qml.probs(wires=[0, 1])
+
+    qml.add_noise(circuit, model)()
+    assert dict(model.report.events["typical_noise_used"]) == {"Rot": 1, "rzz": 1}
+
+
+def test_ising_zz_at_pi_over_2_is_rzz_on_a_profile_without_zz(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    model = to_pennylane(_trapped_ion(two_qubit="rzz"))
+
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit():
+        qml.IsingZZ(np.pi / 2 + 2 * np.pi, wires=[0, 1])
+        return qml.probs(wires=[0, 1])
+
+    qml.add_noise(circuit, model)()
+    assert not model.report.events.get("typical_noise_used")
+
+
+def test_check_runs_pennylane_on_quantinuum() -> None:
+    import noisevault as nv
+
+    (pennylane,) = nv.load("quantinuum_h1-1").check(frameworks=["pennylane"]).frameworks
+    assert pennylane.passed and not pennylane.not_run
+    assert {g for c in pennylane.circuits for g in c.gates} == {"r", "zz"}

@@ -73,7 +73,10 @@ _FORBIDDEN_NAME = re.compile(r"[@/\\]")
 
 
 class _Model(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    # model_copy(update=...) skips validation, so a nested instance must be checked again
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, allow_inf_nan=False, revalidate_instances="always"
+    )
 
 
 class FrozenDict(dict):
@@ -308,6 +311,26 @@ class Provenance(_Model):
     derived_from: str | None = None
     notes: tuple[str, ...] = ()
     extra: JsonObject = Field(default_factory=FrozenDict)
+
+
+# "IBM Quantum, via qiskit-ibm-runtime", "X (via Y)", "X via Y"
+_VIA = re.compile(r"(?P<who>.+?)(?:,\s*|\s*\(\s*|\s+)via\s+(?P<via>.+?)\)?")
+_LATEX_SPECIALS = {
+    "\\": r"\textbackslash{}",
+    "&": r"\&",
+    "%": r"\%",
+    "$": r"\$",
+    "#": r"\#",
+    "_": r"\_",
+    "{": r"\{",
+    "}": r"\}",
+    "~": r"\textasciitilde{}",
+    "^": r"\textasciicircum{}",
+}
+
+
+def _latex(text: str) -> str:
+    return "".join(_LATEX_SPECIALS.get(char, char) for char in text)
 
 
 def merge_spec(definition: GateSpec, record: CalibrationRecord) -> GateSpec:
@@ -582,14 +605,19 @@ class Profile(_Model):
         key = re.sub(r"[^a-z0-9]+", "_", f"{self.id}_{when[:10]}" if dated else self.id)
         title = f"Calibrated noise of {dev.name}" + (f" at {when}" if dated else "")
         year = f"  year = {{{when[:4]}}},\n" if dated else ""
+        via = _VIA.fullmatch(who)
+        retrieved = f"Retrieved via {via['via']}. " if via else ""
+        published = f"NoiseVault profile {self.id}, sha256:{self.fingerprint}"
+        note = f"{retrieved}Source: {prov.source or 'unknown'}; license {prov.license or 'unknown'}"
+        # Double braces: BibTeX would lowercase the title and split an organization into
+        # first and last names.
         return (
             f"@misc{{nv_{key},\n"
-            f"  title = {{{title}}},\n"
-            f"  author = {{{who}}},\n"
+            f"  title = {{{{{_latex(title)}}}}},\n"
+            f"  author = {{{{{_latex(via['who'] if via else who)}}}}},\n"
             f"{year}"
-            f"  howpublished = {{NoiseVault profile {self.id}, sha256:{self.fingerprint}}},\n"
-            f"  note = {{Source: {prov.source or 'unknown'};"
-            f" license {prov.license or 'unknown'}}}\n"
+            f"  howpublished = {{{_latex(published)}}},\n"
+            f"  note = {{{_latex(note)}}}\n"
             f"}}"
         )
 

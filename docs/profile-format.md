@@ -204,8 +204,9 @@ adds relaxation for the duration and solves for the depolarizing part so the com
 has the stated error. A `pauli` spec is the whole channel, and no relaxation is added to it.
 
 The qualifiers (`method` through `assumption`) do not change the conversion. They record what
-the number is, so a reader can judge it. `nv validate` warns about calibration records with
-`scope: cycle`.
+the number is, so a reader can judge it. An export's report lists, under approximated, each gate
+it used whose number is a per-cycle value, includes SPAM or leakage, is a device median or mean,
+or carries an assumption. `nv validate` warns about calibration records with `scope: cycle`.
 
 ### Gate states
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 import gzip
 import json
 import re
+import shutil
+import subprocess
+import sys
 from importlib.metadata import version
 from pathlib import Path
 
@@ -109,23 +112,10 @@ def test_output_fits_the_terminal(args: list[str], columns: int) -> None:
     assert max(len(line) for line in result.stdout.splitlines()) <= columns
 
 
-def _pulled_ionq(vault: Path) -> None:
-    """A vault profile with the long license and source label a pulled IonQ profile has."""
-    data = nv.load("quantinuum_h1-1").model_dump(mode="json", exclude_none=True)
-    data["device"] |= {"name": "forte-1", "vendor": "ionq", "processor": "Forte"}
-    data["device"]["calibrated_at"] = "2026-09-29T00:00:00Z"
-    data["provenance"] |= {
-        "license": "IonQ EULA (not an open license)",
-        "source_kind": "public_api",
-        "redistributable": "no",
-    }
-    vault.mkdir(parents=True)
-    Profile.model_validate(data).save(vault / "ionq_forte-1.json.gz")
-
-
 @pytest.mark.parametrize("columns", [80, 120])
-def test_list_keeps_every_cell_whole_with_a_pulled_profile(vault: Path, columns: int) -> None:
-    _pulled_ionq(vault)
+def test_list_keeps_every_cell_whole_with_a_pulled_profile(monkeypatch, columns: int) -> None:
+    _serve_ionq(monkeypatch)
+    assert runner.invoke(app, ["pull", "ionq_forte-1"]).exit_code == 0
     result = runner.invoke(app, ["list"], env={"COLUMNS": str(columns)})
     lines = result.stdout.splitlines()
     assert max(map(len, lines)) <= columns
@@ -134,8 +124,8 @@ def test_list_keeps_every_cell_whole_with_a_pulled_profile(vault: Path, columns:
     assert first == [
         "*",
         "ionq_forte-1",
-        "2026-09-29",
-        "20",
+        "2026-09-27",
+        "4",
         "Forte",
         "public",
         "API",
@@ -273,6 +263,13 @@ def test_show_qubits_and_json() -> None:
     assert data["qubits"][1]["gate_1q"] == "sx"
 
 
+@pytest.mark.parametrize("ref", ["ibm_fez", "ibm_kyiv", "ibm_manila"])
+def test_show_qubits_names_a_real_gate_not_the_identity(ref: str) -> None:
+    text = runner.invoke(app, ["show", ref, "--qubits", "0,1,2,3,4"]).stdout
+    rows = text[text.index("1q error") :].splitlines()[1:]
+    assert len(rows) == 5 and all(row.endswith("(sx)") for row in map(str.rstrip, rows))
+
+
 def test_show_all_to_all_and_notes() -> None:
     out = runner.invoke(app, ["show", "quantinuum_h1-1"], env={"COLUMNS": "200"}).stdout
     assert "all-to-all" in out and "device-wide" in out
@@ -292,6 +289,42 @@ def test_pull_saves_to_the_vault_and_prints_the_card(monkeypatch, vault: Path) -
     (saved,) = vault.glob("*.json.gz")
     assert f"saved: {saved}" in result.stdout and "ibm_fez@2025-02-26" in result.stdout
     assert nv.load(str(saved)).fingerprint == pulled.fingerprint
+    assert result.stdout.splitlines()[-1] == f"saved: {saved}"
+
+
+def test_pull_of_a_calibration_already_in_the_vault_says_nothing_was_written(
+    monkeypatch, vault: Path
+) -> None:
+    from noisevault.sources import ibm_public
+
+    monkeypatch.setattr(ibm_public, "pull", lambda device, at=None: nv.load("ibm_fez"))
+    runner.invoke(app, ["pull", "ibm_fez"])
+    (saved,) = vault.glob("*.json.gz")
+    written = saved.stat().st_mtime_ns
+    again = runner.invoke(app, ["pull", "ibm_fez"])
+    assert again.exit_code == 0, again.output
+    assert again.stdout.splitlines()[-1] == f"already saved: {saved}"
+    assert saved.stat().st_mtime_ns == written
+
+
+def _serve_ionq(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IonQ's public endpoint, answered from the recorded responses in the test fixture."""
+    from noisevault.sources import ionq
+
+    path = Path(__file__).parent / "fixtures" / "ionq" / "responses.json"
+    bodies = {url: json.dumps(body).encode() for url, body in json.loads(path.read_text()).items()}
+    monkeypatch.setattr(ionq, "_get", bodies.__getitem__)
+
+
+def test_pull_at_works_for_every_source_its_help_names(monkeypatch) -> None:
+    from typer.main import get_command
+
+    (at,) = [p for p in get_command(app).commands["pull"].params if p.name == "at"]
+    assert all(source in at.help for source in ("IBM public", "IBM account", "IonQ"))
+    _serve_ionq(monkeypatch)
+    result = runner.invoke(app, ["pull", "ionq_forte-1", "--at", "2026-09-01"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.startswith("ionq_forte-1@2026-09-01")  # without --at: 2026-09-27
 
 
 def test_pull_to_a_file(monkeypatch, tmp_path: Path) -> None:
@@ -394,11 +427,11 @@ def test_check_failure_exits_1(monkeypatch) -> None:
 
 def test_check_json_and_skips() -> None:
     result = runner.invoke(
-        app, ["check", "quantinuum_h1-1", "--framework", "pennylane,cirq", "--json"]
+        app, ["check", "quantinuum_h1-1", "--framework", "stim,cirq", "--json"]
     )
     data = json.loads(result.stdout)
     assert [f["framework"] for f in data["frameworks"]] == ["cirq"]
-    assert data["skipped"][0]["framework"] == "pennylane"
+    assert data["skipped"][0]["framework"] == "stim"
     assert result.exit_code == 0
 
 
@@ -407,7 +440,79 @@ def test_cite() -> None:
     text = runner.invoke(app, ["cite", "ibm_fez"]).stdout
     assert text == profile.citation() + "\n"
     bibtex = runner.invoke(app, ["cite", "ibm_fez", "--bibtex"]).stdout
-    assert bibtex.startswith("@misc{nv_ibm_fez_2025_02_26,") and profile.fingerprint in bibtex
+    assert bibtex == (
+        "@misc{nv_ibm_fez_2025_02_26,\n"
+        "  title = {{Calibrated noise of ibm\\_fez at 2025-02-26T20:16:25Z}},\n"
+        "  author = {{IBM Quantum}},\n"
+        "  year = {2025},\n"
+        f"  howpublished = {{NoiseVault profile ibm\\_fez, sha256:{profile.fingerprint}}},\n"
+        "  note = {Retrieved via qiskit-ibm-runtime."
+        " Source: qiskit-ibm-runtime 0.49.0 FakeFez; license Apache-2.0}\n"
+        "}\n"
+    )
+
+
+def _special_characters_profile(tmp_path: Path) -> Path:
+    data = toy(
+        provenance={
+            "attribution": "R&D Lab (via my_tool #2)",
+            "source": "50% of run_7 {raw}",
+            "license": "CC0-1.0",
+        }
+    )
+    data["device"]["calibrated_at"] = "2025-02-26T09:12:00Z"
+    path = tmp_path / "special.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
+def test_cite_bibtex_escapes_latex_specials(tmp_path: Path) -> None:
+    path = _special_characters_profile(tmp_path)
+    fingerprint = nv.load(str(path)).fingerprint
+    bibtex = runner.invoke(app, ["cite", str(path), "--bibtex"]).stdout
+    assert bibtex == (
+        "@misc{nv_test_toy_2025_02_26,\n"
+        "  title = {{Calibrated noise of toy at 2025-02-26T09:12:00Z}},\n"
+        "  author = {{R\\&D Lab}},\n"
+        "  year = {2025},\n"
+        f"  howpublished = {{NoiseVault profile test\\_toy, sha256:{fingerprint}}},\n"
+        "  note = {Retrieved via my\\_tool \\#2."
+        " Source: 50\\% of run\\_7 \\{raw\\}; license CC0-1.0}\n"
+        "}\n"
+    )
+
+
+def _latex_command() -> list[list[str]] | None:
+    if shutil.which("pdflatex") and shutil.which("bibtex"):
+        return [["pdflatex", "-interaction=nonstopmode", "main.tex"], ["bibtex", "main"]] + [
+            ["pdflatex", "-interaction=nonstopmode", "main.tex"]
+        ] * 2
+    if shutil.which("tectonic"):
+        return [["tectonic", "-X", "compile", "--keep-intermediates", "main.tex"]]
+    return None
+
+
+def test_cite_bibtex_compiles_with_latex(tmp_path: Path) -> None:
+    commands = _latex_command()
+    if commands is None:
+        pytest.skip("neither pdflatex with bibtex nor tectonic is installed")
+    refs = [
+        runner.invoke(app, ["cite", ref, "--bibtex"]).stdout
+        for ref in ("ibm_fez", "google_rainbow", str(_special_characters_profile(tmp_path)))
+    ]
+    (tmp_path / "refs.bib").write_text("\n".join(refs))
+    (tmp_path / "main.tex").write_text(
+        "\\documentclass{article}\n\\begin{document}\n\\nocite{*}\n"
+        "\\bibliographystyle{plain}\n\\bibliography{refs}\n\\end{document}\n"
+    )
+    for command in commands:
+        done = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+        assert done.returncode == 0, done.stdout + done.stderr
+    bbl = (tmp_path / "main.bbl").read_text()
+    # unbraced, "IBM Quantum, via qiskit-ibm-runtime" prints as "via qiskit-ibm-runtime IBM Quantum"
+    for author in ("IBM Quantum", "R\\&D Lab"):
+        assert f"\n{{{author}}}.\n" in bbl
+    assert "2025-02-26T20:16:25Z" in bbl  # the braced title keeps its capitals
 
 
 def test_schema_is_the_format_json_schema() -> None:
@@ -422,3 +527,30 @@ def test_doctor_lists_frameworks_and_the_vault(vault: Path) -> None:
         assert line.split()[1] == version(package)
     assert f"vault: {vault} (0 profiles)" in out
     assert f"bundled profiles: {len(nv.catalog.bundled_profiles())}" in out
+
+
+_INSTALL_ALL = (
+    'pip install "noisevault[all] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
+)
+
+
+def test_doctor_gives_a_whole_install_command_for_missing_frameworks(monkeypatch) -> None:
+    from importlib.metadata import PackageNotFoundError
+
+    import noisevault.cli as cli
+
+    def without_stim(package: str) -> str:
+        if package == "stim":
+            raise PackageNotFoundError(package)
+        return version(package)
+
+    monkeypatch.setattr(cli, "version", without_stim)
+    out = runner.invoke(app, ["doctor"], env={"COLUMNS": "80"}).stdout
+    assert f"To add the missing frameworks: {_INSTALL_ALL}" in out.splitlines()
+
+
+def test_check_with_no_framework_installed_gives_the_install_command(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "cirq", None)
+    result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq"])
+    assert result.exit_code == 1
+    assert f"no framework could run the check; install one: {_INSTALL_ALL}" in result.stderr

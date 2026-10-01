@@ -12,7 +12,7 @@ from dataclasses import replace
 from datetime import date, datetime
 from typing import Any
 
-from ..errors import SourceUnavailable
+from ..errors import SourceUnavailable, install_hint
 from ..profile import Profile
 from .qiskit_backend import (
     as_utc,
@@ -46,7 +46,14 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
             f"your IBM account cannot open {device} ({exc}); `service.backends()` lists the"
             " devices it can see"
         ) from None
-    props = backend.properties(datetime=None if at is None else as_utc(at))
+    when = None if at is None else as_utc(at)
+    try:
+        props = backend.properties(datetime=when)
+    except Exception as exc:  # API, protocol and network errors all surface here
+        raise SourceUnavailable(
+            f"IBM did not return the calibration of {device} ({exc}); try again later, or"
+            " pull without an account with source='ibm'"
+        ) from None
     if props is None:
         raise SourceUnavailable(
             f"IBM returned no calibration for {device}{'' if at is None else f' before {at}'};"
@@ -79,7 +86,7 @@ def _service() -> Any:
         from qiskit_ibm_runtime import QiskitRuntimeService
     except ImportError:
         raise SourceUnavailable(
-            "source='ibm-account' needs qiskit-ibm-runtime: pip install 'noisevault[ibm]'"
+            f"source='ibm-account' needs qiskit-ibm-runtime: {install_hint('ibm')}"
         ) from None
     token = os.environ.get("IBM_QUANTUM_TOKEN")
     options: dict[str, Any] = {"channel": CHANNEL}

@@ -214,3 +214,20 @@ def test_backend_with_no_qubit_count_says_what_to_pass() -> None:
 
     with pytest.raises(TypeError, match="has no fixed qubit count.*pass a device backend"):
         nv.from_qiskit_backend(BasicSimulator())
+
+
+def test_gates_the_target_drops_as_non_operational_stay_disabled() -> None:
+    backend = _backend("FakeManilaV2")
+    props = backend.properties().to_dict()
+    for entry in props["gates"]:
+        if (entry["gate"], entry["qubits"]) in (("sx", [3]), ("cx", [3, 4])):
+            stamp = entry["parameters"][0]["date"]
+            entry["parameters"].append(
+                {"name": "operational", "unit": "", "value": 0, "date": stamp}
+            )
+    backend._props_dict = props
+    assert (3,) not in backend.target["sx"] and (3, 4) not in backend.target["cx"]
+    profile = nv.from_qiskit_backend(backend)
+    assert profile.table.gate("sx", (3,)).state == "disabled"
+    assert profile.table.gate("cx", (3, 4)).state == "disabled"
+    assert profile.table.gate("cx", (4, 3)).state == "calibrated"

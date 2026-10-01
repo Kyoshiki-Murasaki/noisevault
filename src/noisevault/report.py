@@ -18,9 +18,14 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from .channels import GateChannels
-    from .profile import Effect, Profile
+    from .profile import Effect, GateSpec, Profile
 
 HONESTY = "Calibration-derived models approximate the hardware; they are not a digital twin."
+_INCLUDES = {  # includes item -> what the model does with it
+    "1q_dressing": "explicit single-qubit gates in the circuit add their own error on top",
+    "leakage": "applied as depolarizing noise; no population leaves the qubit",
+    "spam": "readout and preparation noise, where applied, count state prep and measurement again",
+}
 
 
 @dataclass(frozen=True)
@@ -87,17 +92,34 @@ class Report:
         self.events.setdefault(event, Counter())[key] += n
 
     def record_channels(self, built: GateChannels) -> None:
-        """Record the bookkeeping of one gate's channels: floors, T2 clamps, reversed records."""
+        """Record the bookkeeping of one gate's channels: clamps, qualifiers, reversed records."""
         gate = built.gate
-        if built.floor:
+        if built.inexact:
             if not any(c.gate == gate.gate and c.qubits == gate.qubits for c in self.clamped):
                 self.clamped.append(
                     Clamp(gate.gate, gate.qubits, built.requested, built.achieved)  # type: ignore[arg-type]
                 )
         for q in built.t2_clamped:
             self.approximate(f"T2 of qubit {q}", "clamped to 2*T1", "the stated T2 exceeds 2*T1")
+        self._record_qualifiers(gate.gate, gate.spec)
         if gate.origin == "reversed_record":
             self.count("reversed_record_used", gate.gate)
+
+    def _record_qualifiers(self, name: str, spec: GateSpec) -> None:
+        """Qualifiers that make the stated number differ from the error of the gate alone."""
+        what = f"{name} error"
+        if spec.scope == "cycle":
+            self.approximate(
+                what,
+                "a per-cycle error applied to each gate",
+                "it also counts the surrounding layer",
+            )
+        for item in spec.includes or ():
+            self.approximate(what, f"the stated error includes {item}", _INCLUDES[item])
+        if spec.statistic in ("median", "mean"):
+            self.approximate(what, f"a device {spec.statistic} applied to every locus")
+        if spec.assumption:
+            self.approximate(what, "read under an importer assumption", spec.assumption)
 
     def record_effects(self, effects: Iterable[Effect]) -> None:
         """Effects are not implemented by any adapter in this release: omit or refuse."""
@@ -159,17 +181,27 @@ class Report:
             lines.append("omitted: " + ", ".join(self.omitted))
         if self.unknown:
             lines.append("unknown (no noise applied): " + ", ".join(self.unknown))
-        if self.clamped:
-            worst = max(self.clamped, key=lambda c: c.achieved - c.requested)
+        noisier = [c for c in self.clamped if c.achieved > c.requested]
+        quieter = [c for c in self.clamped if c.achieved < c.requested]
+        if noisier:
             lines.append(
-                f"clamped: {len(self.clamped)} gate(s) noisier than stated because relaxation"
-                f" alone exceeds the stated error; largest {worst.gate}{list(worst.qubits)}"
-                f" {worst.requested:.3g} -> {worst.achieved:.3g}"
+                f"clamped: {len(noisier)} gate(s) noisier than stated because relaxation"
+                f" alone exceeds the stated error; largest {_worst(noisier)}"
+            )
+        if quieter:
+            lines.append(
+                f"clamped: {len(quieter)} gate(s) less noisy than stated because the strongest"
+                f" depolarizing noise on top of relaxation falls short; largest {_worst(quieter)}"
             )
         for name, counts in self.events.items():
             lines.append(f"{name}: " + ", ".join(f"{k}={v}" for k, v in counts.most_common()))
         lines.append(HONESTY)
         return "\n".join(lines)
+
+
+def _worst(clamps: list[Clamp]) -> str:
+    c = max(clamps, key=lambda c: abs(c.achieved - c.requested))
+    return f"{c.gate}{list(c.qubits)} {c.requested:.3g} -> {c.achieved:.3g}"
 
 
 def _append_new(items: list, item: Any) -> None:

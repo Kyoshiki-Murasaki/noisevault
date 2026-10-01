@@ -1,6 +1,6 @@
 """Run a GHZ circuit under the calibrated noise of IBM Fez (bundled, works offline).
 
-Needs: pip install 'noisevault[qiskit]'
+Needs: pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"
 """
 
 import textwrap

@@ -6,6 +6,7 @@ import tracemalloc
 import pytest
 from conftest import toy
 
+import noisevault as nv
 from noisevault import metrics
 from noisevault.profile import Profile
 from noisevault.table import GateNoise, Unavailable
@@ -100,6 +101,30 @@ def test_z_family_is_free_only_through_a_virtual_rz() -> None:
     assert isinstance(calibrated_rz.gate("s", (1,)), Unavailable)
 
 
+def test_defined_z_family_gates_without_their_own_metric_are_free_through_a_virtual_rz() -> None:
+    table = table_of(
+        gates={
+            "rz": {"virtual": True},
+            "z": {},
+            "s": {"disabled": True},
+            "t": {"avg_infidelity": 1e-4},
+            "x": {"avg_infidelity": 0.01},
+        },
+        calibrations=[{"gate": "z", "qubits": [2], "avg_infidelity": 2e-3}],
+    )
+    free = table.gate("z", (0,))
+    assert (free.state, free.avg_infidelity) == ("ideal", None)
+    calibrated = table.gate("z", (2,))
+    assert (calibrated.state, calibrated.avg_infidelity) == ("calibrated", 2e-3)
+    assert table.gate("s", (0,)).state == "disabled"
+    assert table.gate("t", (0,)).avg_infidelity == 1e-4
+
+
+def test_rz_lookup_without_an_rz_definition_is_undefined() -> None:
+    found = table_of(gates={"sx": {"avg_infidelity": 1e-3}}).gate("rz", (0,))
+    assert isinstance(found, Unavailable) and found.kind == "undefined"
+
+
 def test_bad_targets_and_disabled_qubits_are_unavailable() -> None:
     table = table_of(qubits=[{"index": 2, "disabled": True}])
     assert "acts on 2" in table.gate("cz", (0,)).reason
@@ -154,8 +179,19 @@ def test_typical_prefers_most_records_then_name() -> None:
     table = table_of(gates=gates, calibrations=[record])
     assert table.typical(1, (1,)).gate == "x"  # most records
     tied = table_of(gates=gates)
-    assert tied.typical(1, (1,)).gate == "id"  # tie: alphabetical
+    assert tied.typical(1, (1,)).gate == "sx"  # tie: alphabetical, after any real gate
     assert tied.typical(2, (0, 1)).gate == "cz"
+
+
+def test_typical_takes_the_identity_only_when_no_real_gate_fits() -> None:
+    gates = {**toy()["gates"], "id": {"avg_infidelity": 1e-4}}
+    records = [{"gate": "id", "qubits": [q], "avg_infidelity": 1e-4} for q in range(3)]
+    table = table_of(gates=gates, calibrations=records)
+    assert table.typical(1, (0,)).gate == "sx"  # id has more records, but is an idle slot
+    only_id = table_of(gates={**gates, "sx": {"disabled": True}}, calibrations=records)
+    assert only_id.typical(1, (0,)).gate == "id"
+    for q in range(3):
+        assert nv.load("ibm_fez").table.typical(1, (q,)).gate == "sx"
 
 
 def test_typical_skips_disabled_candidates_and_can_reverse_a_directed_record() -> None:

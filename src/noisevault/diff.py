@@ -1,10 +1,13 @@
 """Drift between two profiles: device-wide medians, the largest per-qubit and per-pair changes,
 gates and qubits that were disabled or re-enabled, and qubits added or removed.
 
-Per-qubit values are the resolved ones (a qubit record, else the device default). The typical
-1-qubit and 2-qubit errors are those of the native gate the conversion rules would use there
-(:meth:`NoiseTable.typical`). On all-to-all devices the pairs compared are those with a
-2-qubit calibration record, or one pair carrying the device default when there is none.
+Every value is the resolved one (a record, else the device default), looked up in both profiles
+for the same locus. The typical 1-qubit and 2-qubit errors are those of the native gate the
+conversion rules would use there (:meth:`NoiseTable.typical`), on each ordered pair; a pair whose
+two directions agree in both profiles is one row. On all-to-all devices the pairs with a 2-qubit
+record are listed one by one and every other pair, all carrying the device default, is one
+"default" row that counts once per pair in the medians. A gate definition marked disabled is
+listed as "<gate> default".
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ import statistics
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from itertools import combinations
+from math import comb
 from typing import TYPE_CHECKING, Any
 
 from .table import GateNoise
@@ -22,6 +27,7 @@ if TYPE_CHECKING:
     from .table import NoiseTable
 
 Pair = tuple[int, int]
+DEFAULT = "default"  # all-to-all pairs without a 2-qubit record
 # metric name, unit for display, and whether a larger value is better
 METRICS: dict[str, tuple[str, bool]] = {
     "t1_us": ("T1 (us)", True),
@@ -50,8 +56,11 @@ class Change:
     @property
     def worse(self) -> bool:
         """True when the change makes the device noisier."""
-        rel = self.relative
-        return rel is not None and (rel < 0 if METRICS[self.metric][1] else rel > 0)
+        if self.before is None or self.after is None:
+            return False
+        if METRICS[self.metric][1]:
+            return self.after < self.before
+        return self.after > self.before
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -155,13 +164,11 @@ def diff(a: Profile, b: Profile, *, top: int = 5) -> ProfileDiff:
         )
 
     qa, qb = _qubit_values(a.table), _qubit_values(b.table)
-    pa, pb = _pair_values(a.table), _pair_values(b.table)
     medians = tuple(
-        Change(
-            m, _median(pa if m == "error_2q" else qa, m), _median(pb if m == "error_2q" else qb, m)
-        )
+        Change(m, _median(_samples(a.table, qa, m)), _median(_samples(b.table, qb, m)))
         for m in METRICS
     )
+    pa, pb = _pair_values(a.table, b.table)
     newly_disabled, reenabled = _availability(a, b)
     common = range(min(a.device.num_qubits, b.device.num_qubits))
     return ProfileDiff(
@@ -172,7 +179,7 @@ def diff(a: Profile, b: Profile, *, top: int = 5) -> ProfileDiff:
         time_delta=delta,
         medians=medians,
         qubits=_largest(qa, qb, lambda q: str(q), top),
-        pairs=_largest(pa, pb, lambda p: f"{p[0]}-{p[1]}", top),
+        pairs=_largest(pa, pb, lambda p: p if p == DEFAULT else f"{p[0]}-{p[1]}", top),
         newly_disabled=newly_disabled,
         reenabled=reenabled,
         qubits_added=tuple(q for q in range(b.device.num_qubits) if q not in common),
@@ -200,34 +207,105 @@ def _qubit_values(table: NoiseTable) -> dict[int, dict[str, float]]:
     return out
 
 
-def _pair_values(table: NoiseTable) -> dict[Pair, dict[str, float]]:
-    out: dict[Pair, dict[str, float]] = {}
-    for a, b in _pairs(table):
-        errors = [_error(table.typical(2, pair)) for pair in ((a, b), (b, a))]
-        known = [e for e in errors if e is not None]
-        if known:
-            out[(a, b)] = {"error_2q": min(known)}
-    return out
+def _pair_values(
+    a: NoiseTable, b: NoiseTable
+) -> tuple[dict[Pair | str, dict[str, float]], dict[Pair | str, dict[str, float]]]:
+    """The typical 2-qubit error on the same loci of ``a`` and ``b``.
+
+    A locus with no usable 2-qubit gate in a profile is left out of that profile's values, so
+    it is not compared: losing or regaining a gate is reported as availability, not drift.
+    """
+    common = range(min(a.num_qubits, b.num_qubits))
+    usable = [q for q in common if not a.qubit(q).disabled and not b.qubit(q).disabled]
+    listed, rest, _ = _pair_loci((a, b), usable)
+    before: dict[Pair | str, dict[str, float]] = {}
+    after: dict[Pair | str, dict[str, float]] = {}
+    for pair in listed:
+        x, y = _entries(a, pair), _entries(b, pair)
+        loci = [pair] if x[0] == x[1] and y[0] == y[1] else [pair, (pair[1], pair[0])]
+        for i, locus in enumerate(loci):
+            _put(before, locus, x[i])
+            _put(after, locus, y[i])
+    if rest is not None:
+        _put(before, DEFAULT, _entries(a, rest)[0])
+        _put(after, DEFAULT, _entries(b, rest)[0])
+    return before, after
 
 
-def _pairs(table: NoiseTable) -> list[Pair]:
+def _pair_errors(table: NoiseTable) -> list[float]:
+    """The typical 2-qubit error of every usable ordered pair."""
+    usable = [q for q in range(table.num_qubits) if not table.qubit(q).disabled]
+    listed, rest, count = _pair_loci((table,), usable)
+    errors = [e for pair in listed for e in _directions(table, pair)]
+    if rest is not None:
+        errors += list(_directions(table, rest)) * count
+    return [e for e in errors if e is not None]
+
+
+def _pair_loci(
+    tables: tuple[NoiseTable, ...], qubits: list[int]
+) -> tuple[list[Pair], Pair | None, int]:
+    """Pairs among ``qubits`` to look up, as (a, b) with a < b.
+
+    Every connected pair; on all-to-all devices only the pairs with a 2-qubit record in one of
+    ``tables``, plus one pair standing in for the rest (they all resolve to the device default)
+    and how many pairs it stands for.
+    """
+    allowed = set(qubits)
+    listed = sorted({p for t in tables for p in _pairs(t) if allowed.issuperset(p)})
+    if not all(t.all_to_all for t in tables):
+        return listed, None, 0
+    taken = set(listed)
+    rest = next((p for p in combinations(qubits, 2) if p not in taken), None)
+    return listed, rest, comb(len(qubits), 2) - len(listed)
+
+
+def _pairs(table: NoiseTable) -> set[Pair]:
     if not table.all_to_all:
-        return table.edges()
+        return {(min(e), max(e)) for e in table.edges()}
     arity = table.arity
-    loci = {
+    return {
         (min(r.qubits), max(r.qubits))
         for r in table.profile.calibrations
         if len(r.qubits) == 2 and arity(r.gate) == 2
     }
-    return sorted(loci) or ([(0, 1)] if table.num_qubits > 1 else [])
+
+
+def _directions(table: NoiseTable, pair: Pair) -> tuple[float | None, float | None]:
+    a, b = pair
+    return _error(table.typical(2, (a, b))), _error(table.typical(2, (b, a)))
+
+
+def _entries(table: NoiseTable, pair: Pair) -> list[dict[str, float] | None]:
+    """Per direction: the typical error, {} when only uncalibrated gates are usable, or None."""
+    out: list[dict[str, float] | None] = []
+    for locus, error in zip((pair, pair[::-1]), _directions(table, pair), strict=True):
+        if error is not None:
+            out.append({"error_2q": error})
+        else:
+            usable = any(table.allowed(g, locus) for g in table.natives(2))
+            out.append({} if usable else None)
+    return out
+
+
+def _put(
+    values: dict[Pair | str, dict[str, float]], locus: Pair | str, entry: dict[str, float] | None
+) -> None:
+    if entry is not None:
+        values[locus] = entry
 
 
 def _error(found: Any) -> float | None:
     return found.avg_infidelity if isinstance(found, GateNoise) else None
 
 
-def _median(values: dict[Any, dict[str, float]], metric: str) -> float | None:
-    found = [v[metric] for v in values.values() if metric in v]
+def _samples(table: NoiseTable, qubits: dict[int, dict[str, float]], metric: str) -> list[float]:
+    if metric == "error_2q":
+        return _pair_errors(table)
+    return [v[metric] for v in qubits.values() if metric in v]
+
+
+def _median(found: list[float]) -> float | None:
     return statistics.median(found) if found else None
 
 
@@ -238,19 +316,24 @@ def _largest(
     top: int,
 ) -> tuple[Change, ...]:
     moved = [
-        (key, Change(metric, before[key][metric], value, label(key)))
+        (key, Change(metric, before[key].get(metric), after[key].get(metric), label(key)))
         for key in before.keys() & after.keys()
-        for metric, value in after[key].items()
-        if metric in before[key] and value != before[key][metric]
+        for metric in METRICS
+        if before[key].get(metric) != after[key].get(metric)
     ]
-    moved = [(key, c) for key, c in moved if c.relative is not None]
     moved = _collapse_uniform(moved, before.keys() & after.keys())
-    moved.sort(key=lambda kc: (-abs(kc[1].relative), *_order(kc[0]), kc[1].metric))  # type: ignore[arg-type]
+    moved.sort(key=lambda kc: (*_size(kc[1]), *_order(kc[0]), kc[1].metric))
     return tuple(c for _, c in moved[:top])
 
 
-def _order(key: Any) -> tuple[bool, Any]:
-    return (False, ()) if key == "all" else (True, key)
+def _size(change: Change) -> tuple[bool, float]:
+    """Largest first; a value that appears, disappears or leaves zero comes before any ratio."""
+    rel = change.relative
+    return (False, 0.0) if rel is None else (True, -abs(rel))
+
+
+def _order(key: Any) -> tuple[int, Any]:
+    return (0, ()) if key == "all" else (1, ()) if key == DEFAULT else (2, key)
 
 
 def _collapse_uniform(moved: list[tuple[Any, Change]], keys: set[Any]) -> list[tuple[Any, Change]]:
@@ -274,7 +357,10 @@ def _availability(a: Profile, b: Profile) -> tuple[tuple[str, ...], tuple[str, .
     """
     loci = sorted({*_disabled(a), *_disabled(b)})
     state_a, state_b = [_state(a, k) for k in loci], [_state(b, k) for k in loci]
-    labels = [f"{gate or 'qubit'} {'-'.join(map(str, qubits))}" for gate, qubits in loci]
+    labels = [
+        f"{gate or 'qubit'} {'-'.join(map(str, qubits)) if qubits else DEFAULT}"
+        for gate, qubits in loci
+    ]
     pairs = list(zip(labels, state_a, state_b, strict=True))
     return (
         tuple(label for label, x, y in pairs if x == "usable" and y == "disabled"),
@@ -283,15 +369,20 @@ def _availability(a: Profile, b: Profile) -> tuple[tuple[str, ...], tuple[str, .
 
 
 def _disabled(profile: Profile) -> set[tuple[str, tuple[int, ...]]]:
-    """Disabled gate loci as (gate, qubits) and disabled qubits as ("", (index,))."""
+    """Disabled gate loci as (gate, qubits), disabled gate definitions as (gate, ()), and
+    disabled qubits as ("", (index,))."""
     gates = {(r.gate, r.qubits) for r in profile.calibrations if r.disabled}
+    gates |= {(name, ()) for name, spec in profile.gates.items() if spec.disabled}
     return gates | {("", (q.index,)) for q in profile.qubits if q.disabled}
 
 
 def _state(profile: Profile, locus: tuple[str, tuple[int, ...]]) -> str | None:
-    """ "usable", "disabled", or None when the profile has no such gate locus or qubit."""
+    """ "usable", "disabled", or None when the profile has no such gate, gate locus or qubit."""
     gate, qubits = locus
     table = profile.table
+    if not qubits:
+        spec = profile.gates.get(gate)
+        return None if spec is None else "disabled" if spec.disabled else "usable"
     if not gate:
         if qubits[0] >= table.num_qubits:
             return None

@@ -98,6 +98,18 @@ def test_rz_stays_calibrated_when_it_has_an_error() -> None:
     assert profile.table.gate("rz", (2,)).avg_infidelity == 1e-4
 
 
+@pytest.mark.parametrize("dead", [{"operational": False}, {"error": 1.0}])
+def test_disabled_rz_stays_disabled_when_rz_becomes_virtual(dead: dict) -> None:
+    data = _v01()
+    for gate in data["gates"]:
+        if gate["name"] == "rz" and gate["qubits"] == [0]:
+            gate.update(dead)
+    profile = _upgrade(data)
+    assert profile.gates["rz"].virtual
+    assert profile.table.gate("rz", (0,)).state == "disabled"
+    assert profile.table.gate("rz", (1,)).state == "ideal"
+
+
 def test_missing_values_stay_missing() -> None:
     data = _v01()
     data["qubits"][1].update(t2_us=None, prob_meas0_prep1=None, readout_error=0.03)

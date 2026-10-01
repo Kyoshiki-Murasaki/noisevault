@@ -136,8 +136,18 @@ def from_qiskit_backend(backend: Any) -> Profile:
     cal = calibration_from_target(target, name=_device_name(backend))
     if props is not None:
         from_props = calibration_from_properties(props)
+        # IBM's Target converter drops non-operational gates and every gate on a faulty qubit;
+        # without their records those loci would resolve to the device default.
+        names = {_QISKIT_TO_CANONICAL.get(n, n) for n in target.operation_names}
+        in_target = {(i.name, i.qubits) for i in cal.instructions}
+        dropped = tuple(
+            i
+            for i in from_props.instructions
+            if i.name in names and (i.name, i.qubits) not in in_target
+        )
         cal = replace(
             cal,
+            instructions=cal.instructions + dropped,
             calibrated_at=from_props.calibrated_at,
             qubits={i: _overlay(q, from_props.qubits.get(i)) for i, q in cal.qubits.items()},
         )
@@ -361,10 +371,12 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     """The profile of an IBM-shaped calibration.
 
     Device-wide defaults are medians over the working loci (``statistic: median``); every locus
-    keeps its own record (``statistic: individual``). IBM's dead-gate sentinel (an error at or
-    above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and ``operational = 0`` become
-    ``disabled: true``. A gate with zero error and zero duration everywhere (IBM's ``rz``) is
-    virtual. Records of a symmetric gate that agree in both directions are stored once.
+    keeps its own record (``statistic: individual``). A readout or prep default is left out when
+    a working qubit has none of its own, so that qubit's value stays unknown. IBM's dead-gate
+    sentinel (an error at or above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and
+    ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration
+    everywhere (IBM's ``rz``) is virtual. Records of a symmetric gate that agree in both
+    directions are stored once.
     """
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
@@ -384,10 +396,32 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         _qubit_record(i, cal.qubits.get(i, QubitCalibration()), measure.get(i))
         for i in range(cal.num_qubits)
     ]
+    working = [q for q in qubit_records if not q.get("disabled")]
     qubit_records = [q for q in qubit_records if len(q) > 1]
     notes = list(provenance.get("notes", ()))
     if cal.skipped:
         notes.append(f"Not converted: {', '.join(cal.skipped)}.")
+    lacking = {
+        key: [q["index"] for q in working if key not in q]
+        for key in ("readout", "prep", "t1_us", "t2_us")
+    }
+    readout, prep = _median_readout(qubit_records), _median_prep(qubit_records)
+    if readout and lacking["readout"]:
+        readout = None
+        notes.append(
+            f"Qubits {lacking['readout']} have no readout calibration, so their readout is unknown."
+        )
+    if prep and lacking["prep"]:
+        prep = None
+        notes.append(
+            f"Qubits {lacking['prep']} have no prep calibration, so their prep is unknown."
+        )
+    idle = _median_idle(qubit_records, ibm)
+    for key, label in (("t1_us", "T1"), ("t2_us", "T2")):
+        if idle and key in idle and lacking[key]:
+            notes.append(
+                f"Qubits {lacking[key]} have no {label}; the device median applies to them."
+            )
     data = {
         "noisevault": FORMAT_VERSION,
         "device": {
@@ -400,9 +434,9 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         },
         "connectivity": _connectivity(cal.instructions),
         "gates": definitions,
-        "readout": _median_readout(qubit_records),
-        "prep": _median_prep(qubit_records),
-        "idle": _median_idle(qubit_records, ibm),
+        "readout": readout,
+        "prep": prep,
+        "idle": idle,
         "qubits": qubit_records,
         "calibrations": records,
         "provenance": {"tool": f"noisevault {__version__}", **provenance, "notes": notes},

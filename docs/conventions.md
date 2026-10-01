@@ -79,13 +79,18 @@ r_relax = 1 - F_relax:
 
 lambda = d (r - r_relax) / (d F_relax - 1)
 
-Two edge cases change the result, and the report records both:
+These edge cases change the result, and the report records each:
 
 - **T2 clamp.** A T2 above 2 T1 is unphysical for this model. It is clamped to 2 T1 and the
   report lists "T2 of qubit q: clamped to 2*T1".
 - **Relaxation floor.** If r_relax already exceeds r, no depolarizing noise is added and the
-  gate keeps the full relaxation. The gate is then noisier than stated. The report's `clamped`
-  list records the requested and achieved errors for each such gate.
+  gate keeps the full relaxation. The gate is then noisier than stated.
+- **Depolarizing ceiling.** If r is above what the strongest depolarizing channel on top of the
+  relaxation can reach, the depolarizing part stops at that maximum and the gate is less noisy
+  than stated. This needs an error far above any real calibration.
+
+For the floor and the ceiling, the report's `clamped` list records each gate's requested and
+achieved error.
 
 A gate with a `pauli` spec gets exactly that Pauli channel and no relaxation, because the spec
 is the whole channel. A virtual gate gets no channel.
@@ -181,7 +186,8 @@ The `unknown_gates` option decides what happens:
 
 - `"typical"` (the default) gives the gate the noise of the typical native gate of its arity on
   the same qubits. The typical native is the calibrated native with the most calibration
-  records, ties broken by name. If it is disabled there, the next one is used. A directed
+  records, ties broken by name. The identity `id` is an idle slot, so it is used only when no
+  other native fits. If the typical native is disabled there, the next one is used. A directed
   two-qubit native may lend its record from the reversed pair. The export warns once per gate
   name with a `NoiseApproximationWarning`, lists the gate under "approximated" in the report and
   counts each use in the report's `typical_noise_used` events.

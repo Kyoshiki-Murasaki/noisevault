@@ -337,6 +337,25 @@ def test_model_copy_with_update_is_validated() -> None:
 
 
 @pytest.mark.parametrize(
+    ("section", "change", "match"),
+    [
+        ("idle", {"t1_us": -10}, "t1_us must be positive"),
+        ("readout", {"error": -0.1}, "error\n.*greater than or equal to 0"),
+        ("prep", {"error": 2.0}, "error\n.*less than or equal to 1"),
+    ],
+)
+def test_nested_models_are_validated_inside_a_profile(section, change, match) -> None:
+    profile = Profile.model_validate(
+        toy(idle={"t1_us": 100}, readout={"error": 0.01}, prep={"error": 1e-3})
+    )
+    invalid = getattr(profile, section).model_copy(update=change)
+    with pytest.raises(ValidationError, match=match):
+        profile.model_copy(update={section: invalid})
+    with pytest.raises(ValidationError, match=match):
+        Profile(**{**dict(profile), section: invalid})
+
+
+@pytest.mark.parametrize(
     "change",
     [
         lambda d: d["gates"]["sx"].update(avg_infidelity=1.000001e-3),

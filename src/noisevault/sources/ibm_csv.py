@@ -11,7 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -152,6 +152,7 @@ def _required(columns: Mapping[str, _Column]) -> dict[str, bool]:
 
 @dataclass(frozen=True)
 class _Row:
+    where: str  # "<file> line <n>", for error messages
     index: int
     values: dict[str, float | None]
     operational: bool
@@ -182,13 +183,13 @@ def _row(
         if key == "operational":
             operational = _flag(text, f"{where}, {column.header.strip()!r}")
         elif key in _TWO_QUBIT_KEYS:
-            packed[key] = dict(_pairs(text, index, f"{where}, {column.header.strip()!r}"))
+            packed[key] = _pairs(text, index, f"{where}, {column.header.strip()!r}")
             if key == "gate_length_2q":
                 packed[key] = {p: _time(v, column, key) for p, v in packed[key].items()}
         else:
             number = _number(text, f"{where}, {column.header.strip()!r}")
             values[key] = None if number is None else _time(number, column, key)
-    return _Row(index, values, operational, packed)
+    return _Row(where, index, values, operational, packed)
 
 
 def _time(value: float, column: _Column, key: str) -> float:
@@ -215,8 +216,9 @@ def _flag(text: str, where: str) -> bool:
     raise ValueError(f"{where}: {text!r} is not yes/no or true/false")
 
 
-def _pairs(text: str, row_qubit: int, where: str) -> Iterator[tuple[tuple[int, int], float]]:
+def _pairs(text: str, row_qubit: int, where: str) -> dict[tuple[int, int], float]:
     """``1_2:0.01; 1_0:0.02`` (explicit pairs) or ``2:0.01;0:0.02`` (partners of the row)."""
+    found: dict[tuple[int, int], float] = {}
     for item in filter(None, (part.strip() for part in text.split(";"))):
         locus, sep, value = item.partition(":")
         try:
@@ -226,16 +228,35 @@ def _pairs(text: str, row_qubit: int, where: str) -> Iterator[tuple[tuple[int, i
             pair = (row_qubit, qubits[0]) if len(qubits) == 1 else (qubits[0], qubits[1])
             if len(qubits) > 2:
                 raise ValueError
-            yield pair, float(value)
+            number = float(value)
         except ValueError:
             raise ValueError(f"{where}: {item!r} is not 'a_b:value' or 'partner:value'") from None
+        if found.setdefault(pair, number) != number:
+            raise ValueError(f"{where}: pair {pair} is given twice, as {found[pair]} and {number}")
+    return found
 
 
 def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Calibration:
-    instructions: list[Instruction] = []
+    found: dict[tuple[str, tuple[int, ...]], tuple[Instruction, str]] = {}
+
+    def add(inst: Instruction, where: str) -> None:
+        first, first_where = found.setdefault((inst.name, inst.qubits), (inst, where))
+        if first != inst:
+            raise ValueError(
+                f"{where}: {inst.name} on qubits {inst.qubits} has error {inst.error} and"
+                f" duration {inst.duration_ns} ns, but {first_where} gives error {first.error}"
+                f" and duration {first.duration_ns} ns"
+            )
+
+    lines: dict[int, str] = {}
     qubits: dict[int, QubitCalibration] = {}
     seen_rz = False
     for row in rows:
+        if row.index in lines:
+            raise ValueError(
+                f"{row.where}: qubit {row.index} is already listed on {lines[row.index]}"
+            )
+        lines[row.index] = row.where
         v = row.values
         qubits[row.index] = QubitCalibration(
             t1_us=v.get("t1"),
@@ -245,10 +266,11 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
             operational=row.operational,
         )
         if v.get("readout_error") is not None or v.get("readout_length") is not None:
-            instructions.append(
+            add(
                 Instruction(
                     "measure", (row.index,), v.get("readout_error"), v.get("readout_length")
-                )
+                ),
+                row.where,
             )
         for key, error in v.items():
             if not key.startswith("error:") or error is None:
@@ -256,22 +278,21 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
             gate = key.removeprefix("error:")
             seen_rz |= gate == "rz"
             duration = None if gate == "rz" else v.get("gate_length_1q")
-            instructions.append(Instruction(gate, (row.index,), error, duration))
+            add(Instruction(gate, (row.index,), error, duration), row.where)
         durations = row.packed.get("gate_length_2q", {})
         for key, cells in row.packed.items():
             if key == "gate_length_2q":
                 continue
             gate = key.removeprefix("error:")
-            instructions += [
-                Instruction(gate, pair, error, durations.get(pair)) for pair, error in cells.items()
-            ]
+            for pair, error in cells.items():
+                add(Instruction(gate, pair, error, durations.get(pair)), row.where)
     if not seen_rz:  # IBM's rz is always virtual; older files leave out its column
-        instructions += [Instruction("rz", (row.index,), 0.0, 0.0) for row in rows]
-    unique = {(inst.name, inst.qubits): inst for inst in instructions}  # a pair listed twice
+        for row in rows:
+            add(Instruction("rz", (row.index,), 0.0, 0.0), row.where)
     return Calibration(
         name=device,
         num_qubits=max(qubits) + 1,
-        instructions=tuple(unique.values()),
+        instructions=tuple(inst for inst, _ in found.values()),
         qubits=qubits,
         calibrated_at=calibrated_at,
     )

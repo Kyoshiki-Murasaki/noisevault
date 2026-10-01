@@ -6,8 +6,10 @@ which is also Qiskit's ``SuperOp`` convention.
 
 A gate with a stated average infidelity gets depolarizing noise followed by zero-temperature
 thermal relaxation over its duration; the depolarizing strength is solved so the composed
-channel has the stated infidelity (Aer's residual rule). When relaxation alone already exceeds
-it, relaxation is kept and :attr:`GateChannels.floor` is true. A missing T2 means T2 = 2 T1
+channel has the stated infidelity (Aer's residual rule). When no depolarizing strength reaches
+it (relaxation alone already exceeds it, or the strongest depolarizing noise on top of
+relaxation falls short), the nearest channel is kept and :attr:`GateChannels.inexact` is true,
+so the report records the stated and achieved errors. A missing T2 means T2 = 2 T1
 (no pure dephasing); T2 above 2 T1 is clamped to 2 T1. A ``pauli`` spec is the whole channel,
 so no relaxation is added to it.
 """
@@ -32,7 +34,7 @@ _PAULIS = {
     "Y": np.array([[0, -1j], [1j, 0]], dtype=complex),
     "Z": np.array([[1, 0], [0, -1]], dtype=complex),
 }
-_FLOOR_TOL = 1e-12
+_MATCH_TOL = 1e-12
 
 
 @dataclass(frozen=True)
@@ -54,9 +56,9 @@ class GateChannels:
     t2_clamped: tuple[int, ...]  # qubits whose T2 was clamped to 2 T1
 
     @property
-    def floor(self) -> bool:
-        """True when relaxation alone exceeds the stated error, so the model is noisier."""
-        return self.requested is not None and self.achieved > self.requested + _FLOOR_TOL
+    def inexact(self) -> bool:
+        """True when the composed channel cannot have the stated error, in either direction."""
+        return self.requested is not None and abs(self.achieved - self.requested) > _MATCH_TOL
 
 
 def gate_channels(gate: GateNoise, qubits: Sequence[QubitNoise]) -> GateChannels:

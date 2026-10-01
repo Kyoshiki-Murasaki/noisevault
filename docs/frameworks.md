@@ -12,8 +12,9 @@ what it approximates, what it leaves out, and what the profile does not know. Pr
 | PennyLane | `profile.to_pennylane()` | `NoiseVaultPennyLaneModel`, a `qml.NoiseModel` | `qml.add_noise(qnode, model)` on `default.mixed` |
 | Stim | `profile.to_stim(circuit)` | `NoiseVaultStimCircuit`, a `stim.Circuit` | its own samplers, or `detector_error_model()` |
 
-Install the framework with its extra: `pip install 'noisevault[qiskit]'`, `[cirq]`,
-`[pennylane]`, `[stim]`, or `[all]`. Importing `noisevault` imports no framework.
+Install the framework with its extra, for example
+`pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"`. The extras are `[qiskit]`, `[cirq]`,
+`[pennylane]`, `[stim]` and `[all]`. Importing `noisevault` imports no framework.
 
 Every export takes `unknown_gates`. With `"typical"` (the default), a gate the profile does not
 calibrate gets the noise of the typical native gate of its arity, with a warning. With
@@ -71,12 +72,13 @@ What the report can list:
   A bit flip with the preparation error after each `reset`, when the profile has one.
 - **Approximated.** T2 values above 2 T1 are clamped. Natives with no Qiskit instruction of
   their own are exported under the gate that contains them: `zz` as `rzz` and `ms` as `rxx`,
-  and the alias gets the native's noise at any angle. The initial state is ideal, which the
-  report notes when the profile has a preparation error.
+  and the alias gets the native's noise at any angle. Google's `sqrt_iswap` is an instruction of
+  its own, but Qiskit's transpiler reaches it only through `cx` (two `sqrt_iswap` each), so a
+  general two-qubit block costs six where three would do; the report says so. The initial state
+  is ideal, which the report notes when the profile has a preparation error.
 - **Omitted.** Idle time outside explicit delays. Transpile with `scheduling_method="alap"` to
-  insert delays on idle qubits. Effects. Natives with no Qiskit instruction, such as Google's
-  `sqrt_iswap` and `sycamore`: Google profiles raise `UnsupportedDevice` and point you to
-  `to_cirq()`.
+  insert delays on idle qubits. Effects. Natives Qiskit cannot target, such as Google's
+  `sycamore`, are left out of the simulator and named in the report.
 - **Unknown.** Values the profile lacks. The bundled IBM snapshots have no preparation error, so
   resets add none.
 

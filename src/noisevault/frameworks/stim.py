@@ -18,15 +18,22 @@ from typing import Any, Literal, get_args
 
 import numpy as np
 
+from ..errors import (
+    DisabledGateError,
+    LayoutError,
+    MissingCalibrationError,
+    NoiseVaultError,
+    install_hint,
+)
+
 try:
     import stim
-except ImportError as exc:  # pragma: no cover - depends on the environment
-    raise ImportError("the Stim export needs stim: pip install 'noisevault[stim]'") from exc
+except ImportError as exc:
+    raise ImportError(f"the Stim export needs stim: {install_hint('stim')}") from exc
 
 from .. import gates
 from ..channels import ChannelSpec, pauli_twirl, thermal_relaxation_kraus
 from ..conversion import UnknownGates, resolve_op
-from ..errors import DisabledGateError, LayoutError, MissingCalibrationError, NoiseVaultError
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report

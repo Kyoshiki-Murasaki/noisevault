@@ -546,7 +546,7 @@ def test_layout_from_coords_says_what_to_do_without_coords():
         layout_from_coords(circuit, _grid(4))
 
 
-@pytest.mark.slow
+@pytest.mark.timing
 def test_layout_from_coords_is_fast_for_a_distance_11_code_on_a_32x32_grid():
     circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=11, rounds=1)
     profile = _grid(32, worse_rows=5)
@@ -562,7 +562,7 @@ def test_layout_from_coords_is_fast_for_a_distance_11_code_on_a_32x32_grid():
 # (f) scale and (g) detector error model ------------------------------------------------------
 
 
-@pytest.mark.slow
+@pytest.mark.timing
 def test_1024_qubits_by_100_layers_converts_and_samples_in_under_5_seconds():
     n, layers = 1024, 100
     lines = [f"R {' '.join(map(str, range(n)))}", "TICK"]

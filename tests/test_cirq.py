@@ -19,7 +19,12 @@ from noisevault.errors import (  # noqa: E402
     NoiseApproximationWarning,
     UnsupportedEffect,
 )
-from noisevault.frameworks.cirq import NoiseVaultNoiseModel, to_cirq  # noqa: E402
+from noisevault.frameworks.cirq import (  # noqa: E402
+    ECRGate,
+    NoiseVaultNoiseModel,
+    gate_name,
+    to_cirq,
+)
 from noisevault.profile import Profile  # noqa: E402
 from noisevault.reference import Op  # noqa: E402
 from noisevault.reference import probabilities as reference  # noqa: E402
@@ -27,7 +32,7 @@ from noisevault.report import Report  # noqa: E402
 
 PI = np.pi
 ONE_Q = ("id", "x", "y", "h", "sx", "sxdg", "rx", "ry", "r")
-TWO_Q = ("cx", "cz", "iswap", "sqrt_iswap", "rzz", "rxx", "ryy", "zz", "ms")
+TWO_Q = ("cx", "cz", "iswap", "sqrt_iswap", "rzz", "rxx", "ryy", "zz", "ms", "ecr")
 # Asymmetric Pauli channel (IX much larger than XI) so an operand swap is visible.
 CZ_PAULI = [0.01, 0, 0, 0.002, *[0] * 11]
 NONCONTIGUOUS = {0: 3, 1: 4, 2: 1}
@@ -144,6 +149,8 @@ GATE_CASES = [
     (cirq.XX**0.3, (0, 2), "rxx", (0.3 * PI,)),
     (cirq.YY**0.2, (2, 1), "ryy", (0.2 * PI,)),
     (cirq.ms(PI / 4), (0, 1), "ms", (0.0, 0.0)),
+    (ECRGate(), (0, 1), "ecr", ()),
+    (ECRGate(), (2, 0), "ecr", ()),
 ]
 
 
@@ -640,3 +647,16 @@ def test_parameterized_gates_must_be_resolved_when_their_name_depends_on_it() ->
     assert result.measurements["m"].mean() > 0.9
     # a name that does not depend on the angle converts before resolution
     assert len(_ops(model.noisy_operation(cirq.rz(t).on(q[0])))) == 1
+
+
+def test_ecr_gate_has_the_registry_unitary_and_value_equality() -> None:
+    a, b = cirq.LineQubit.range(2)
+    assert np.allclose(cirq.unitary(ECRGate().on(a, b)), gates.GATES["ecr"].unitary(), atol=0)
+    assert ECRGate() == ECRGate() and len({ECRGate(), ECRGate()}) == 1
+    assert gate_name(ECRGate()) == "ecr"
+
+
+def test_check_runs_every_circuit_on_an_eagle_device() -> None:
+    (result,) = nv.load("ibm_brisbane").check(frameworks=["cirq"]).frameworks
+    assert result.passed and not result.not_run
+    assert "ecr" in {g for c in result.circuits for g in c.gates}

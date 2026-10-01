@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import warnings
 from datetime import UTC, datetime
 from typing import Any
@@ -89,3 +90,35 @@ def test_missing_account_explains_the_setup(monkeypatch: pytest.MonkeyPatch) -> 
 def test_device_the_account_cannot_see(calls: list[Any]) -> None:
     with pytest.raises(nv.SourceUnavailable, match="cannot open ibm_nowhere"):
         ibm_account.pull("ibm_nowhere")
+
+
+def test_missing_runtime_gives_an_install_command_that_works(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "qiskit_ibm_runtime", None)
+    command = (
+        'pip install "noisevault[ibm] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
+    )
+    with pytest.raises(nv.SourceUnavailable) as info:
+        nv.pull("ibm_manila", source="ibm-account")
+    assert command in str(info.value)
+
+
+def test_a_calibration_request_ibm_rejects_is_a_one_line_cli_error(
+    calls: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from noisevault.cli import app
+
+    exceptions = require("qiskit_ibm_runtime.exceptions")
+
+    def rejected(self: _Backend, refresh: bool = False, datetime: datetime | None = None) -> Any:
+        raise exceptions.IBMBackendApiProtocolError("Unexpected return value from the server.")
+
+    monkeypatch.setattr(_Backend, "properties", rejected)
+    with pytest.raises(nv.SourceUnavailable, match="Unexpected return value"):
+        ibm_account.pull("ibm_manila")
+    result = CliRunner().invoke(app, ["pull", "ibm_manila", "--source", "ibm-account"])
+    assert result.exit_code == 1 and result.exception.__class__ is SystemExit
+    [line] = result.stderr.splitlines()
+    assert line.startswith("error: IBM did not return the calibration of ibm_manila")
+    assert "try again later" in line and "--source ibm" in line

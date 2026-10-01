@@ -20,17 +20,16 @@ from typing import Any, get_args
 
 import numpy as np
 
+from ..errors import LayoutError, install_hint
+
 try:
     import cirq
-except ImportError as exc:  # pragma: no cover - depends on the environment
-    raise ImportError(
-        "to_cirq needs Cirq; install it with: pip install 'noisevault[cirq]'"
-    ) from exc
+except ImportError as exc:
+    raise ImportError(f"to_cirq needs Cirq; install it with: {install_hint('cirq')}") from exc
 
 from .. import gates
 from ..channels import readout_matrix, thermal_relaxation_kraus
 from ..conversion import UnknownGates, resolve_op
-from ..errors import LayoutError
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
@@ -88,6 +87,29 @@ _POW: dict[type, _PowFamily] = {
 }
 
 
+@cirq.value_equality
+class ECRGate(cirq.Gate):
+    """IBM's echoed cross-resonance gate ``ecr``, with the gate registry's unitary.
+
+    Cirq has no ECR of its own; the noise model gives this gate a profile's ``ecr`` noise.
+    """
+
+    def _num_qubits_(self) -> int:
+        return 2
+
+    def _unitary_(self) -> np.ndarray:
+        return gates.GATES["ecr"].unitary()
+
+    def _value_equality_values_(self) -> tuple:
+        return ()
+
+    def _circuit_diagram_info_(self, args: Any) -> tuple[str, str]:
+        return ("ECR", "ECR")
+
+    def __repr__(self) -> str:
+        return "noisevault.frameworks.cirq.ECRGate()"
+
+
 def _registry_by_class() -> dict[str, str]:
     """Registry gates whose Cirq class alone names them (e.g. MSGate -> ms, Rx -> rx)."""
     names: dict[str, list[str]] = defaultdict(list)
@@ -98,6 +120,7 @@ def _registry_by_class() -> dict[str, str]:
 
 
 _BY_CLASS = _registry_by_class()
+_OWN_GATES: dict[type, str] = {ECRGate: "ecr"}
 _RESOLVE_FIRST = (
     "resolve its parameters before adding noise: cirq.resolve_parameters(circuit,"
     " params).with_noise(model), or give the parameterized circuit and its sweep to a simulator"
@@ -108,13 +131,16 @@ _RESOLVE_FIRST = (
 def gate_name(gate: cirq.Gate) -> str:
     """The canonical NoiseVault name of a Cirq unitary gate.
 
-    The most specific class decides: an exponent table for the power gates, else the gate
-    registry's Cirq column. Any other gate is named after its class in snake case without the
-    ``Gate`` suffix (``FSimGate`` -> ``fsim``, ``MatrixGate`` -> ``matrix``), so a profile can
-    calibrate it under that name; otherwise it gets the typical-noise rule. A power gate whose
-    name depends on an unresolved exponent (``X**t`` is ``x`` at t=1) raises ValueError.
+    The most specific class decides: this module's own gates (:class:`ECRGate`), an exponent
+    table for the power gates, else the gate registry's Cirq column. Any other gate is named
+    after its class in snake case without the ``Gate`` suffix (``FSimGate`` -> ``fsim``,
+    ``MatrixGate`` -> ``matrix``), so a profile can calibrate it under that name; otherwise it
+    gets the typical-noise rule. A power gate whose name depends on an unresolved exponent
+    (``X**t`` is ``x`` at t=1) raises ValueError.
     """
     for cls in type(gate).__mro__:
+        if cls in _OWN_GATES:
+            return _OWN_GATES[cls]
         family = _POW.get(cls)
         if family is not None:
             if family.names and cirq.is_parameterized(gate):

@@ -4,8 +4,9 @@ A mirror circuit (layers of gates, then their inverse) ideally returns |000> wit
 Mitiq folds gates to amplify the noise, runs each folded circuit on the NoiseVault simulator and
 extrapolates back to zero noise.
 
-Needs: pip install 'noisevault[qiskit]' mitiq ply   (Mitiq supports Python up to 3.12; its
-Qiskit conversion imports ply)
+Needs (Mitiq supports Python up to 3.12; its Qiskit conversion imports ply):
+    pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"
+    pip install mitiq ply
 """
 
 import sys

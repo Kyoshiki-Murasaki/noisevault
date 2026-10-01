@@ -3,7 +3,7 @@
 Weber's profile records each qubit's grid coordinates, so cirq.GridQubit(row, col) addresses the
 device qubit at that position with no layout argument.
 
-Needs: pip install 'noisevault[cirq]'
+Needs: pip install "noisevault[cirq] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"
 """
 
 import textwrap

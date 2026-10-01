@@ -42,7 +42,9 @@ neighboring operations, the time since the last calibration) are not in the numb
 - **Relaxation floor.** When relaxation alone exceeds a gate's stated error, the gate keeps the
   relaxation and is noisier than stated. On the bundled `ibm_fez` profile this happens on 82
   loci: `id`, `sx` and `x` on the same 26 qubits, and `cz` on 2 pairs in both directions. The
-  largest change is `cz[91, 98]`, from 0.0031 to 0.0039. The report lists every case.
+  largest change is `cz[91, 98]`, from 0.0031 to 0.0039. The report lists every case. A stated
+  error too large for any channel to reach (far above real calibrations) is recorded the same
+  way, with the achieved error below the stated one.
 - **T2 above 2 T1** is clamped to 2 T1.
 - **Gates the profile does not calibrate** get the noise of the typical native gate by default.
   An un-transpiled circuit then has the wrong gate count. Transpile to native gates for

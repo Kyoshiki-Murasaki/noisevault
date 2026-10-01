@@ -25,7 +25,7 @@ import numpy as np
 from . import gates
 from .channels import pauli_kraus, pauli_twirl, readout_matrix
 from .conversion import resolve_op
-from .errors import LayoutError, NoiseApproximationWarning, NoiseVaultError
+from .errors import LayoutError, NoiseApproximationWarning, NoiseVaultError, install_hint
 from .layout import normalize_layout
 from .reference import Op, _apply
 from .reference import probabilities as reference_probabilities
@@ -209,7 +209,7 @@ def check(
             try:
                 runner = _RUNNERS[name](profile, chain)
             except ImportError:
-                skipped.append((name, f"not installed: pip install 'noisevault[{_EXTRAS[name]}]'"))
+                skipped.append((name, f"not installed: {install_hint(_EXTRAS[name])}"))
                 continue
             except NoiseVaultError as exc:
                 skipped.append((name, f"the export refused this profile: {exc}"))
@@ -525,10 +525,10 @@ class _Qiskit(_Runner):
         import qiskit_aer
         from qiskit.circuit import library
 
-        from .frameworks.qiskit import ALIASES, to_qiskit
+        from .frameworks.qiskit import ALIASES, gate_class, to_qiskit
 
         self.version = f"{qiskit.__version__} (qiskit-aer {qiskit_aer.__version__})"
-        self._library, self._aliases = library, ALIASES
+        self._library, self._aliases, self._gate_class = library, ALIASES, gate_class
         self.sim = to_qiskit(profile)
         self.sim.set_options(method="density_matrix")
         self._readout = {
@@ -543,8 +543,8 @@ class _Qiskit(_Runner):
             if alias in self.profile.gates or op.params not in ((), (0.0, 0.0)):
                 return None
             return getattr(self._library, gates.GATES[alias].qiskit_class)(pi / 2)
-        cls = gates.GATES[op.name].qiskit_class
-        return None if cls is None else getattr(self._library, cls)(*op.params)
+        cls = self._gate_class(op.name)
+        return None if cls is None else cls(*op.params)
 
     def cannot_express(self, op: Op) -> str | None:
         gate = self._gate(op)
@@ -595,7 +595,7 @@ class _Cirq(_Runner):
         super().__init__(profile, chain)
         import cirq
 
-        from .frameworks.cirq import to_cirq
+        from .frameworks.cirq import ECRGate, to_cirq
 
         self.cirq, self.version = cirq, cirq.__version__
         self.qubits = cirq.LineQubit.range(len(chain))
@@ -619,6 +619,7 @@ class _Cirq(_Runner):
             "r": lambda t, p: c.PhasedXPowGate(phase_exponent=p / pi, exponent=t / pi),
             "cx": lambda: c.CNOT,
             "cz": lambda: c.CZ,
+            "ecr": ECRGate,
             "iswap": lambda: c.ISWAP,
             "sqrt_iswap": lambda: c.ISWAP**0.5,
             "zz": lambda: c.ZZ**0.5,
@@ -663,14 +664,14 @@ class _PennyLane(_Runner):
         super().__init__(profile, chain)
         import pennylane as qml
 
-        from .frameworks.pennylane import to_pennylane
+        from .frameworks.pennylane import operation_for, to_pennylane
 
         self.qml, self.version = qml, qml.__version__
         self.model = to_pennylane(profile, layout=chain)
+        self._operation_for = operation_for
 
     def _cls(self, op: Op) -> Any:
-        name = gates.GATES[op.name].pennylane
-        return getattr(self.qml, name, None) if name else None
+        return self._operation_for(op.name)
 
     def cannot_express(self, op: Op) -> str | None:
         return None if self._cls(op) is not None else f"PennyLane has no {op.name} gate"

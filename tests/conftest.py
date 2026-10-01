@@ -66,18 +66,19 @@ def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "slow: a timing or scale test that still runs by default")
+    config.addinivalue_line("markers", "slow: a scale test that still runs by default")
+    config.addinivalue_line("markers", "timing: a time budget, checked only in a serial run")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Tests marked ``network`` reach live endpoints, so they run only with NOISEVAULT_NETWORK=1.
 
-    Timing budgets (``slow``) are only meaningful in a serial run; parallel workers share the CPU.
+    Time budgets (``timing``) are only meaningful in a serial run; parallel workers share the CPU.
     """
     if os.environ.get("PYTEST_XDIST_WORKER"):
         serial_only = pytest.mark.skip(reason="timing budget is checked in a serial run")
         for item in items:
-            if "slow" in item.keywords and "seconds" in item.name:
+            if "timing" in item.keywords:
                 item.add_marker(serial_only)
     if os.environ.get("NOISEVAULT_NETWORK") == "1":
         return

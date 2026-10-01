@@ -34,6 +34,7 @@ from .errors import (
     FingerprintMismatch,
     NoiseVaultError,
     ProfileNotFound,
+    install_hint,
 )
 from .profile import Profile, Ref, Technology, json_schema, load_file, parse_ref
 from .table import GateNoise
@@ -56,7 +57,7 @@ _FRAMEWORK_PACKAGES = (
     "stim",
     "pymatching",
 )
-_INSTALL_ALL = "pip install 'noisevault[all]'"
+_INSTALL_ALL = install_hint("all")
 _SOURCE_LABELS = {  # short forms of provenance.source_kind for the list table
     "package_snapshot": "package",
     "public_api": "public API",
@@ -400,7 +401,7 @@ def _parse_qubits(text: str, profile: Profile) -> list[int]:
 def _qubit_row(profile: Profile, index: int) -> dict[str, Any]:
     table = profile.table
     q = table.qubit(index)
-    one = _display_1q(profile, index)
+    one = table.typical(1, (index,))
     record = next((r for r in profile.qubits if r.index == index), None)
     return {
         "qubit": index,
@@ -413,19 +414,6 @@ def _qubit_row(profile: Profile, index: int) -> dict[str, Any]:
         "disabled": q.disabled,
         "label": record.label if record else None,
     }
-
-
-def _display_1q(profile: Profile, index: int) -> GateNoise | None:
-    """The typical 1-qubit gate there, preferring a real gate to ``id`` (an idle slot)."""
-    table = profile.table
-    typical = table.typical(1, (index,))
-    if not isinstance(typical, GateNoise):
-        return None
-    if typical.gate != "id":
-        return typical
-    others = (table.gate(name, (index,)) for name in table.natives(1) if name != "id")
-    found = [g for g in others if isinstance(g, GateNoise) and g.state == "calibrated"]
-    return min(found, key=lambda g: g.gate) if found else typical
 
 
 def _print_qubits(rows: list[dict[str, Any]]) -> None:
@@ -457,7 +445,8 @@ def pull(
     at: Annotated[
         str | None,
         typer.Option(
-            "--at", help="Calibration in effect at this date or time (IBM public, IBM account)."
+            "--at",
+            help="Calibration in effect at this date or time (IBM public, IBM account, IonQ).",
         ),
     ] = None,
     source: Annotated[
@@ -473,10 +462,10 @@ def pull(
         if output is not None:
             _check_writable(output)
         with err.status(f"Pulling {device}{f' at {at}' if at else ''}..."):
-            profile = catalog.pull(device, at=at, source=source, output=output)
-        _print_card(card(profile), brief=True)
-        where = output if output is not None else _vault_file(profile)
-        out.print(f"saved: {where}", markup=False, soft_wrap=True)
+            pulled = catalog.pull_and_save(device, at=at, source=source, output=output)
+        _print_card(card(pulled.profile), brief=True)
+        saved = "saved" if pulled.written else "already saved"
+        out.print(f"{saved}: {pulled.path}", markup=False, soft_wrap=True)
 
 
 def _check_writable(output: Path) -> None:
@@ -489,13 +478,6 @@ def _check_writable(output: Path) -> None:
         raise ValueError(f"-o {output}: the folder {folder} does not exist; create it first")
     if not os.access(folder, os.W_OK):
         raise ValueError(f"-o {output}: you cannot write to {folder}; choose another folder")
-
-
-def _vault_file(profile: Profile) -> Path:
-    for info in catalog.vault_profiles():
-        if info.id == profile.id and info.fingerprint == profile.fingerprint:
-            return Path(str(info.path))
-    return catalog.vault_path(profile)
 
 
 # diff ---------------------------------------------------------------------------------------
@@ -736,7 +718,7 @@ def doctor() -> None:
     out.print(f"vault: {vault} ({count} profiles)", markup=False, soft_wrap=True)
     out.print(f"bundled profiles: {len(catalog.bundled_profiles())}")
     if missing:
-        out.print(f"To add the missing frameworks: {_INSTALL_ALL}", markup=False)
+        out.print(f"To add the missing frameworks: {_INSTALL_ALL}", markup=False, soft_wrap=True)
 
 
 @app.command()

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import errno
+import json
 import re
 import subprocess
 import sys
+import threading
 import warnings
 from pathlib import Path
 
@@ -10,6 +13,7 @@ import pytest
 from conftest import MANILA_V01, migrated, toy
 
 import noisevault as nv
+from noisevault import catalog
 from noisevault.catalog import bundled_profiles, vault_dir, vault_path
 from noisevault.errors import AmbiguousRef, FingerprintMismatch, ProfileNotFound
 from noisevault.profile import Profile
@@ -212,3 +216,134 @@ def test_dot_files_in_the_vault_are_not_profiles(vault: Path) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert "ibm_manila" in {i.id for i in nv.profiles()}
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, profile: Profile) -> None:
+    from noisevault.sources import ibm_public
+
+    monkeypatch.setattr(ibm_public, "pull", lambda device, at=None: profile)
+
+
+def _pull_quietly(**options) -> catalog.Pulled:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        return catalog.pull_and_save("ibm_toy", source="ibm", **options)
+
+
+def test_pulls_a_fraction_of_a_second_apart_keep_both_calibrations(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    first = _dated("2024-05-27T18:27:23.100000Z", 1e-3)
+    second = _dated("2024-05-27T18:27:23.900000Z", 2e-3)
+    for profile in (first, second):
+        _serve(monkeypatch, profile)
+        assert _pull_quietly().written
+    assert len(list(vault.glob("*.json.gz"))) == 2
+    assert nv.load("test_toy@2024-05-27T18:27:23.1Z") == first
+    assert nv.load("test_toy@2024-05-27T18:27:23.9Z") == second
+
+
+def test_vault_files_named_by_whole_seconds_still_load_and_are_reused(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    held = _dated("2024-05-27T18:27:23.100000Z", 1e-3)
+    legacy = held.save(vault / "test_toy@2024-05-27T182723Z.json.gz")
+    assert [i.ref for i in nv.profiles() if i.id == "test_toy"] == [
+        "test_toy@2024-05-27T18:27:23.100000Z"
+    ]
+    _serve(monkeypatch, held)
+    assert _pull_quietly() == (held, legacy, False)
+    reconverted = _dated("2024-05-27T18:27:23.100000Z", 1.5e-3)
+    _serve(monkeypatch, reconverted)
+    with pytest.warns(UserWarning, match="converted differently"):
+        pulled = catalog.pull_and_save("ibm_toy", source="ibm")
+    assert pulled.path == legacy and list(vault.glob("*.json.gz")) == [legacy]
+    assert nv.load(legacy) == reconverted
+
+
+def test_a_pull_never_replaces_a_vault_file_of_another_calibration(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    held = _dated("2024-05-27T18:27:23.100000Z", 1e-3)
+    legacy = held.save(vault / "test_toy@2024-05-27T182723Z.json.gz")
+    _serve(monkeypatch, _dated("2024-05-27T18:27:23Z", 2e-3))
+    with pytest.raises(FileExistsError, match="2024-05-27T18:27:23.100000Z"):
+        _pull_quietly()
+    assert nv.load(legacy) == held
+
+
+def test_a_failed_pull_to_a_file_leaves_the_existing_file_whole(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = _dated("2025-01-01T00:00:00Z").save(tmp_path / "existing.json.gz")
+    before = target.read_bytes()
+    newer = _dated("2025-02-01T00:00:00Z")
+    _serve(monkeypatch, newer)
+    real_save = Profile.save
+
+    def disk_full(self: Profile, path: Path) -> Path:
+        Path(path).write_bytes(before[:20])
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(Profile, "save", disk_full)
+    with pytest.raises(OSError, match="No space"):
+        _pull_quietly(output=target)
+    assert target.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [target]
+    monkeypatch.setattr(Profile, "save", real_save)
+    assert _pull_quietly(output=target) == (newer, target, True)
+    assert nv.load(target) == newer and target.read_bytes()[:2] == b"\x1f\x8b"
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda entry: [],
+        lambda entry: "stale",
+        lambda entry: {k: v for k, v in entry.items() if k != "id"},
+        lambda entry: {**entry, "calibrated_at": 5},
+    ],
+    ids=["list", "string", "missing id", "bad timestamp"],
+)
+def test_a_damaged_index_entry_is_rebuilt_from_its_file(vault: Path, damage) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    path = profile.save(vault_path(profile))
+    catalog.vault_profiles()
+    index = vault / ".index.json"
+    entry = json.loads(index.read_text())[path.name]
+    index.write_text(json.dumps({path.name: damage(entry)}))
+    assert [i.fingerprint for i in catalog.vault_profiles()] == [profile.fingerprint]
+    assert nv.load("test_toy") == profile
+
+
+def test_concurrent_pulls_of_one_calibration_both_succeed(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    _serve(monkeypatch, profile)
+    vault.mkdir(parents=True)
+    both_written = threading.Barrier(2, timeout=10)
+    real_save = Profile.save
+
+    def save_then_wait(self: Profile, path: Path) -> Path:
+        saved = real_save(self, path)
+        both_written.wait()
+        return saved
+
+    monkeypatch.setattr(Profile, "save", save_then_wait)
+    failures: list[BaseException] = []
+
+    def pull() -> None:
+        try:
+            catalog.pull_and_save("ibm_toy", source="ibm")
+        except BaseException as exc:
+            failures.append(exc)
+
+    threads = [threading.Thread(target=pull) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert failures == []
+    assert [p.name for p in vault.iterdir()] == [vault_path(profile).name]
+    assert nv.load("test_toy") == profile

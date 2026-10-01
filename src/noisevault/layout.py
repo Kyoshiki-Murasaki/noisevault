@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .errors import LayoutError
@@ -14,6 +15,17 @@ if TYPE_CHECKING:
     from .table import NoiseTable
 
 _BEAMS = (32, 128, 512)
+
+
+@dataclass(frozen=True, order=True)
+class _Cost:
+    """A chain's score: values with no calibration (compared first), then the summed error."""
+
+    missing: int
+    error: float
+
+    def __add__(self, other: _Cost) -> _Cost:
+        return _Cost(self.missing + other.missing, self.error + other.error)
 
 
 def _int_label(label: Hashable) -> int | None:
@@ -88,28 +100,33 @@ def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
     """A connected chain of ``n`` well-calibrated qubits as ``{0: p0, 1: p1, ...}``.
 
     Deterministic beam search minimizing the summed average infidelity of the typical 1-qubit
-    gate, mean readout error and typical 2-qubit gate along the chain. On an all-to-all device
-    every order is a chain, so it takes the ``n`` qubits with the lowest 1-qubit and readout
-    error. It is a starting point for small experiments, not a circuit placer.
+    gate, mean readout error and typical 2-qubit gate along the chain. A qubit with no usable
+    1-qubit calibration or an unknown readout error ranks last: a chain with fewer such gaps always
+    beats one with more, whatever the calibrated errors. A pair with no usable 2-qubit gate is
+    never a link. On an all-to-all device it takes the ``n`` qubits with the lowest 1-qubit and
+    readout cost when every consecutive pair among them is usable, and otherwise searches as on
+    any other device. It is a starting point for small experiments, not a circuit placer.
     """
     table = profile.table
     if not 1 <= n <= table.num_qubits:
         raise LayoutError(f"cannot choose {n} qubits on {profile.id} ({table.num_qubits} qubits)")
     usable = [q for q in range(table.num_qubits) if not table.qubit(q).disabled]
     qubit_cost = {q: _qubit_cost(table, q) for q in usable}
-    if table.all_to_all:
-        if len(usable) < n:
-            raise LayoutError(f"{profile.id} has only {len(usable)} usable qubits, not {n}")
-        return dict(enumerate(sorted(usable, key=lambda q: (qubit_cost[q], q))[:n]))
-    neighbors = _neighbors(table, usable)
-    edge_costs: dict[tuple[int, int], float | None] = {}
+    edge_costs: dict[tuple[int, int], _Cost | None] = {}
 
-    def edge(a: int, b: int) -> float | None:
+    def edge(a: int, b: int) -> _Cost | None:
         key = (min(a, b), max(a, b))
         if key not in edge_costs:
             edge_costs[key] = _edge_cost(table, *key)
         return edge_costs[key]
 
+    if table.all_to_all:
+        if len(usable) < n:
+            raise LayoutError(f"{profile.id} has only {len(usable)} usable qubits, not {n}")
+        chain = sorted(usable, key=lambda q: (qubit_cost[q], q))[:n]
+        if all(edge(a, b) is not None for a, b in zip(chain, chain[1:], strict=False)):
+            return dict(enumerate(chain))
+    neighbors = _neighbors(table, usable)
     for width in _BEAMS:  # a wider beam only when a narrow one walks into dead ends
         path = _beam_search(usable, qubit_cost, neighbors, edge, n, width)
         if path is not None:
@@ -119,15 +136,15 @@ def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
 
 def _beam_search(
     usable: list[int],
-    qubit_cost: dict[int, float],
+    qubit_cost: dict[int, _Cost],
     neighbors: dict[int, list[int]],
-    edge: Callable[[int, int], float | None],
+    edge: Callable[[int, int], _Cost | None],
     n: int,
     width: int,
 ) -> tuple[int, ...] | None:
     beam = sorted((qubit_cost[q], (q,)) for q in usable)[:width]
     for _ in range(n - 1):
-        grown: dict[tuple[int, ...], float] = {}
+        grown: dict[tuple[int, ...], _Cost] = {}
         for cost, path in beam:
             members = set(path)
             for at_tail, end in ((True, path[-1]), (False, path[0])):
@@ -138,7 +155,7 @@ def _beam_search(
                     new = path + (nb,) if at_tail else (nb, *path)
                     key = min(new, new[::-1])
                     total = cost + step + qubit_cost[nb]
-                    if total < grown.get(key, float("inf")):
+                    if key not in grown or total < grown[key]:
                         grown[key] = total
         if not grown:
             return None
@@ -146,22 +163,24 @@ def _beam_search(
     return beam[0][1]
 
 
-def _qubit_cost(table: NoiseTable, q: int) -> float:
+def _qubit_cost(table: NoiseTable, q: int) -> _Cost:
     one = table.typical(1, (q,))
-    cost = 0.0
-    if isinstance(one, GateNoise) and one.avg_infidelity is not None:
-        cost = one.avg_infidelity
     readout = table.qubit(q).readout
-    return cost + (sum(readout) / 2 if readout else 0.0)
+    errors = [
+        one.avg_infidelity if isinstance(one, GateNoise) else None,
+        None if readout is None else sum(readout) / 2,
+    ]
+    known = [e for e in errors if e is not None]
+    return _Cost(len(errors) - len(known), sum(known))
 
 
-def _edge_cost(table: NoiseTable, a: int, b: int) -> float | None:
+def _edge_cost(table: NoiseTable, a: int, b: int) -> _Cost | None:
     costs = [
         found.avg_infidelity
         for found in (table.typical(2, (a, b)), table.typical(2, (b, a)))
         if isinstance(found, GateNoise) and found.avg_infidelity is not None
     ]
-    return min(costs) if costs else None
+    return _Cost(0, min(costs)) if costs else None
 
 
 def _neighbors(table: NoiseTable, usable: list[int]) -> dict[int, list[int]]:
