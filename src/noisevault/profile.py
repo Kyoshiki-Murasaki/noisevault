@@ -125,7 +125,7 @@ def _freeze(value: Any, where: str = "") -> Any:
 
 
 def _string_keys(value: Any) -> Any:
-    """Refuse a non-string key before ``dict[str, ...]`` decodes a bytes key onto a str one."""
+    """Pydantic decodes bytes keys to str, so ``{b"x": 1, "x": 2}`` would load as ``{"x": 2}``."""
     if isinstance(value, Mapping):
         for key in value:
             if not isinstance(key, str):

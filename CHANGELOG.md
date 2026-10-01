@@ -51,8 +51,9 @@ profile files still load.
   - A bare `nv` prints the help. A usage mistake prints one line with the closest match.
   - `nv check` lists missing frameworks with one install command, and counts a circuit that
     ran with gates removed as reduced. It also samples a measurement-only circuit through each
-    framework's own readout. Each row shows the worst circuit's distance beside that circuit's
-    own tolerance, and `--json` names it as `worst`.
+    framework's own readout. Each row shows the TVD and the tolerance of the circuit with the
+    highest ratio of TVD to tolerance. `--json` reports that circuit's name, TVD and tolerance
+    under `worst`.
   - `nv list` shows the time when two calibrations share a date.
   - `nv diff` marks values as new or gone and compares both orders of a symmetric pair.
   - A damaged or unreadable file in the vault is skipped with a warning, and the other

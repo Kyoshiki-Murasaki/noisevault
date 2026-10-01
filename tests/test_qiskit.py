@@ -855,24 +855,10 @@ def test_the_target_holds_every_pair_the_table_allows_off_the_connectivity(direc
     assert (1, 2) in target["cz"]
 
 
-def test_a_one_qubit_uniform_profile_runs_a_one_qubit_circuit() -> None:
-    profile = Profile.uniform(
-        "u",
-        technology="superconducting",
-        num_qubits=1,
-        one_qubit_error=1e-2,
-        two_qubit_error=2e-2,
-        readout_error=0.05,
-    )
-    sim = profile.to_qiskit()
-    qc = QuantumCircuit(1, 1)
-    qc.x(0)
-    qc.measure(0, 0)
-    counts = sim.run(transpile(qc, sim), shots=4000, seed_simulator=1).result().get_counts()
-    assert 0.03 < counts.get("0", 0) / 4000 < 0.09
-
-
-def test_a_one_qubit_profile_that_defines_a_two_qubit_gate_still_exports() -> None:
+@pytest.mark.parametrize(
+    "extra", [{}, {"cz": {"avg_infidelity": 2e-2}}], ids=["uniform", "plus-cz"]
+)
+def test_a_one_qubit_profile_runs_a_one_qubit_circuit(extra: dict) -> None:
     data = Profile.uniform(
         "u",
         technology="superconducting",
@@ -881,8 +867,8 @@ def test_a_one_qubit_profile_that_defines_a_two_qubit_gate_still_exports() -> No
         two_qubit_error=2e-2,
         readout_error=0.05,
     ).to_dict()
-    data["gates"]["cz"] = {"avg_infidelity": 2e-2}
-    sim = quiet_export(Profile.model_validate(data))
+    data["gates"].update(extra)
+    sim = Profile.model_validate(data).to_qiskit()
     assert "cz" not in sim.target.operation_names
     qc = QuantumCircuit(1, 1)
     qc.x(0)

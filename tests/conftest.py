@@ -81,7 +81,6 @@ def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def _no_gc_pauses_in_time_budgets(request: pytest.FixtureRequest) -> Iterator[None]:
-    """A budget measures the code, not a collection of garbage other tests left on the heap."""
     if "timing" not in request.keywords:
         yield
         return

@@ -286,7 +286,7 @@ def to_qiskit(
     placements = _placements(table, exports, enabled, unknown_gates, report, omitted)
     for name, why in omitted.items():
         report.omit(f"native {name}: {why}")
-    _require_natives(profile, placements, omitted, len(enabled))
+    _require_natives(profile, placements, omitted, enabled)
     report.events.clear()  # locus bookkeeping; events count applications as circuits run
     target = _target(profile, placements, enabled)
     noise_model = _noise_model(table, placements, enabled, target, readout)
@@ -439,16 +439,16 @@ def _relabel(built: GateChannels, gate: GateNoise, qargs: tuple[int, ...]) -> Ga
 
 
 def _require_natives(
-    profile: Profile, placements: Sequence[Placement], omitted: dict[str, str], enabled: int
+    profile: Profile,
+    placements: Sequence[Placement],
+    omitted: dict[str, str],
+    enabled: Sequence[int],
 ) -> None:
-    """Refuse a simulator that could not run any circuit needing a gate of some arity.
-
-    An arity wider than the enabled qubits is skipped: no circuit could need it there.
-    """
+    """Refuse a simulator that could not run any circuit needing a gate of some arity."""
     table = profile.table
     for arity, word in ((1, "one"), (2, "two")):
         defined = [n for n in profile.gates if _is_unitary(n) and table.arity(n) == arity]
-        if arity > enabled or not defined:
+        if arity > len(enabled) or not defined:
             continue
         if any(p.export.gate.num_qubits == arity for p in placements):
             continue
