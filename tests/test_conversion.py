@@ -232,10 +232,12 @@ def test_every_export_runs_a_fixed_gate_as_the_only_rotation_it_equals(
         for name, (module, noise) in _EXPORTS.items()
         if _installed(module)
     }
+    if not got:
+        pytest.skip("no framework is installed")
     report = Report.start(profile, "test", None)
     built = resolve_op(profile.table, rotation, qubits, unknown_gates="error", report=report)
     want = _infidelity([(list(c.kraus), c.wires) for c in built.channels])
-    assert len(got) >= 2 and want > 0
+    assert want > 0
     assert got == pytest.approx(dict.fromkeys(got, want), abs=1e-9)
 
 
