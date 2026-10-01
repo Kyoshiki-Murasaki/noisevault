@@ -13,9 +13,12 @@ import struct
 import tempfile
 import warnings
 import zlib
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from functools import cached_property
+from itertools import permutations
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
@@ -37,11 +40,11 @@ from .errors import MigrationWarning
 from .units import DURATION, T1, T2, normalize_times
 
 if TYPE_CHECKING:
-    from collections.abc import Hashable, Mapping, Sequence
+    from collections.abc import Hashable, Iterable, Sequence
 
     from .check import CheckResult
     from .diff import ProfileDiff
-    from .table import NoiseTable
+    from .table import GateNoise, NoiseTable
 
 FORMAT_VERSION = "1.0"
 
@@ -98,19 +101,25 @@ class FrozenDict(dict):
 
 
 def _freeze(value: Any, where: str = "") -> Any:
-    """Read-only copy of JSON-like data: dicts become FrozenDict, lists become tuples.
+    """Read-only copy of JSON data: mappings become FrozenDict, lists and tuples become tuples.
 
-    ``allow_inf_nan=False`` does not reach values typed ``Any``, and JSON has no NaN or
-    Infinity, so a nonfinite number here would be saved as null.
+    Anything that would not survive a save unchanged is refused: a non-string key (``0`` and
+    ``"0"`` would collide), a set or other object, and a nonfinite number, which JSON would
+    write as null (``allow_inf_nan=False`` does not reach values typed ``Any``).
     """
-    if isinstance(value, dict):
-        return FrozenDict(
-            {key: _freeze(item, f"{where}.{key}" if where else key) for key, item in value.items()}
-        )
+    if isinstance(value, Mapping):
+        frozen = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{where}: the key {key!r} is not a string")
+            frozen[key] = _freeze(item, f"{where}.{key}" if where else key)
+        return FrozenDict(frozen)
     if isinstance(value, list | tuple):
         return tuple(_freeze(item, f"{where}[{i}]") for i, item in enumerate(value))
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{where}: {value} is not a finite number")
+    if value is not None and not isinstance(value, str | int | float):
+        raise ValueError(f"{where}: a {type(value).__name__} is not JSON data")
     return value
 
 
@@ -566,8 +575,6 @@ class Profile(_Model):
     __str__ = __repr__
 
     def summary(self) -> str:
-        from .table import GateNoise
-
         dev, table, prov = self.device, self.table, self.provenance
         when = dev.calibrated_at.date().isoformat() if dev.calibrated_at else "undated"
         lines = [
@@ -576,26 +583,10 @@ class Profile(_Model):
             f"source: {prov.source or 'unknown'} (license {prov.license or 'unknown'},"
             f" redistributable {prov.redistributable})",
         ]
-        errors: dict[str, list[float]] = {}
-        for record in self.calibrations:
-            found = table.gate(record.gate, record.qubits)
-            if isinstance(found, GateNoise) and found.avg_infidelity is not None:
-                errors.setdefault(record.gate, []).append(found.avg_infidelity)
-        for name, spec in self.gates.items():
-            arity = table.arity(name)
-            if spec.virtual:
-                lines.append(f"  {name:<10} virtual")
-            elif name in errors:
-                values = errors[name]
-                lines.append(
-                    f"  {name:<10} {arity}q  median avg infidelity {_median(values):.3g}"
-                    f" over {len(values)} records"
-                )
-            elif spec.metric is not None:
-                r = metrics.to_avg_infidelity(*spec.metric, arity)  # type: ignore[arg-type]
-                lines.append(f"  {name:<10} {arity}q  avg infidelity {r:.3g} everywhere")
-            else:
-                lines.append(f"  {name:<10} {arity}q  no error metric")
+        for name in self.gates:
+            lines.append(
+                f"  {name:<10} {table.arity(name)}q  {_describe_loci(gate_loci(self, name))}"
+            )
         qubits = [table.qubit(i) for i in range(dev.num_qubits)]
         t1 = [q.t1_ns / 1000 for q in qubits if q.t1_ns is not None]
         readout = [sum(q.readout) / 2 for q in qubits if q.readout is not None]
@@ -699,6 +690,63 @@ class Profile(_Model):
             unknown_gates=unknown_gates,
             **options,
         )
+
+
+def gate_loci(profile: Profile, name: str) -> list[GateNoise]:
+    """Gate ``name`` resolved on every locus it can run on, as the exports resolve it.
+
+    The candidates are each enabled qubit or connected pair and each recorded locus; one order
+    stands for both of a symmetric gate's pair. A locus the table refuses is left out.
+    """
+    from .table import GateNoise
+
+    table = profile.table
+    arity = table.arity(name)
+    enabled = [q for q in range(table.num_qubits) if not table.qubit(q).disabled]
+    candidates: Iterable[tuple[int, ...]]
+    if arity == 1:
+        candidates = [(q,) for q in enabled]
+    elif table.all_to_all:
+        candidates = permutations(enabled, arity)
+    else:
+        pairs = table.listed_pairs() if arity == 2 else []
+        recorded = [r.qubits for r in profile.calibrations if r.gate == name]
+        candidates = sorted({*recorded, *(p for a, b in pairs for p in ((a, b), (b, a)))})
+    symmetric = arity == 2 and table.symmetric(name)
+    found: list[GateNoise] = []
+    seen: set[Hashable] = set()
+    for qubits in candidates:
+        key = frozenset(qubits) if symmetric else qubits
+        if key not in seen and isinstance(noise := table.gate(name, qubits), GateNoise):
+            seen.add(key)
+            found.append(noise)
+    return found
+
+
+_STATE_WORDS = {"ideal": "virtual", "uncalibrated": "no error metric", "disabled": "disabled"}
+
+
+def _describe_loci(found: list[GateNoise]) -> str:
+    """One gate's resolved loci in words: its calibrated error, then each other state's count."""
+    if not found:
+        return "usable on no locus"
+    states = Counter(noise.state for noise in found)
+    errors = [noise.avg_infidelity for noise in found if noise.avg_infidelity is not None]
+    parts = []
+    if errors and states["calibrated"] == len(found) and len(set(errors)) == 1:
+        parts.append(f"avg infidelity {errors[0]:.3g} everywhere")
+    elif errors:
+        parts.append(f"median avg infidelity {_median(errors):.3g} over {_loci(len(errors))}")
+    for state, word in _STATE_WORDS.items():
+        if states[state]:
+            parts.append(
+                word if states[state] == len(found) else f"{word} on {_loci(states[state])}"
+            )
+    return ", ".join(parts)
+
+
+def _loci(count: int) -> str:
+    return f"{count} {'locus' if count == 1 else 'loci'}"
 
 
 def _profile_issues(profile: Profile) -> list[str]:

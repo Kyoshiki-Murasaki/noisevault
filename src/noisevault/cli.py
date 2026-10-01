@@ -17,6 +17,7 @@ import statistics
 import sys
 import warnings
 import zlib
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
@@ -31,7 +32,7 @@ from rich.console import Console
 from rich.table import Table
 from typer.core import TyperGroup
 
-from . import __version__, catalog, metrics
+from . import __version__, catalog
 from .diff import METRICS, describe_delta, fmt_error, fmt_metric, fmt_relative, fmt_time
 from .errors import (
     REPOSITORY,
@@ -41,7 +42,7 @@ from .errors import (
     did_you_mean,
     install_hint,
 )
-from .profile import Profile, Ref, Technology, json_schema, load_file, parse_ref
+from .profile import Profile, Ref, Technology, gate_loci, json_schema, load_file, parse_ref
 from .table import GateNoise
 
 # Click's UsageError; typer exports only this subclass of it.
@@ -362,26 +363,23 @@ def _connectivity(profile: Profile) -> dict[str, Any]:
 
 
 def _native(profile: Profile, name: str) -> dict[str, Any]:
-    """Median error and duration over the gate's calibration records, else its definition."""
-    spec, table = profile.gates[name], profile.table
-    loci = [r.qubits for r in profile.calibrations if r.gate == name]
-    found = [table.gate(name, q) for q in loci]
-    noise = [g for g in found if isinstance(g, GateNoise) and g.state != "disabled"]
-    errors = [g.avg_infidelity for g in noise if g.avg_infidelity is not None]
-    durations = [g.duration_ns for g in noise if g.duration_ns is not None]
-    arity = table.arity(name)
-    if not loci and spec.metric is not None and arity is not None:
-        errors = [metrics.to_avg_infidelity(*spec.metric, arity)]  # type: ignore[arg-type]
-    if not loci and spec.duration_ns is not None:
-        durations = [spec.duration_ns]
+    """Median error and duration over the loci where the gate runs, and its loci by state."""
+    found = gate_loci(profile, name)
+    states = Counter(g.state for g in found)
+    usable = [g for g in found if g.state != "disabled"]
     return {
         "gate": name,
-        "qubits": arity,
-        "virtual": bool(spec.virtual),
-        "median_avg_infidelity": _median(errors),
-        "median_duration_ns": _median(durations),
-        "records": len(loci),
-        "disabled": len(found) - len(noise),
+        "qubits": profile.table.arity(name),
+        "virtual": bool(found) and states["ideal"] == len(found),
+        "median_avg_infidelity": _median(
+            [g.avg_infidelity for g in usable if g.avg_infidelity is not None]
+        ),
+        "median_duration_ns": _median([g.duration_ns for g in usable if g.duration_ns is not None]),
+        "records": sum(r.gate == name for r in profile.calibrations),
+        "disabled": states["disabled"],
+        "loci": {
+            state: states[state] for state in ("calibrated", "ideal", "uncalibrated", "disabled")
+        },
     }
 
 
@@ -458,8 +456,19 @@ def _natives_table(natives: list[dict[str, Any]]) -> Table:
             table.add_row(f"{n['gate']}{arity}", "virtual", "-", "-")
             continue
         records = str(n["records"]) if n["records"] else "device-wide"
-        if n["disabled"]:
-            records += f" ({n['disabled']} disabled)"
+        total = sum(n["loci"].values())
+        # a state on every locus already shows as the error column's "-", except disabled
+        notes = [
+            f"{count} {word}"
+            for state, word in (
+                ("ideal", "virtual"),
+                ("uncalibrated", "no metric"),
+                ("disabled", "disabled"),
+            )
+            if (count := n["loci"][state]) and (count < total or state == "disabled")
+        ]
+        if notes:
+            records += f" ({', '.join(notes)})"
         table.add_row(
             f"{n['gate']}{arity}",
             fmt_error(n["median_avg_infidelity"]),

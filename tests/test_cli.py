@@ -691,6 +691,27 @@ def test_show_states_the_assumption_behind_each_overriding_record(tmp_path: Path
     assert re.search(r"^\s+cz 0-1: Inferred from XEB\s*$", out, re.M)
 
 
+def test_show_natives_as_resolved_not_as_defined(tmp_path: Path) -> None:
+    gates = {
+        "rz": {"virtual": True},
+        "sx": {"avg_infidelity": 1e-3},
+        "cz": {"avg_infidelity": 1e-2, "disabled": True},
+    }
+    calibrations = [{"gate": "rz", "qubits": [0], "virtual": False, "avg_infidelity": 2e-3}]
+    path = tmp_path / "toy.json"
+    path.write_text(json.dumps(toy(gates=gates, calibrations=calibrations)))
+    natives = json.loads(runner.invoke(app, ["show", str(path), "--json"]).stdout)["natives"]
+    rz, _, cz = natives
+    assert rz["virtual"] is False and rz["median_avg_infidelity"] == 2e-3
+    assert rz["loci"] == {"calibrated": 1, "ideal": 2, "uncalibrated": 0, "disabled": 0}
+    assert cz["median_avg_infidelity"] is None and cz["disabled"] == 2
+    out = runner.invoke(app, ["show", str(path)], env={"COLUMNS": "120"}).stdout
+    rows = {line.split()[0]: line.split()[1:] for line in out.splitlines() if "(1q)" in line}
+    rows |= {line.split()[0]: line.split()[1:] for line in out.splitlines() if "(2q)" in line}
+    assert rows["rz"] == ["(1q)", "2.00e-03", "-", "1", "(2", "virtual)"]
+    assert rows["cz"] == ["(2q)", "-", "-", "device-wide", "(2", "disabled)"]
+
+
 def test_show_groups_a_record_assumption_shared_by_many_loci(tmp_path: Path) -> None:
     calibrations = [
         {"gate": "cz", "qubits": list(pair), "avg_infidelity": 0.02, "assumption": "From XEB"}

@@ -374,6 +374,38 @@ def test_free_form_data_refuses_nonfinite_numbers(tmp_path: Path, where: str, ba
     assert (saved[key] if key else saved) == free
 
 
+@pytest.mark.parametrize(
+    ("free", "message"),
+    [
+        ({"runs": {0: 0.8, "0": 0.9}}, "runs: the key 0 is not a string"),
+        ({"runs": [{"seeds": {1, 2}}]}, r"runs\[0\]\.seeds: a set is not JSON data"),
+        ({"when": datetime(2025, 1, 1, tzinfo=UTC)}, "when: a datetime is not JSON data"),
+        ({"raw": b"\x00"}, "raw: a bytes is not JSON data"),
+    ],
+)
+@pytest.mark.parametrize("where", ["benchmarks", "extensions", "provenance.extra"])
+def test_free_form_data_must_be_json_data(where: str, free: dict, message: str) -> None:
+    section, _, key = where.partition(".")
+    data = toy(**{section: {key: free} if key else free})
+    with pytest.raises(ValidationError, match=message):
+        Profile.from_dict(data)
+
+
+def test_free_form_data_is_frozen_at_every_level() -> None:
+    from types import MappingProxyType
+
+    data = toy()
+    data["benchmarks"] = {"eplg": MappingProxyType({"layers": [1, (2, [3]), {"k": [4]}]})}
+    profile = Profile.from_dict(data)
+    fingerprint = profile.fingerprint
+    layers = profile.benchmarks["eplg"]["layers"]
+    assert layers == (1, (2, (3,)), {"k": (4,)})
+    for mutate in (lambda: layers[2].update(k=5), lambda: profile.benchmarks["eplg"].pop("x")):
+        with pytest.raises(TypeError, match="immutable"):
+            mutate()
+    assert Profile.from_dict(profile.to_dict()).fingerprint == fingerprint
+
+
 def test_copies_and_pickles_keep_the_profile() -> None:
     import copy
     import pickle
@@ -564,3 +596,57 @@ def test_undated_citation_states_no_year() -> None:
     data["device"]["calibrated_at"] = "2025-02-26T09:12:00Z"
     dated = Profile.model_validate(data).citation("bibtex")
     assert "year = {2025}" in dated and dated.startswith("@misc{nv_test_toy_2025_02_26,")
+
+
+def _summary_line(profile: Profile, gate: str) -> str:
+    lines = [" ".join(line.split()) for line in profile.summary().splitlines()]
+    return next(line for line in lines if line.split()[0] == gate)
+
+
+def test_summary_shows_a_noisy_override_of_a_virtual_gate() -> None:
+    data = toy(
+        calibrations=[{"gate": "rz", "qubits": [0], "virtual": False, "avg_infidelity": 2e-3}]
+    )
+    data["device"]["num_qubits"] = 1
+    data["connectivity"] = "all_to_all"
+    del data["gates"]["cz"]
+    assert _summary_line(Profile.from_dict(data), "rz") == "rz 1q avg infidelity 0.002 everywhere"
+
+
+@pytest.mark.parametrize(
+    ("gates", "calibrations", "gate", "line"),
+    [
+        (
+            {},
+            [{"gate": "rz", "qubits": [0], "virtual": False, "avg_infidelity": 2e-3}],
+            "rz",
+            "rz 1q median avg infidelity 0.002 over 1 locus, virtual on 2 loci",
+        ),
+        (
+            {"cz": {"avg_infidelity": 1e-2, "disabled": True}},
+            [{"gate": "cz", "qubits": [0, 1], "disabled": False}],
+            "cz",
+            "cz 2q median avg infidelity 0.01 over 1 locus, disabled on 1 locus",
+        ),
+        (
+            {"cz": {"avg_infidelity": 1e-2, "disabled": True}},
+            [],
+            "cz",
+            "cz 2q disabled",
+        ),
+        (
+            {},
+            [{"gate": "sx", "qubits": [2], "disabled": True}],
+            "sx",
+            "sx 1q median avg infidelity 0.001 over 2 loci, disabled on 1 locus",
+        ),
+        ({}, [], "rz", "rz 1q virtual"),
+        ({}, [], "cz", "cz 2q avg infidelity 0.01 everywhere"),
+    ],
+)
+def test_summary_describes_each_gate_as_resolved(
+    gates: dict, calibrations: list, gate: str, line: str
+) -> None:
+    data = toy(calibrations=calibrations)
+    data["gates"].update(gates)
+    assert _summary_line(Profile.from_dict(data), gate) == line

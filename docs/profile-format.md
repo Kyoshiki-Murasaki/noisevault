@@ -103,7 +103,9 @@ below.
 | `extensions` | no | Free-form vendor data that is not part of the physics. |
 
 Unknown keys are errors everywhere except inside `benchmarks`, `extensions` and
-`provenance.extra`. Values are strict: `"1"`, `3.0` for an integer field, or `1` for a boolean
+`provenance.extra`. Those three hold JSON data only: objects with string keys, arrays, strings,
+finite numbers, `true`, `false` and `null`. From Python, a key that is not a string, a set, or
+any other object is an error rather than a value converted on save. Values are strict: `"1"`, `3.0` for an integer field, or `1` for a boolean
 are errors, not coercions.
 
 ## Device
