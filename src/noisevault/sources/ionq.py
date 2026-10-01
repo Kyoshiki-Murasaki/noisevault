@@ -10,6 +10,7 @@ machine.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import urllib.error
 import urllib.parse
@@ -241,7 +242,7 @@ def _connectivity(pairs: Any, num_qubits: int) -> str | dict[str, Any]:
     if not pairs:
         return "all_to_all"
     edges = {tuple(sorted(pair)) for pair in pairs}
-    if len(edges) == num_qubits * (num_qubits - 1) // 2:
+    if edges == set(itertools.combinations(range(num_qubits), 2)):
         return "all_to_all"
     return {"edges": sorted(edges), "directed": False}
 

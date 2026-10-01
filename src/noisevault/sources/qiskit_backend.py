@@ -126,10 +126,11 @@ class Calibration:
 def from_qiskit_backend(backend: Any) -> Profile:
     """A profile from any Qiskit BackendV2, e.g. a qiskit-ibm-runtime fake or a live backend.
 
-    Gate errors, durations and T1/T2 come from ``backend.target``; the asymmetric readout pair,
+    Gate errors, durations and T1/T2 come from the backend's Target; the asymmetric readout pair,
     preparation error and calibration time come from ``backend.properties()`` when it exists.
     """
-    target = getattr(backend, "target", None)
+    properties = _properties(backend)
+    target = _target(backend, properties)
     if target is None:
         raise TypeError(f"{backend!r} is not a Qiskit BackendV2: it has no target")
     if target.num_qubits is None:
@@ -137,10 +138,9 @@ def from_qiskit_backend(backend: Any) -> Profile:
             f"{backend.name} has no fixed qubit count, so it has no device calibration; pass a"
             " device backend, e.g. a qiskit-ibm-runtime fake or a live IBM backend"
         )
-    props = _properties_dict(backend)
     cal = calibration_from_target(target, name=_device_name(backend))
-    if props is not None:
-        from_props = calibration_from_properties(props)
+    if properties is not None:
+        from_props = calibration_from_properties(properties.to_dict())
         # IBM's Target converter drops non-operational gates and every gate on a faulty qubit;
         # without their records those loci would resolve to the device default.
         names = {_QISKIT_TO_CANONICAL.get(n, n) for n in target.operation_names}
@@ -210,12 +210,22 @@ def bundled_profiles() -> list[Profile]:
     return out
 
 
-def _properties_dict(backend: Any) -> dict[str, Any] | None:
+def _properties(backend: Any) -> Any:
     method = getattr(backend, "properties", None)
-    if method is None:
-        return None
-    props = method()
-    return None if props is None else props.to_dict()
+    return None if method is None else method()
+
+
+def _target(backend: Any, properties: Any) -> Any:
+    """The Target of the same calibration as ``properties``, or None for a non-BackendV2.
+
+    A qiskit-ibm-runtime backend keeps the Target it built first when only its properties are
+    refreshed, so its Target is rebuilt from the snapshot the rest of the profile reads.
+    """
+    if properties is not None and type(backend).__module__.startswith("qiskit_ibm_runtime"):
+        from qiskit_ibm_runtime.utils.backend_converter import convert_to_target
+
+        return convert_to_target(configuration=backend.configuration(), properties=properties)
+    return getattr(backend, "target", None)
 
 
 def _overlay(base: QubitCalibration, extra: QubitCalibration | None) -> QubitCalibration:

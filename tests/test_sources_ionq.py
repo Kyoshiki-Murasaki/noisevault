@@ -143,6 +143,25 @@ def test_a_dated_record_keeps_its_own_qubit_count(served) -> None:
     assert any("qubit count (8)" in note for note in profile.provenance.notes)
 
 
+@pytest.mark.parametrize(
+    ("bad", "error"),
+    [
+        ([2, 4], r"edge \[2, 4\] is outside 0..3"),
+        ([2, 2], r"edge \[2, 2\] joins a qubit to itself"),
+    ],
+)
+def test_a_bad_edge_is_rejected_even_among_as_many_edges_as_a_complete_graph(
+    served, bad: list[int], error: str
+) -> None:
+    for url in [u for u in served if "qpu.forte-1/characterizations" in u]:
+        body = json.loads(served[url])
+        for record in body["characterizations"] or []:
+            record["connectivity"] = [bad if e == [2, 3] else e for e in record["connectivity"]]
+        served[url] = json.dumps(body).encode()
+    with pytest.raises(ValueError, match=error):
+        ionq.pull("forte-1")
+
+
 def test_errors_say_what_to_do(served) -> None:
     with pytest.raises(SourceUnavailable, match="qpu.aria-1, qpu.forte-1, qpu.harmony"):
         ionq.pull("forte-9")

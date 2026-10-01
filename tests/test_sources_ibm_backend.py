@@ -339,3 +339,41 @@ def test_virtual_gate_the_target_drops_as_non_operational_stays_disabled() -> No
     assert profile.table.gate("rz", (3,)).state == "disabled"
     assert profile.table.gate("rz", (2,)).state == "ideal"
     assert not profile.table.qubit(3).disabled
+
+
+def _ibm_backend(served: list[dict]):
+    """A real IBMBackend whose API client serves the last calibration in `served`."""
+    runtime = require("qiskit_ibm_runtime")
+    from qiskit_ibm_runtime.utils.backend_decoder import configuration_from_server_data
+
+    fake = _backend("FakeManilaV2")
+    conf = json.loads((Path(fake.dirname) / fake.conf_filename).read_text(encoding="utf-8"))
+    client = SimpleNamespace(backend_properties=lambda name, **_: copy.deepcopy(served[-1]))
+    return runtime.IBMBackend(configuration_from_server_data(conf), None, client)
+
+
+def test_refreshed_ibm_backend_properties_give_one_consistent_snapshot() -> None:
+    old = json.loads((FIXTURES / "manila_properties.json").read_bytes())
+    new = copy.deepcopy(old)
+    new["last_update_date"] = "2026-09-30T00:00:00+00:00"
+    for entry in new["gates"]:
+        if (entry["gate"], entry["qubits"]) == ("sx", [0]):
+            [error] = [p for p in entry["parameters"] if p["name"] == "gate_error"]
+            error["value"] = 0.01
+        if (entry["gate"], entry["qubits"]) == ("cx", [3, 4]):
+            stamp = entry["parameters"][0]["date"]
+            entry["parameters"].append(
+                {"name": "operational", "unit": "", "value": 0, "date": stamp}
+            )
+    served = [old]
+    backend = _ibm_backend(served)
+    assert backend.target["sx"][(0,)].error == pytest.approx(0.000155, rel=1e-3)
+    served.append(new)
+    backend.properties(refresh=True)
+
+    profile = nv.from_qiskit_backend(backend)
+    assert profile.device.calibrated_at.isoformat() == "2026-09-30T00:00:00+00:00"
+    assert profile.table.gate("sx", (0,)).avg_infidelity == 0.01
+    assert profile.table.gate("cx", (3, 4)).state == "disabled"
+    assert profile.table.gate("cx", (4, 3)).state == "calibrated"
+    assert profile.fingerprint == nv.from_qiskit_backend(_ibm_backend([new])).fingerprint
