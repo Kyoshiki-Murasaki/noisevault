@@ -29,7 +29,8 @@ Load a device by name and simulate your circuits under the noise it had on a giv
 
 ## Install
 
-Install NoiseVault with the extra for your framework:
+In a virtual environment with Python 3.11 to 3.14, install NoiseVault with the extra for your
+framework:
 
 ```bash
 pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
@@ -42,7 +43,7 @@ uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault nv list
 ```
 
 Replace `qiskit` with the extra you need, or name several, as in `noisevault[qiskit,stim]`. In a
-uv project, run `uv add` with the same quoted argument. NoiseVault runs on Python 3.11 to 3.14.
+uv project, run `uv add` with the same quoted argument.
 
 | Extra | For |
 | --- | --- |
@@ -106,6 +107,9 @@ nv diff ibm_fez@2025-02-26 ibm_fez@2025-05-31
 
 `nv diff` compares the device medians, lists the qubits and pairs that changed most, and names
 the gates that were disabled or re-enabled.
+
+A bare id such as `ibm_fez` loads the newest calibration you have, so after a pull it no longer
+loads the bundled one. Add the date, as in `ibm_fez@2025-02-26`, to load a particular calibration.
 
 The fingerprint is a SHA-256 hash of a profile's physics. Pass it when you load a profile, and
 the load fails if the numbers ever differ:

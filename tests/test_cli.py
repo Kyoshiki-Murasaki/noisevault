@@ -446,6 +446,21 @@ def test_check_json_and_skips() -> None:
     assert result.exit_code == 0
 
 
+def test_check_names_one_whole_install_command_for_the_missing_frameworks(monkeypatch) -> None:
+    require("cirq")
+    monkeypatch.setitem(sys.modules, "pennylane", None)
+    monkeypatch.setitem(sys.modules, "stim", None)
+    result = runner.invoke(
+        app, ["check", "ibm_manila", "--framework", "cirq,pennylane,stim"], env={"COLUMNS": "80"}
+    )
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    assert f"To add the missing frameworks: {install_hint('pennylane,stim')}" in lines
+    assert result.stdout.count("pip install") == 1
+    rows = {line.split()[0]: line for line in lines if line}
+    assert rows["stim"].split()[1:] == ["not", "installed"]
+
+
 def test_cite() -> None:
     profile = nv.load("ibm_fez")
     text = runner.invoke(app, ["cite", "ibm_fez"]).stdout
@@ -812,6 +827,13 @@ def test_a_usage_mistake_is_one_line(args: list[str], error: str) -> None:
     result = runner.invoke(app, args, env={"COLUMNS": "80"}, prog_name="nv")
     assert result.exit_code == 2 and result.stdout == ""
     assert result.stderr.startswith(error) and result.stderr.count("\n") == 1
+
+
+def test_nv_alone_prints_the_help_and_no_error() -> None:
+    result = runner.invoke(app, [], env={"COLUMNS": "80"}, prog_name="nv")
+    assert result.exit_code == 0, result.output
+    assert "Usage: nv" in result.output and "list" in result.output
+    assert "error" not in result.output
 
 
 def test_an_unexpected_failure_is_one_line_unless_debugging(monkeypatch) -> None:

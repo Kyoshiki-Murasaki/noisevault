@@ -95,6 +95,12 @@ def test_compare_devices_writes_the_figure(tmp_path: Path) -> None:
     assert out.read_text(encoding="utf-8").lstrip().startswith("<?xml")
 
 
+def test_compare_devices_writes_to_the_current_folder_by_default(tmp_path: Path) -> None:
+    check(run(tmp_path, str(EXAMPLES / "compare_devices.py")), "wrote compare_devices.svg")
+    assert (tmp_path / "compare_devices.svg").is_file()
+    assert not (ROOT / "assets" / "compare_devices.svg").exists()
+
+
 def test_drift_exits_cleanly_offline(tmp_path: Path) -> None:
     closed_port = "http://127.0.0.1:9"
     result = run(

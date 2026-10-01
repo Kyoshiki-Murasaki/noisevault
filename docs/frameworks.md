@@ -199,16 +199,16 @@ import noisevault as nv
 
 fez = nv.load("ibm_fez")
 code = stim.Circuit.generated("repetition_code:memory", distance=5, rounds=5)
-noisy = fez.to_stim(code, layout=fez.suggest_layout(code.num_qubits), unknown_gates="typical")
+noisy = fez.to_stim(code, layout=fez.suggest_layout(code.num_qubits))
 dem = noisy.detector_error_model()
 shots = noisy.compile_detector_sampler(seed=1).sample(10_000)
 print(dem.num_errors, shots.mean())
 print(noisy.report.summary())
 ```
 
-`CX` is not a Fez native, so here it gets the noise of `cz` on the same pair and the report says
-so. For a grid device, `noisevault.stim.layout_from_coords(circuit, profile)` places a circuit by
-matching its `QUBIT_COORDS` to the profile's qubit coords.
+`CX` is not a Fez native, so here it gets the noise of `cz` on the same pair, with a warning,
+and the report says so. For a grid device, `noisevault.stim.layout_from_coords(circuit, profile)`
+places a circuit by matching its `QUBIT_COORDS` to the profile's qubit coords.
 
 Options:
 

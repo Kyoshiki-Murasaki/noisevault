@@ -14,6 +14,7 @@ import os
 import platform
 import re
 import statistics
+import sys
 import warnings
 import zlib
 from collections.abc import Iterator, Sequence
@@ -45,6 +46,8 @@ from .table import GateNoise
 
 # Click's UsageError; typer exports only this subclass of it.
 _USAGE_ERROR = typer.BadParameter.__mro__[1]
+# Raised by a bare `nv` once the help is printed; older click has no such class.
+_NO_ARGS = getattr(sys.modules[_USAGE_ERROR.__module__], "NoArgsIsHelpError", ())
 
 
 class _Commands(TyperGroup):
@@ -54,6 +57,10 @@ class _Commands(TyperGroup):
     def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
         try:
             return super().parse_args(ctx, args)
+        except _NO_ARGS as exc:
+            if help_text := exc.format_message():  # empty when rich has printed it already
+                typer.echo(help_text)
+            raise typer.Exit() from None
         except _USAGE_ERROR as exc:
             _usage_error(exc)
 
@@ -766,14 +773,19 @@ def check(
                     f"{len({c.circuit for c in f.circuits})} of {len(result.circuits)}",
                     method,
                 )
+            missing = [n for n, why in result.skipped if why.startswith("not installed")]
             for name, _ in result.skipped:
-                table.add_row(name, "skipped", "", "", "", "")
+                table.add_row(name, "not installed" if name in missing else "skipped")
             out.print(table)
             for f in result.frameworks:
                 for circuit, why in f.not_run:
                     out.print(f"{f.framework}: {circuit} not run: {why}", markup=False)
             for name, reason in result.skipped:
-                out.print(f"{name} skipped: {reason}", markup=False)
+                if name not in missing:
+                    out.print(f"{name} skipped: {reason}", markup=False, soft_wrap=True)
+            if missing:
+                command = install_hint(",".join(missing))
+                out.print(f"To add the missing frameworks: {command}", markup=False, soft_wrap=True)
             out.print(NOTE, markup=False)
         if not result.frameworks:
             raise NoiseVaultError(f"no framework could run the check; install one: {_INSTALL_ALL}")

@@ -1,8 +1,8 @@
 """The same GHZ-n circuit on five devices: GHZ success probability against n.
 
 Four bundled calibrations (two IBM superconducting chips, two Quantinuum trapped-ion machines)
-and one hypothetical neutral-atom device. Writes assets/compare_devices.svg, or the path given
-as the first argument.
+and one hypothetical neutral-atom device. Writes compare_devices.svg in the current folder, or
+the path given as the first argument.
 
 Needs:
     pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
@@ -22,8 +22,7 @@ import noisevault as nv
 
 SIZES = range(2, 11, 2)
 SHOTS = 4000
-DEFAULT_OUT = Path(__file__).resolve().parent.parent / "assets" / "compare_devices.svg"
-OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_OUT
+OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "compare_devices.svg")
 
 atoms = nv.Profile.uniform(
     "toy-atoms",
@@ -102,6 +101,5 @@ for side in ("top", "right"):
 for side in ("left", "bottom"):
     ax.spines[side].set_color(INK)
 fig.tight_layout()
-OUT.parent.mkdir(exist_ok=True)
 fig.savefig(OUT, transparent=True, metadata={"Date": None})
 print(f"wrote {OUT}")
