@@ -146,11 +146,15 @@ def from_spec_csv(
     """
     machine, date = _machine(machine), _date(date)
     raw = Path(path).read_bytes()
-    rows = [
-        row
-        for row in csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
-        if row["Machine"] == machine
-    ]
+    reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
+    headers = reader.fieldnames or []
+    for position, header in enumerate(headers, start=1):
+        first = headers.index(header) + 1
+        if first != position:
+            raise ValueError(
+                f"{path}: columns {first} and {position} are both {header!r}; delete one of them"
+            )
+    rows = [row for row in reader if row["Machine"] == machine]
     dated = [row for row in rows if row["Date"] == date]
     if len(dated) != 1:
         known = ", ".join(sorted({row["Date"] for row in rows})) or "none"

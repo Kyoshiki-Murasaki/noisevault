@@ -13,6 +13,7 @@ from noisevault.table import GateNoise, Unavailable
 FIXTURES = Path(__file__).parent / "fixtures" / "ibm"
 EAGLE = FIXTURES / "synthetic_eagle_2024.csv"  # 2023-2025 layout: a_b pairs, trailing spaces
 HERON = FIXTURES / "synthetic_heron_2026.csv"  # 2026 layout: quoted, partner pairs, Yes/No
+FALCON = FIXTURES / "synthetic_falcon_2023.csv"
 
 
 def _eagle() -> nv.Profile:
@@ -90,6 +91,26 @@ def test_unknown_layout_names_the_columns_it_found(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no 'T1 \\(us\\)'") as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
     assert "'Coherence'" in str(info.value) and "'Fidelity'" in str(info.value)
+
+
+@pytest.mark.parametrize("extra", ["SX error", "√x (sx) error"], ids=["alias", "repeated"])
+def test_two_columns_for_one_value_name_both_and_import_nothing(tmp_path: Path, extra: str) -> None:
+    header, *rows = HERON.read_text(encoding="utf-8").splitlines()
+    path = tmp_path / "twice.csv"
+    lines = [f'{header},"{extra}"', *(f'{row},"0.01"' for row in rows)]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    message = f"twice.csv: '√x (sx) error' (column 12) and '{extra}' (column 18) are the same"
+    with pytest.raises(ValueError, match=re.escape(message)):
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+
+
+def test_repeated_columns_the_reader_ignores_still_import(tmp_path: Path) -> None:
+    header, *rows = HERON.read_text(encoding="utf-8").splitlines()
+    path = tmp_path / "padded.csv"
+    lines = [f'{header},"","","Note","Note"', *(f'{row},"","","a","b"' for row in rows)]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    profile = nv.from_ibm_csv(path, device="ibm_example", calibrated_at="2026-01-06")
+    assert profile.fingerprint == _heron().fingerprint
 
 
 def test_bad_packed_cell_names_line_and_column(tmp_path: Path) -> None:
@@ -306,3 +327,87 @@ def test_a_negative_partner_names_its_line_and_column(tmp_path: Path) -> None:
     path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', '"-1:0.0013","1:68"')
     with pytest.raises(ValueError, match=r"line 2, 'CZ error': '-1:0.0013' is not"):
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
+
+
+def test_undefined_reads_as_a_blank_cell(tmp_path: Path) -> None:
+    blank = _edited(tmp_path, FALCON, ",undefined,", ",,")
+    undefined, missing = (
+        nv.from_ibm_csv(path, device="ibm_example", calibrated_at="2023-04-11")
+        for path in (FALCON, blank)
+    )
+    assert undefined.fingerprint == missing.fingerprint
+    assert undefined.provenance.notes == missing.provenance.notes
+    assert any("Qubits [2] have no T2" in note for note in undefined.provenance.notes)
+
+
+def test_rows_with_nothing_the_reader_reads_are_skipped(tmp_path: Path) -> None:
+    header, *rows = HERON.read_text(encoding="utf-8").splitlines()
+    width = header.count(",") + 1
+    lines = [f'{header},"Note"', *(f'{row},""' for row in rows), "," * width + '"x"', "," * width]
+    path = tmp_path / "annotated.csv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    profile = nv.from_ibm_csv(path, device="ibm_example", calibrated_at="2026-01-06")
+    assert profile.fingerprint == _heron().fingerprint
+
+
+def test_a_row_with_values_but_no_qubit_names_its_line(tmp_path: Path) -> None:
+    header, *rows = HERON.read_text(encoding="utf-8").splitlines()
+    averages = '"","250"' + "," * (header.count(",") - 1)
+    path = tmp_path / "averages.csv"
+    path.write_text("\n".join([header, *rows, averages]) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert str(info.value) == (
+        "averages.csv line 6, 'Qubit' is blank in a row with calibration values; give the row"
+        " its qubit number or delete it"
+    )
+
+
+@pytest.mark.parametrize(
+    "cells", ['"01:00.0","1:68"', '"01:00.0","0.102777778"'], ids=["error", "error-and-length"]
+)
+def test_a_pair_a_spreadsheet_turned_into_a_time_is_refused(tmp_path: Path, cells: str) -> None:
+    path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', cells)
+    message = "line 2, 'CZ error': '01:00.0' looks like a time that a spreadsheet made"
+    with pytest.raises(ValueError, match=re.escape(message)):
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+
+
+_SUPPORTED = "this reader imports only the 2023 to 2026 formats"
+
+
+@pytest.mark.parametrize(
+    ("lines", "message"),
+    [
+        (
+            [
+                "Qubit,T1 (us),T2 (us),Frequency (GHz),Anharmonicity (GHz),Readout assignment"
+                " error ,Prob meas0 prep1 ,Prob meas1 prep0 ,Readout length (ns),ID error ,√x (sx)"
+                " error ,Single-qubit Pauli-X error ,CNOT error ,Gate time (ns)",
+                "Q0,72,140,5.1,-0.3,0.01,0.02,0.01,3022,3e-4,3e-4,3e-4,0_1:0.01,0_1:412",
+                "Q1,54,102,5.2,-0.3,0.01,0.02,0.01,3022,3e-4,3e-4,3e-4,1_0:0.01,1_0:377",
+            ],
+            "old.csv is in IBM's CSV format from before 2023, which has a 'Single-qubit Pauli-X"
+            f" error' column; {_SUPPORTED}",
+        ),
+        (
+            [
+                "Qubit,Frequency (GHz),T1 (µs),T2 (µs),Readout assignment error,√x (sx) error,CNOT"
+                " error",
+                ',4.83,136.7,200.5,0.03,0.00027,"cx0_1: 6.7e-3 "',
+                '1,4.62,179.5,110.9,0.021,0.00014,"cx1_2: 9.3e-3 , cx1_0: 6.7e-3 "',
+            ],
+            "old.csv line 2, 'Qubit' is blank; IBM's CSVs from before 2023 left qubit 0 blank,"
+            f" and {_SUPPORTED}",
+        ),
+    ],
+    ids=["q-labels", "blank-qubit-0"],
+)
+def test_a_layout_from_before_2023_is_refused_in_one_line(
+    tmp_path: Path, lines: list[str], message: str
+) -> None:
+    path = tmp_path / "old.csv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2022-01-01")
+    assert str(info.value) == message

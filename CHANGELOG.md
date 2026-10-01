@@ -52,7 +52,10 @@ profile files still load.
   matrix. `from_qiskit_backend` allows a gate only on the qubits its `Target` lists, takes the
   technology from the backend, and labels a fake whose snapshot is a model, such as
   `FakeNighthawk`, as `vendor_model`. An IBM gate error missing from a CSV or a pull takes the
-  device median, and `provenance.notes` names those qubits and pairs.
+  device median, and `provenance.notes` names those qubits and pairs. `from_ibm_csv` reads
+  IBM's CSV formats from 2023 to 2026 and treats a cell that says `undefined` as blank. It
+  refuses a file in an older format, a copy that a spreadsheet saved, or a file with two
+  columns for the same value, each with a one-line error that says why.
 - **Hypothetical devices** with `Profile.uniform`, and `profile.suggest_layout(n)` to pick a
   well-calibrated chain of qubits that each have every one-qubit native the device has.
 - **Command line** `nv` (also `noisevault`): `list`, `show`, `pull`, `diff`, `check`, `cite`,

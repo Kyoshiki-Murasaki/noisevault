@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import warnings
 from pathlib import Path
 
@@ -138,6 +139,16 @@ def test_spec_csv_accepts_iso_dates() -> None:
     iso = quantinuum.from_spec_csv(CSV, machine="H2-2", date="2024-12-06")
     underscored = quantinuum.from_spec_csv(CSV, machine="H2-2", date="2024_12_06")
     assert iso.fingerprint == underscored.fingerprint
+
+
+def test_spec_csv_with_a_repeated_column_names_both(tmp_path: Path) -> None:
+    header, *rows = CSV.read_text(encoding="utf-8").splitlines()
+    path = tmp_path / "twice.csv"
+    lines = [f"{header},2Q error", *(f"{row},9.9(1)E-02" for row in rows)]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    message = f"{path}: columns 6 and 13 are both '2Q error'; delete one of them"
+    with pytest.raises(ValueError, match=re.escape(message)):
+        quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
 
 
 def test_bundle_takes_the_newest_dataset_of_every_machine(monkeypatch) -> None:
