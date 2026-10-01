@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import cmath
+import math
 import sys
 import warnings
+from typing import Any
 
 import numpy as np
 import pytest
@@ -127,6 +130,70 @@ def test_coherent_fsim_errors_are_carried_and_reported_omitted() -> None:
     assert len(willow.extensions["cirq_google"]["fsim_errors"]["cz"]) == 182
     model = willow.to_cirq(unknown_gates="error")
     assert "effect coherent_overrotation on cz" in model.report.omitted
+
+
+def _exact_infidelity(mpmath: Any, theta: float, zeta: float, gamma: float, phi: float) -> Any:
+    """1 - |tr U|^2/16 of PhasedFSimGate, from its diagonal, evaluated at 50 digits."""
+    with mpmath.workdps(50):
+        theta, zeta, gamma, phi = map(mpmath.mpf, (theta, zeta, gamma, phi))
+        trace = (
+            1
+            + 2 * mpmath.cos(theta) * mpmath.cos(zeta) * mpmath.exp(-1j * gamma)
+            + mpmath.exp(-1j * (2 * gamma + phi))
+        )
+        return 1 - abs(trace) ** 2 / 16
+
+
+@pytest.mark.parametrize("name", list(google.PROCESSORS))
+def test_coherent_error_is_its_angles_exact_infidelity_to_12_significant_digits(name: str) -> None:
+    # a direct 1 - |tr U|^2/16 cancels, so its last digits follow the platform's libm and
+    # complex arithmetic; the stored value, and so the fingerprint, must not
+    mpmath = require("mpmath")
+    prof = profile(name)
+    label = {q.index: q.label for q in prof.qubits}
+    angles = prof.extensions["cirq_google"]["fsim_errors"]
+    effects = [e for e in prof.effects if e.type == "coherent_overrotation"]
+    assert effects
+    for effect in effects:
+        fit = angles[effect.gate]["-".join(label[i] for i in effect.qubits)]
+        exact = _exact_infidelity(mpmath, *(fit[k] for k in ("theta", "zeta", "gamma", "phi")))
+        assert effect.prob == float(mpmath.nstr(exact, 12)), (effect.gate, effect.qubits)
+
+
+def test_fsim_infidelity_matches_the_exact_value_at_any_angles() -> None:
+    mpmath, cirq = require("mpmath"), require("cirq")
+    rng = np.random.default_rng(7)
+    gates_ = [
+        cirq.PhasedFSimGate(*(rng.uniform(-np.pi, np.pi, 5) * 10 ** rng.uniform(-8, 0)))
+        for _ in range(2000)
+    ]
+    # cos(theta) < 0 with every diagonal phase aligned: 5e-13, which 1 - |tr U|^2/16 in
+    # floating point gets wrong in the fourth digit
+    gates_.append(cirq.PhasedFSimGate(np.pi - 1e-6, 1e-7, 0.3, np.pi - 1e-7, 1e-7))
+    for gate in gates_:
+        exact = _exact_infidelity(mpmath, gate.theta, gate.zeta, gate.gamma, gate.phi)
+        assert google._fsim_infidelity(gate) == pytest.approx(float(exact), rel=1e-15, abs=0)
+
+
+@pytest.mark.parametrize("ulps", [2, -2])
+def test_coherent_errors_do_not_follow_the_last_bits_of_libm(
+    monkeypatch: pytest.MonkeyPatch, ulps: int
+) -> None:
+    # platforms differ in the last ulp of sin, cos and exp; a fingerprint must not
+    expected = {name: profile(name).effects for name in google.PROCESSORS}
+
+    def nudge(value: Any) -> Any:
+        if isinstance(value, complex):
+            return complex(nudge(value.real), nudge(value.imag))
+        for _ in range(abs(ulps)):
+            value = math.nextafter(value, math.copysign(math.inf, ulps))
+        return value
+
+    for module, name in ((math, "sin"), (math, "cos"), (cmath, "exp")):
+        original = getattr(module, name)
+        monkeypatch.setattr(module, name, lambda x, f=original: nudge(f(x)))
+    for name, effects in expected.items():
+        assert google.from_cirq_google(name).effects == effects, name
 
 
 def test_provenance() -> None:

@@ -2,12 +2,12 @@
   "format": 1,
   "profiles": [
     {
-      "artifact_hash": "816ec2f0a61d34fd3bf1b6cce5ac64188c450cf40446a6b94e9a5450e4f5f1b9",
+      "artifact_hash": "7b8c0438b3b7aa0f26e65aac8d6d97544274441fa5900e9b14d9c28e59a39976",
       "calibrated_at": "2021-11-16T10:26:55.838000Z",
       "data_kind": "measured",
       "date": "2021-11-16",
       "file": "google_rainbow@2021-11-16.json.gz",
-      "fingerprint": "09f62b13f0f2fd971260de2036d0a26cf145444aaa17f859a933783c42a97eb5",
+      "fingerprint": "0495175fba30d17263fe1204f8bcaa318ef384952f7a24d00cea336de353dc79",
       "id": "google_rainbow",
       "license": "Apache-2.0",
       "num_qubits": 23,
@@ -18,12 +18,12 @@
       "vendor": "google"
     },
     {
-      "artifact_hash": "a3cfc5ee7a56605e1e8e031a7c722ece3e3604acf343c8ea5a0ab47c8c9a62ef",
+      "artifact_hash": "2f55429882eb78adfd83b9dd4ec28f28e58dc675669921ac7da87ebb57c124f3",
       "calibrated_at": "2021-11-03T07:06:28.204000Z",
       "data_kind": "measured",
       "date": "2021-11-03",
       "file": "google_weber@2021-11-03.json.gz",
-      "fingerprint": "99b6efcf19b0e954f0004f90de718d36fcc6b6c6685e53af754bc91e1668392d",
+      "fingerprint": "3fe01c42646625b4d85f812438ce023c0013202f87b6cfd9e9d1fd8c888054be",
       "id": "google_weber",
       "license": "Apache-2.0",
       "num_qubits": 53,

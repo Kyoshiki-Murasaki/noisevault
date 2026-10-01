@@ -26,10 +26,9 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, localcontext
 from importlib import resources
 from typing import TYPE_CHECKING, Any, Literal
-
-import numpy as np
 
 from .. import __version__
 from ..errors import SourceUnavailable, install_hint
@@ -202,8 +201,8 @@ def _profile(
                     " single_qubit_p11_error",
                     "Z rotations are virtual: the device spec gives ZPowGate 0 ns",
                     "coherent_overrotation effects: prob is 1 - F_e of cirq_google's fSim error"
-                    " unitary for that pair (the part its model applies coherently); the gate"
-                    " error already includes it; the angles are in"
+                    " unitary for that pair (the part its model applies coherently), to 12"
+                    " significant digits; the gate error already includes it; the angles are in"
                     " extensions.cirq_google.fsim_errors",
                     *notes,
                 ],
@@ -281,8 +280,6 @@ def _coherent_effects(
     fsim_errors: Mapping[Any, Any], index: Mapping[Any, int]
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, dict[str, float]]]]:
     """One omitted coherent_overrotation effect per gate and pair, and the fitted angles."""
-    import cirq
-
     effects: list[dict[str, Any]] = []
     angles: dict[str, dict[str, dict[str, float]]] = {}
     seen: set[tuple[str, tuple[int, int]]] = set()
@@ -293,16 +290,52 @@ def _coherent_effects(
         if (canonical, pair) in seen:
             continue
         seen.add((canonical, pair))
-        unitary = cirq.unitary(error_gate)
-        infidelity = max(1 - abs(np.trace(unitary)) ** 2 / 16, 0.0)
+        infidelity = float(f"{_fsim_infidelity(error_gate):.12g}")
         effects.append(
             {"type": "coherent_overrotation", "gate": canonical, "qubits": list(pair),
-             "prob": float(infidelity)}
+             "prob": infidelity}
         )  # fmt: skip
         angles.setdefault(canonical, {})[f"{_label(a)}-{_label(b)}"] = {
             key: float(getattr(error_gate, key)) for key in ("theta", "zeta", "chi", "gamma", "phi")
         }
     return effects, angles
+
+
+def _fsim_infidelity(gate: cirq.PhasedFSimGate) -> float:
+    """1 - |tr U|^2/16 of a PhasedFSimGate, whose diagonal is 1, cos(theta) e^{-i(gamma +- zeta)}
+    and e^{-i(2 gamma + phi)}.
+
+    Decimal arithmetic gives the same digits on every platform. libm's sin, cos and exp can
+    differ in the last ulp, and the cancellation in 1 - |tr U|^2/16 lifts that into the digits a
+    profile stores; at 40 digits over 25 survive it.
+    """
+    with localcontext(prec=40):
+        theta, zeta, gamma, phi = (
+            Decimal(x) for x in (gate.theta, gate.zeta, gate.gamma, gate.phi)
+        )
+        middle = 2 * _cos(theta) * _cos(zeta)
+        real = 1 + middle * _cos(gamma) + _cos(2 * gamma + phi)
+        imag = middle * _sin(gamma) + _sin(2 * gamma + phi)
+        return float(1 - (real * real + imag * imag) / 16)
+
+
+def _sin(x: Decimal) -> Decimal:
+    return _taylor(x, x, 1)
+
+
+def _cos(x: Decimal) -> Decimal:
+    return _taylor(x, Decimal(1), 0)
+
+
+def _taylor(x: Decimal, term: Decimal, n: int) -> Decimal:
+    """The sine (term x, n 1) or cosine (term 1, n 0) series, summed until it stops changing."""
+    total, last = term, None
+    while total != last:
+        last = total
+        term *= -x * x / ((n + 1) * (n + 2))
+        n += 2
+        total += term
+    return total
 
 
 def _per_qubit(calibration: Any, metric: str) -> dict[Any, float]:
