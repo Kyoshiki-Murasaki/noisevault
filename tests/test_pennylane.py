@@ -804,6 +804,131 @@ def test_effects_that_cannot_be_omitted_refuse_to_convert(qml) -> None:
     assert "effect leakage on cz" in to_pennylane(Profile.model_validate(data)).report.omitted
 
 
+# operator arithmetic and identities ----------------------------------------------------------
+
+
+def _uniform(num_qubits: int) -> Profile:
+    """Error 0.1 on every 1-qubit gate and 0.2 on every 2-qubit gate; the z family is free."""
+    return Profile.uniform(
+        "uniform",
+        technology="other",
+        num_qubits=num_qubits,
+        one_qubit_error=0.1,
+        two_qubit_error=0.2 if num_qubits > 1 else None,
+    )
+
+
+def _noisy_qnode_probs(qml, model, apply, num_wires: int) -> np.ndarray:
+    @qml.qnode(qml.device("default.mixed", wires=num_wires))
+    def circuit():
+        apply()
+        return qml.probs(wires=range(num_wires))
+
+    return np.asarray(qml.add_noise(circuit, model)())
+
+
+def _inserted_channels(qml, model, ops: list) -> list[tuple[list, np.ndarray]]:
+    [tape], _ = qml.noise.add_noise(qml.tape.QuantumScript(ops), model)
+    return [
+        (op.wires.tolist(), np.stack(op.kraus_matrices()))
+        for op in tape.operations
+        if op.name == "QubitChannel"
+    ]
+
+
+@pytest.mark.parametrize("unknown_gates", ["typical", "error"])
+def test_a_gate_product_gets_the_noise_of_its_gates(qml, unknown_gates) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    model = to_pennylane(_uniform(1), unknown_gates=unknown_gates, readout=False)
+    got = _noisy_qnode_probs(qml, model, lambda: qml.prod(qml.X(0), qml.Z(0)), 1)
+    assert got == pytest.approx([0.1, 0.9], abs=1e-12)
+    assert "typical_noise_used" not in model.report.events
+    assert "operator arithmetic" not in [a.what for a in model.report.approximated]
+
+
+@pytest.mark.parametrize(
+    ("arithmetic", "gates", "noise_moves"),
+    [
+        (lambda q: q.prod(q.X(0), q.Z(0)), lambda q: [q.Z(0), q.X(0)], False),
+        (lambda q: q.X(0) @ q.SX(1), lambda q: [q.SX(1), q.X(0)], False),
+        (lambda q: q.s_prod(1j, q.SX(0)), lambda q: [q.SX(0)], False),
+        (
+            lambda q: q.pow(q.SX(0) @ q.X(1), 2),
+            lambda q: [q.X(1), q.SX(0), q.X(1), q.SX(0)],
+            True,
+        ),
+        (lambda q: q.adjoint(q.X(0) @ q.Z(0)), lambda q: [q.X(0), q.Z(0)], True),
+        (
+            lambda q: q.ctrl(q.X(1) @ q.Z(1), 0),
+            lambda q: [q.RY(np.pi / 2, 1), q.CNOT([0, 1]), q.RY(-np.pi / 2, 1), q.CNOT([0, 1])],
+            True,
+        ),
+        (
+            lambda q: q.change_op_basis(q.Hadamard(0), q.Z(0)),
+            lambda q: [q.Hadamard(0), q.Z(0), q.Hadamard(0)],
+            True,
+        ),
+    ],
+    ids=["product", "tensor product", "phase", "power", "adjoint", "control", "change of basis"],
+)
+def test_operator_arithmetic_gets_the_channels_of_its_gates_written_out(
+    qml, arithmetic, gates, noise_moves
+) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    model = to_pennylane(_uniform(2), unknown_gates="error", readout=False)
+    got = _inserted_channels(qml, model, [arithmetic(qml)])
+    expected = _inserted_channels(qml, to_pennylane(_uniform(2), readout=False), gates(qml))
+    assert expected
+    assert [wires for wires, _ in got] == [wires for wires, _ in expected]
+    for (_, kraus), (_, want) in zip(got, expected, strict=True):
+        assert np.abs(kraus - want).max() < 1e-12
+    moved = "operator arithmetic" in [a.what for a in model.report.approximated]
+    assert moved == noise_moves
+
+
+def test_uncalibrated_gates_in_a_product_warn_or_raise(qml, manila) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    def apply():
+        qml.prod(qml.Hadamard(0), qml.X(0))
+
+    model = to_pennylane(manila, readout=False)
+    with pytest.warns(NoiseApproximationWarning, match="h on qubits"):
+        _noisy_qnode_probs(qml, model, apply, 1)
+    assert dict(model.report.events["typical_noise_used"]) == {"h": 1}
+    with pytest.raises(MissingCalibrationError, match="h on qubits"):
+        _noisy_qnode_probs(qml, to_pennylane(manila, unknown_gates="error"), apply, 1)
+
+
+@pytest.mark.parametrize("unknown_gates", ["typical", "error"])
+@pytest.mark.parametrize(
+    "arithmetic",
+    [
+        lambda q: q.sum(q.X(0), q.Z(0)),
+        lambda q: q.Hamiltonian([0.6, 0.8], [q.X(0), q.Z(0)]),
+        lambda q: q.s_prod(2.0, q.X(0)),
+        lambda q: q.pow(q.X(0) @ q.S(0), 0.5),
+    ],
+    ids=["sum", "linear combination", "scaled", "fractional power"],
+)
+def test_arithmetic_without_a_gate_decomposition_raises(qml, arithmetic, unknown_gates) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    model = to_pennylane(_uniform(1), unknown_gates=unknown_gates, readout=False)
+    with pytest.raises(ValueError, match="no decomposition into gates"):
+        _noisy_qnode_probs(qml, model, lambda: arithmetic(qml), 1)
+
+
+def test_an_identity_on_several_wires_gets_each_wires_id_noise(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    model = to_pennylane(_uniform(2), unknown_gates="error", readout=False)
+    got = _noisy_qnode_probs(qml, model, lambda: qml.Identity(wires=[0, 1]), 2)
+    assert got == pytest.approx([0.81, 0.09, 0.09, 0.01], abs=1e-12)
+
+
 # gradients and scale -------------------------------------------------------------------------
 
 

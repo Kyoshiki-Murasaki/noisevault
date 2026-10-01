@@ -187,12 +187,16 @@ What the report can list:
 - **Approximated.** The initial state is ideal, and state preparation templates are noiseless.
   `qml.add_noise` at its default `level="user"` noises `qml.adjoint` gates and templates through
   their decomposition; pass `level="top"` to noise `Adjoint(SX)`, `Adjoint(S)` and `Adjoint(T)`
-  as the profile's `sxdg`, `sdg` and `tdg`. The basis rotation before a Pauli measurement is
-  ideal. Gates conditioned on mid-circuit measurements get their noise whether or not the
-  condition holds. A measurement without wires gets readout error on the wires that the
-  circuit's operations and measurements use.
+  as the profile's `sxdg`, `sdg` and `tdg`. Operator arithmetic, such as `qml.prod` or `@`,
+  gets the noise of the gates it decomposes into, after the whole operator. The basis rotation
+  before a Pauli measurement is ideal. Gates conditioned on mid-circuit measurements get their
+  noise whether or not the condition holds. A measurement without wires gets readout error on
+  the wires that the circuit's operations and measurements use.
 - **Omitted.** Idle time, because PennyLane circuits have no timing. Readout on mid-circuit
   measurements. Readout on observables not measured in one product basis. Effects.
+
+Operator arithmetic with no decomposition into gates, such as `qml.sum`, raises an error. It
+has no gate noise, and `default.mixed` cannot run it.
 
 `qml.add_noise` keeps only part of a shot vector's results (`shots=[100, 200]`) when readout
 noise is on, so the model raises an error for shot vectors instead of returning wrong numbers.

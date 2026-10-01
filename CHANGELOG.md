@@ -29,7 +29,8 @@ profile files still load.
   - `to_cirq()`: a `cirq.NoiseModel`. `GridQubit(r, c)` addresses the qubit at those coords.
   - `to_pennylane()`: a `qml.NoiseModel` for `qml.add_noise`, with gradients through the noise.
     A broadcast whose angles need different natives raises and names the fix,
-    `qml.transforms.broadcast_expand`.
+    `qml.transforms.broadcast_expand`. Operator arithmetic such as `qml.prod` gets the noise of
+    the gates it decomposes into.
   - `to_stim(circuit)`: a noisy copy of a Stim circuit for QEC-size sampling and decoding.
 - **One rule for fixed-angle gates in every export.** A gate such as `s`, `sx` or `ms` takes
   its own native's noise if the profile has it, else the noise of the rotation it equals.

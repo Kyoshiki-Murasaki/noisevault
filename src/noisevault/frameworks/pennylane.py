@@ -36,7 +36,7 @@ from pennylane.measurements import (
     VarianceMP,
 )
 from pennylane.operation import Channel, Operation, Operator, StatePrepBase
-from pennylane.ops.op_math import Conditional
+from pennylane.ops.op_math import Adjoint, CompositeOp, Conditional, SymbolicOp
 
 from .. import gates
 from ..channels import readout_matrix
@@ -50,6 +50,7 @@ Kraus = tuple[np.ndarray, ...]
 PhysicalChannel = tuple[Kraus, tuple[int, ...]]  # Kraus operators (big-endian) and their qubits
 EventCounts = tuple[tuple[str, str, int], ...]  # (event, key, count) added to the report
 CacheEntry = tuple[tuple[PhysicalChannel, ...], EventCounts]
+Charge = tuple[str, tuple[Hashable, ...]]  # a registry gate and the circuit wires it acts on
 
 _CANONICAL = {info.pennylane: info.name for info in gates.GATES.values() if info.pennylane}
 # Registry gates PennyLane has only as another operation at a fixed angle: operation name ->
@@ -176,10 +177,25 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
                 "gate noise applied whether or not the condition holds",
                 "default.mixed cannot condition a channel on a mid-circuit measurement",
             )
-        physical = tuple(self.physical_qubit(w) for w in op.wires)
-        wire_of = dict(zip(physical, op.wires, strict=True))
-        for kraus, qubits in self._channels(gate_name(gate, self.profile.gates), physical):
-            qml.QubitChannel(list(kraus), wires=[wire_of[q] for q in qubits])
+        noise: list[tuple[Kraus, list[Hashable]]] = []
+        noisy_wires: set[Hashable] = set()
+        moved = False
+        for name, wires in _charges(gate, self.profile.gates):
+            moved |= not noisy_wires.isdisjoint(wires)
+            physical = tuple(self.physical_qubit(w) for w in wires)
+            wire_of = dict(zip(physical, wires, strict=True))
+            for kraus, qubits in self._channels(name, physical):
+                targets = [wire_of[q] for q in qubits]
+                noise.append((kraus, targets))
+                noisy_wires.update(targets)
+        if moved:
+            self.report.approximate(
+                "operator arithmetic",
+                "the noise of each gate it decomposes into applied after the whole operator",
+                "apply the gates one by one to put each gate's noise right after it",
+            )
+        for kraus, wires in noise:
+            qml.QubitChannel(list(kraus), wires=wires)
 
     def _reset_noise(self, op: MidMeasureMP, **_: Any) -> None:
         qubit = self.physical_qubit(op.wires[0])
@@ -276,6 +292,9 @@ def to_pennylane(
     ``qml.add_noise`` at its default ``level="user"`` decomposes ``qml.adjoint`` gates and
     templates first, so they are noised gate by gate; pass ``level="top"`` to noise
     ``Adjoint(SX)``, ``Adjoint(S)`` and ``Adjoint(T)`` as the profile's sxdg, sdg and tdg.
+    Operator arithmetic, such as ``qml.prod`` or ``@``, gets the noise of the gates it
+    decomposes into, after the whole operator. Arithmetic with no such decomposition, such as
+    ``qml.sum``, raises ValueError.
 
     ``qml.IsingZZ(pi/2)`` gets the noise of a profile's ``zz``, ``qml.IsingXX(+-pi/2)`` and
     ``qml.IsingYY(+-pi/2)`` that of its ``ms``, and ``qml.Rot(a, theta, -a)`` that of its ``r``
@@ -394,10 +413,54 @@ def _is_operation(_: Operator) -> bool:
 def _is_gate(op: Operator) -> bool:
     op = _unconditional(op)
     return (
-        isinstance(op, Operation)
+        isinstance(op, Operation | CompositeOp | SymbolicOp)
         and not isinstance(op, Channel | StatePrepBase)
         and op.name not in _NOT_GATES
     )
+
+
+def _is_arithmetic(op: Operator) -> bool:
+    """Operator arithmetic such as ``qml.prod``; a symbolic Operation such as CNOT is a gate."""
+    return isinstance(op, CompositeOp | SymbolicOp) and not isinstance(op, Operation)
+
+
+def _charges(op: Operator, defined: Container[str]) -> list[Charge]:
+    """The registry gates whose noise ``op`` gets, with their wires, in circuit order.
+
+    An identity gets one ``id`` per wire. Operator arithmetic gets the gates it decomposes into,
+    because those are the gates default.mixed runs.
+    """
+    charges: list[Charge] = []
+    for gate in _decomposed(op) if _is_arithmetic(op) else [op]:
+        name = gate_name(gate, defined)
+        if isinstance(gate, qml.Identity):
+            charges += [(name, (wire,)) for wire in gate.wires]
+        else:
+            charges.append((name, tuple(gate.wires)))
+    return charges
+
+
+def _decomposed(op: Operator) -> list[Operator]:
+    """The gates operator arithmetic ``op`` decomposes into, in circuit order. Adjoints inside it
+    decompose too, as qml.add_noise decomposes adjoints at level='user'."""
+    if not op.has_decomposition:
+        raise ValueError(
+            f"{op} has no decomposition into gates, so it gets no gate noise and default.mixed"
+            " cannot run it; apply a unitary operator as"
+            " qml.QubitUnitary(qml.matrix(op), wires=...)"
+        )
+    with qml.QueuingManager.stop_recording():
+        parts = op.decomposition()
+    return [
+        gate
+        for part in parts
+        if _is_gate(part)
+        for gate in (
+            _decomposed(part)
+            if _is_arithmetic(part) or (isinstance(part, Adjoint) and part.has_decomposition)
+            else [part]
+        )
+    ]
 
 
 def _is_reset(op: Operator) -> bool:
