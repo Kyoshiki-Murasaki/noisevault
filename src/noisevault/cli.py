@@ -759,6 +759,9 @@ def check(
                 )
             for f in result.frameworks:
                 verdict = "[green]pass[/green]" if f.passed else "[red]FAIL[/red]"
+                reduced = {n.circuit for n in f.not_run if n.ran_without}
+                ran = len({c.circuit for c in f.circuits} - reduced)
+                counted = f"{ran} of {len(result.circuits)}"
                 kinds = {c.sampled for c in f.circuits}
                 method = {
                     frozenset({False}): "exact",
@@ -769,7 +772,7 @@ def check(
                     verdict,
                     f"{f.max_tvd:.1e}",
                     f"{f.worst.tolerance:.1e}",
-                    f"{len({c.circuit for c in f.circuits})} of {len(result.circuits)}",
+                    f"{counted}, {len(reduced)} reduced" if reduced else counted,
                     method,
                 )
             missing = [n for n, why in result.skipped if why.startswith("not installed")]
@@ -777,8 +780,8 @@ def check(
                 table.add_row(name, "not installed" if name in missing else "skipped")
             out.print(table)
             for f in result.frameworks:
-                for circuit, why in f.not_run:
-                    out.print(f"{f.framework}: {circuit} not run: {why}", markup=False)
+                for part in f.not_run:
+                    out.print(f"{f.framework}: {part.describe()}", markup=False)
             for name, reason in result.skipped:
                 if name not in missing:
                     out.print(f"{name} skipped: {reason}", markup=False, soft_wrap=True)

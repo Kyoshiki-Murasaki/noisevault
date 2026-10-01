@@ -38,8 +38,9 @@ print(fez.suggest_layout(4))
 ```
 
 `suggest_layout(n)` returns a connected chain of n enabled qubits with low summed gate and
-readout error. It is a starting point, not a placer. A layout onto a disabled or missing qubit
-raises `LayoutError` with the fix.
+readout error, preferring qubits that can still make every single-qubit gate. It is a starting
+point, not a placer. A layout onto a disabled or missing qubit raises `LayoutError` with the
+fix.
 
 ## Qiskit
 
@@ -90,7 +91,11 @@ What the report can list:
 On a profile with disabled qubits or gates, transpile with
 `initial_layout=list(profile.suggest_layout(n).values())`. Qiskit's `optimization_level=0`
 places circuit qubit i on physical qubit i, and levels 1 to 3 do not check that a qubit has the
-single-qubit gates a circuit needs.
+single-qubit gates a circuit needs. `suggest_layout` does check. It skips a qubit where a
+disabled single-qubit gate leaves the rest unable to make every rotation, such as an IBM qubit
+without `sx`, which keeps only `rz` and `x`. A qubit without `x` alone still qualifies, because
+`rz` and `sx` make any single-qubit gate. When no chain of n qubits avoids such qubits,
+`suggest_layout` uses as few as it can and warns, and the transpiler can fail on them.
 
 ## Cirq
 
@@ -242,3 +247,10 @@ frameworks.
 
 `nv check REF` runs small circuits through each installed export and compares them with
 NoiseVault's own density-matrix reference simulator. Use it after changing a profile by hand.
+
+A framework that cannot express one of a circuit's gates runs the circuit without it, or skips
+the circuit when nothing useful is left. The `circuits` column counts only circuits that ran
+whole, for example `3 of 4, 1 reduced`. A line under the table names each gate left out and
+why, such as `stim: two_qubit_natives ran without rxx, ryy, rzz`. A pass covers only the gates
+that ran. `--json` lists the same under each framework's `not_run`, with `ran_without` naming
+the gates a reduced circuit left out.

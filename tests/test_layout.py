@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import time
+import warnings
 
 import numpy as np
 import pytest
 from conftest import toy
 
-from noisevault.errors import LayoutError
+from noisevault.errors import LayoutError, NoiseVaultWarning
 from noisevault.layout import normalize_layout, suggest_layout
 from noisevault.profile import Profile
 
@@ -198,3 +199,56 @@ def test_a_pair_calibrated_outside_the_connectivity_links_the_chain() -> None:
     path = [layout[i] for i in range(3)]
     assert path in ([0, 1, 2], [2, 1, 0])
     assert all(profile.table.allowed("cz", pair) for pair in zip(path, path[1:], strict=False))
+
+
+_SX_X = {
+    "rz": {"virtual": True},
+    "sx": {"avg_infidelity": 2e-3},
+    "x": {"avg_infidelity": 1e-3},
+    "cz": {"avg_infidelity": 1e-2},
+}
+
+
+def test_suggest_layout_skips_a_qubit_that_cannot_make_every_rotation() -> None:
+    # Without sx, qubit 0 has only rz and x: its cheap x would otherwise rank it first.
+    profile = _ions(gates=_SX_X, calibrations=[{"gate": "sx", "qubits": [0], "disabled": True}])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        layout = suggest_layout(profile, 2)
+    assert set(layout.values()) == {1, 2}
+
+
+@pytest.mark.parametrize(
+    ("natives", "off", "complete"),
+    [
+        (("sx", "x"), ["x"], True),
+        (("sx", "x", "id"), ["id"], True),
+        (("sx", "x"), ["sx"], False),
+        (("sx", "x"), ["rz"], False),
+        (("rx", "ry"), ["rx"], True),
+        (("h", "x"), ["x"], True),
+        (("h",), ["h"], False),
+        (("u", "sx"), ["u"], True),
+        (("r", "x"), ["r"], False),
+    ],
+)
+def test_a_qubit_is_complete_when_its_usable_gates_make_what_the_disabled_ones_did(
+    natives, off, complete
+) -> None:
+    gates = {"rz": {"virtual": True}, **{n: {"avg_infidelity": 1e-3} for n in natives}}
+    profile = _ions(
+        gates={**gates, "cz": {"avg_infidelity": 1e-2}},
+        calibrations=[{"gate": g, "qubits": [0], "disabled": True} for g in off],
+        qubits=[{"index": 0, "readout": {"error": 1e-4}}],
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NoiseVaultWarning)
+        chosen = suggest_layout(profile, 1)[0]
+    assert (chosen == 0) is complete
+
+
+def test_suggest_layout_falls_back_to_an_incomplete_qubit_and_says_so() -> None:
+    profile = _ions(gates=_SX_X, calibrations=[{"gate": "sx", "qubits": [0], "disabled": True}])
+    with pytest.warns(NoiseVaultWarning, match=r"qubit 0 .*sx"):
+        layout = suggest_layout(profile, 3)
+    assert set(layout.values()) == {0, 1, 2}

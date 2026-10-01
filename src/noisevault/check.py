@@ -74,6 +74,24 @@ class CircuitCheck:
 
 
 @dataclass(frozen=True)
+class NotRun:
+    """A planned check circuit, or part of one, that a framework did not run.
+
+    ``ran_without`` names the gates a reduced version of the circuit left out; it is empty when
+    the circuit did not run at all.
+    """
+
+    circuit: str
+    reason: str
+    ran_without: tuple[str, ...] = ()
+
+    def describe(self) -> str:
+        if self.ran_without:
+            return f"{self.circuit} ran without {', '.join(self.ran_without)}: {self.reason}"
+        return f"{self.circuit} not run: {self.reason}"
+
+
+@dataclass(frozen=True)
 class FrameworkCheck:
     """One framework's export run on the check circuits it can express."""
 
@@ -81,7 +99,7 @@ class FrameworkCheck:
     version: str
     method: str
     circuits: tuple[CircuitCheck, ...]
-    not_run: tuple[tuple[str, str], ...]  # (circuit, why this framework cannot express it)
+    not_run: tuple[NotRun, ...]  # what of the plan this framework cannot express
     approximated: int
     omitted: int
     unknown: int
@@ -109,7 +127,10 @@ class FrameworkCheck:
             "max_tvd": self.max_tvd,
             "tolerance": self.worst.tolerance,
             "circuits": [{**c.__dict__, "gates": list(c.gates)} for c in self.circuits],
-            "not_run": [{"circuit": c, "reason": r} for c, r in self.not_run],
+            "not_run": [
+                {"circuit": n.circuit, "reason": n.reason, "ran_without": list(n.ran_without)}
+                for n in self.not_run
+            ],
             "report": {
                 "approximated": self.approximated,
                 "omitted": self.omitted,
@@ -147,7 +168,7 @@ class CheckResult:
                 f"  {f.framework:<10} {verdict}  max TVD {f.max_tvd:.2g} (tolerance"
                 f" {f.worst.tolerance:.2g}), {len(f.circuits)} circuits, {f.method}"
             )
-            lines += [f"    not run: {c}: {why}" for c, why in f.not_run]
+            lines += [f"    {n.describe()}" for n in f.not_run]
         lines += [f"  {name:<10} skipped: {why}" for name, why in self.skipped]
         lines.append(NOTE)
         return "\n".join(lines)
@@ -458,12 +479,16 @@ def _run(
     circuits = build_circuits(
         runner.profile, runner.chain, lambda op: not runner.cannot_express(op)
     )
-    built = {c.name for c in circuits}
-    not_run = [
-        (c.name, "; ".join(dict.fromkeys(filter(None, map(runner.cannot_express, c.ops)))))
-        for c in plan
-        if c.name not in built
-    ]
+    built = {c.name: c for c in circuits}
+    not_run = []
+    for planned in plan:
+        ran = built.get(planned.name)
+        # A reduced version keeps the circuit's name, so compare the operations themselves.
+        left_out = list((Counter(planned.ops) - Counter(ran.ops if ran else ())).elements())
+        if left_out:
+            reason = "; ".join(dict.fromkeys(filter(None, map(runner.cannot_express, left_out))))
+            names = tuple(dict.fromkeys(op.name for op in left_out)) if ran else ()
+            not_run.append(NotRun(planned.name, reason, names))
     checks = [
         _compare(
             c,
@@ -475,7 +500,7 @@ def _run(
         for c in circuits
     ]
     if not checks:
-        reasons = dict.fromkeys(part for _, why in not_run for part in why.split("; "))
+        reasons = dict.fromkeys(part for n in not_run for part in n.reason.split("; "))
         return "no check circuit can be expressed: " + "; ".join(reasons)
     widest = max(circuits, key=lambda c: c.num_qubits)
     measured = runner.sample_measured(widest, shots, seed)

@@ -446,6 +446,24 @@ def test_check_json_and_skips() -> None:
     assert result.exit_code == 0
 
 
+def test_check_counts_a_reduced_circuit_apart_and_names_its_missing_gates(tmp_path) -> None:
+    require("stim")
+    errors = {"h": 1e-3, "ms": 0.02, "rxx": 0.01, "ryy": 0.01, "zz": 0.01, "rzz": 0.01}
+    natives = {name: {"avg_infidelity": error} for name, error in errors.items()}
+    path = tmp_path / "ions.json"
+    path.write_text(json.dumps(toy(gates=natives, readout={"error": 0.01})))
+    result = runner.invoke(app, ["check", str(path), "--framework", "stim"])
+    assert result.exit_code == 0, result.output
+    row = next(line for line in result.stdout.splitlines() if line.startswith("stim "))
+    assert "3 of 4, 1 reduced" in row
+    assert "stim: two_qubit_natives ran without rxx, ryy, rzz: rxx at" in result.stdout
+    data = json.loads(
+        runner.invoke(app, ["check", str(path), "--framework", "stim", "--json"]).stdout
+    )
+    (entry,) = data["frameworks"][0]["not_run"]
+    assert entry["ran_without"] == ["rxx", "ryy", "rzz"]
+
+
 def test_check_names_one_whole_install_command_for_the_missing_frameworks(monkeypatch) -> None:
     require("cirq")
     monkeypatch.setitem(sys.modules, "pennylane", None)

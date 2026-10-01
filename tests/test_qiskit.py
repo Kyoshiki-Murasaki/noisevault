@@ -398,6 +398,7 @@ _QUBIT_0_UNUSABLE = {
         ]
     },
     "only pair off": {"calibrations": [{"gate": "cz", "qubits": [0, 1], "disabled": True}]},
+    "sx off": {"calibrations": [{"gate": "sx", "qubits": [0], "disabled": True}]},
 }
 
 
@@ -432,6 +433,36 @@ def test_suggested_layout_transpiles_around_disabled_parts_at_every_level(
     )
     used = {compiled.find_bit(q).index for i in compiled.data for q in i.qubits}
     assert used and 0 not in used
+    assert sim.run(compiled, shots=10).result().success
+
+
+@pytest.mark.parametrize("level", [0, 1, 2, 3])
+def test_a_qubit_without_x_still_transpiles_any_circuit(level: int) -> None:
+    profile = Profile.model_validate(
+        toy(
+            device={
+                "name": "tri",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 3,
+            },
+            connectivity="all_to_all",
+            gates=_LINE_GATES,
+            calibrations=[{"gate": "x", "qubits": [0], "disabled": True}],
+            qubits=[{"index": 0, "readout": {"error": 1e-4}}],
+        )
+    )
+    sim = quiet_export(profile)
+    circuit = QuantumCircuit(2)
+    circuit.h([0, 1])
+    circuit.x(0)
+    circuit.cx(0, 1)
+    circuit.measure_all()
+    layout = list(profile.suggest_layout(2).values())
+    assert 0 in layout
+    compiled = transpile(
+        circuit, sim, initial_layout=layout, optimization_level=level, seed_transpiler=3
+    )
     assert sim.run(compiled, shots=10).result().success
 
 

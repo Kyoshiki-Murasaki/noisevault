@@ -11,7 +11,15 @@ from conftest import require, toy
 
 import noisevault as nv
 from noisevault import gates
-from noisevault.check import EXACT_TOLERANCE, SIGMAS, CheckResult, _Stim, build_circuits, check
+from noisevault.check import (
+    EXACT_TOLERANCE,
+    SIGMAS,
+    CheckResult,
+    NotRun,
+    _Stim,
+    build_circuits,
+    check,
+)
 from noisevault.errors import LayoutError, install_hint
 from noisevault.profile import Profile
 from noisevault.reference import _apply
@@ -174,10 +182,38 @@ def test_natives_a_framework_lacks_are_explained() -> None:
         " and Stim holds only those",
     }
     (stim,) = nv.load("ibm_brisbane").check(frameworks=["stim"]).frameworks
-    assert dict(stim.not_run) == {
-        "ghz_chain": "Stim has no ecr instruction",
-        "mirror": "Stim has no ecr instruction",
-    }
+    assert stim.not_run == (
+        NotRun("ghz_chain", "Stim has no ecr instruction"),
+        NotRun("mirror", "Stim has no ecr instruction"),
+    )
+
+
+def _ions_with_rotations() -> Profile:
+    errors = {"h": 1e-3, "ms": 0.02, "rxx": 0.01, "ryy": 0.01, "zz": 0.01, "rzz": 0.01}
+    natives = {name: {"avg_infidelity": error} for name, error in errors.items()}
+    return Profile.model_validate(toy(gates=natives, readout={"error": 0.01}))
+
+
+def test_a_circuit_run_without_some_of_its_gates_names_them() -> None:
+    result = check(_ions_with_rotations(), frameworks=["stim"], layout=[0, 1])
+    planned = next(c for c in result.circuits if c.name == "two_qubit_natives")
+    assert {"rxx", "ryy", "rzz"} <= {op.name for op in planned.ops}
+    (stim,) = result.frameworks
+    assert stim.passed
+    assert stim.not_run == (
+        NotRun(
+            "two_qubit_natives",
+            "; ".join(
+                f"{g} at the check angles is no Clifford gate, and Stim holds only those"
+                for g in ("rxx", "ryy", "rzz")
+            ),
+            ran_without=("rxx", "ryy", "rzz"),
+        ),
+    )
+    (entry,) = result.to_dict()["frameworks"][0]["not_run"]
+    assert entry["circuit"] == "two_qubit_natives"
+    assert entry["ran_without"] == ["rxx", "ryy", "rzz"]
+    assert "two_qubit_natives ran without rxx, ryy, rzz: rxx at" in result.summary()
 
 
 # Gates that take |0> to a superposition at the check angles.
