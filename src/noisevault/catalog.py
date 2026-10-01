@@ -188,8 +188,12 @@ def _vault_entry(path: Path, cached: Any) -> tuple[dict[str, Any], ProfileInfo]:
 
 def _skipped(path: Path, exc: Exception) -> str:
     """One line naming a vault entry that cannot be listed, and why."""
-    if path.is_symlink() and not path.exists():
-        why = f"it links to {path.readlink()}, which does not exist; remove the link"
+    try:
+        dangling = path.readlink() if path.is_symlink() and not path.exists() else None
+    except OSError:  # an unreachable target fails these checks as it failed the read
+        dangling = None
+    if dangling is not None:
+        why = f"it links to {dangling}, which does not exist; remove the link"
     elif isinstance(exc, ValidationError):
         n = exc.error_count()
         why = f"not a valid profile ({n} problem{'s' * (n != 1)}); run `nv validate {path}`"

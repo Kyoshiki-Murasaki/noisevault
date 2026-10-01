@@ -169,10 +169,12 @@ def _row(
         return (row.get(column.header) or "").strip()
 
     where = f"{name} line {line}"
+    text = cell(columns["qubit"])
     try:
-        index = int(float(cell(columns["qubit"])))
+        index = _qubit(text)
     except ValueError:
-        raise ValueError(f"{where}: 'Qubit' must be a qubit number") from None
+        qubit = columns["qubit"].header.strip()
+        raise ValueError(f"{where}, {qubit!r}: {text!r} is not a qubit number") from None
     values: dict[str, float | None] = {}
     packed: dict[str, dict[tuple[int, int], float]] = {}
     operational = True
@@ -208,6 +210,14 @@ def _number(text: str, where: str) -> float | None:
         raise ValueError(f"{where}: {text!r} is not a number") from None
 
 
+def _qubit(text: str) -> int:
+    """A qubit number; a spreadsheet may have saved 3 as 3.0."""
+    number = float(text)
+    if not number.is_integer() or number < 0:
+        raise ValueError(text)
+    return int(number)
+
+
 def _flag(text: str, where: str) -> bool:
     if not text or text.lower() in _TRUE:
         return True
@@ -224,7 +234,7 @@ def _pairs(text: str, row_qubit: int, where: str) -> dict[tuple[int, int], float
         try:
             if not sep:
                 raise ValueError
-            qubits = [int(q) for q in locus.strip().split("_")]
+            qubits = [_qubit(q) for q in locus.strip().split("_")]
             pair = (row_qubit, qubits[0]) if len(qubits) == 1 else (qubits[0], qubits[1])
             if len(qubits) > 2:
                 raise ValueError

@@ -297,3 +297,18 @@ def test_gates_the_target_drops_as_non_operational_stay_disabled() -> None:
     assert profile.table.gate("sx", (3,)).state == "disabled"
     assert profile.table.gate("cx", (3, 4)).state == "disabled"
     assert profile.table.gate("cx", (4, 3)).state == "calibrated"
+
+
+def test_virtual_gate_the_target_drops_as_non_operational_stays_disabled() -> None:
+    backend = _backend("FakeManilaV2")
+    props = backend.properties().to_dict()
+    [entry] = [e for e in props["gates"] if e["gate"] == "rz" and e["qubits"] == [3]]
+    stamp = entry["parameters"][0]["date"]
+    entry["parameters"].append({"name": "operational", "unit": "", "value": 0, "date": stamp})
+    backend._props_dict = props
+    assert (3,) not in backend.target["rz"] and (3,) in backend.target["sx"]
+    profile = nv.from_qiskit_backend(backend)
+    assert profile.gates["rz"].virtual
+    assert profile.table.gate("rz", (3,)).state == "disabled"
+    assert profile.table.gate("rz", (2,)).state == "ideal"
+    assert not profile.table.qubit(3).disabled

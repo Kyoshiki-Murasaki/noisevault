@@ -26,12 +26,22 @@ _TECHNOLOGY = {
     "ionq": "trapped_ion",
     "aqt": "trapped_ion",
 }
-# Braket gate names, lowercased, to canonical names; other names are kept as they are.
+# Braket gate names, lowercased, to the canonical gate with the same matrix (up to global
+# phase); other names are kept as they are. GPI and GPI2 are r at theta pi and pi/2.
 _GATES = {
+    "ccnot": "ccx",
     "cnot": "cx",
-    "prx": "r",
     "gpi": "r",
     "gpi2": "r",
+    "i": "id",
+    "phaseshift": "p",
+    "prx": "r",
+    "si": "sdg",
+    "ti": "tdg",
+    "v": "sx",
+    "vi": "sxdg",
+    "xx": "rxx",
+    "yy": "ryy",
     "zz": "rzz",
 }
 # fidelityType.name -> (method, measured); for a locus with several, the first listed wins
@@ -277,12 +287,18 @@ def _definitions(
 ) -> tuple[list[str], dict[str, dict[str, Any]]]:
     """The one-qubit natives and the gate definitions the paradigm's native gate set implies."""
     natives: dict[int, list[str]] = {1: [], 2: []}
+    left_out: set[str] = set()
     for name in paradigm.get("nativeGateSet") or []:
         info = gates.lookup(_canonical(name))
-        if info is None or info.arity not in natives or info.family == "z":
-            continue
-        if info.name not in natives[info.arity]:
+        if info is None or info.arity not in natives:
+            left_out.add(name.lower())
+        elif info.family != "z" and info.name not in natives[info.arity]:
             natives[info.arity].append(info.name)
+    if left_out:
+        notes.append(
+            "native gates that are not a known one- or two-qubit gate were left out:"
+            f" {sorted(left_out)}"
+        )
     if not natives[1]:
         natives[1] = ["r"]
         notes.append("no one-qubit native gate is listed, so the one-qubit fidelity goes to r")

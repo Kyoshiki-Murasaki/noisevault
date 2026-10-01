@@ -174,3 +174,44 @@ def test_directionless_fidelity_of_a_directed_gate_covers_both_orders() -> None:
     cx = {r.qubits: r.avg_infidelity for r in profile.calibrations if r.gate == "cx"}
     assert cx == {(1, 0): 0.045, (1, 3): 0.038, (3, 1): 0.038}
     assert profile.table.gate("cx", (3, 1)).origin == "record"
+
+
+def _ionq_natives(natives: list[str]) -> dict:
+    data = json.loads(IONQ.read_text())
+    data["paradigm"]["nativeGateSet"] = natives
+    return data
+
+
+def test_v3_xx_native_keeps_the_two_qubit_calibration() -> None:
+    profile = from_braket(_ionq_natives(["RX", "RZ", "XX"]), device="xx")
+    assert sorted(profile.gates) == ["rx", "rxx", "rz"]
+    xx = profile.gates["rxx"]
+    assert (xx.avg_infidelity, xx.duration_ns, xx.stderr) == (0.0079, 600_000, 0.0004)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ops = [Op("rx", (0,), (np.pi / 2,)), Op("rxx", (0, 1), (np.pi / 2,))]
+        assert probabilities(profile, ops, 2, layout=[0, 1]).sum() == pytest.approx(1)
+
+
+@pytest.mark.parametrize(
+    ("native", "gate"),
+    [("XX", "rxx"), ("YY", "ryy"), ("ZZ", "rzz"), ("MS", "ms"), ("ECR", "ecr"), ("CNOT", "cx")],
+)
+def test_two_qubit_natives_get_their_canonical_gate(native: str, gate: str) -> None:
+    profile = from_braket(_ionq_natives(["GPI", "GPI2", native]), device="two")
+    assert profile.gates[gate].avg_infidelity == 0.0079
+
+
+@pytest.mark.parametrize(
+    ("native", "gate"), [("V", "sx"), ("VI", "sxdg"), ("I", "id"), ("PRX", "r")]
+)
+def test_one_qubit_natives_get_their_canonical_gate(native: str, gate: str) -> None:
+    profile = from_braket(_ionq_natives([native, "MS"]), device="one")
+    assert profile.gates[gate].avg_infidelity == 0.0004
+
+
+def test_natives_with_no_equivalent_are_named_in_a_note() -> None:
+    profile = from_braket(_ionq_natives(["GPI", "GPI2", "MS", "XY", "CPhaseShift"]), device="odd")
+    assert sorted(profile.gates) == ["ms", "r", "rz"]
+    left_out = "native gates that are not a known one- or two-qubit gate were left out:"
+    assert f"{left_out} ['cphaseshift', 'xy']" in profile.provenance.notes

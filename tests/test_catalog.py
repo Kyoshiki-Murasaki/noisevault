@@ -12,10 +12,12 @@ from pathlib import Path
 
 import pytest
 from conftest import MANILA_V01, migrated, require, toy
+from typer.testing import CliRunner
 
 import noisevault as nv
 from noisevault import catalog
 from noisevault.catalog import bundled_profiles, vault_dir, vault_path
+from noisevault.cli import app
 from noisevault.errors import AmbiguousRef, FingerprintMismatch, ProfileNotFound
 from noisevault.profile import Profile
 
@@ -360,6 +362,35 @@ def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:
     assert all("\n" not in m for m in messages)
     assert f"links to {vault.parent / 'moved_away.json.gz'}, which does not exist" in messages[2]
     assert f"run `nv validate {vault / 'empty.json'}`" in messages[0]
+
+
+def test_a_link_to_an_unreadable_file_is_skipped_and_the_rest_still_list(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    profile.save(vault_path(profile))
+    hidden = vault.parent / "locked" / "toy.json.gz"
+    hidden.parent.mkdir()
+    profile.save(hidden)
+    link = vault / "locked.json.gz"
+    link.symlink_to(hidden)
+    real_stat = Path.stat
+
+    def denied(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if self == link and follow_symlinks:
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self))
+        return real_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", denied)
+    with pytest.warns(nv.NoiseVaultWarning) as caught:
+        assert nv.load("ibm_manila").id == "ibm_manila"
+        assert nv.load("test_toy") == profile
+    assert {str(w.message) for w in caught} == {f"skipped {link}: {os.strerror(errno.EACCES)}"}
+
+    result = CliRunner().invoke(app, ["list"], env={"COLUMNS": "120"})
+    assert result.exit_code == 0, result.output
+    assert "test_toy" in result.stdout and "ibm_manila" in result.stdout
+    assert f"warning: skipped {link}: {os.strerror(errno.EACCES)}" in result.stderr
 
 
 def test_concurrent_pulls_of_one_calibration_both_succeed(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import pytest
@@ -206,3 +207,24 @@ def test_a_device_with_no_valid_t1_is_a_one_line_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"ibm_x reports no valid T1.*qubit 0: T1 = 0 us") as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     assert "\n" not in str(info.value)
+
+
+@pytest.mark.parametrize("qubit", ["0.5", "-1", "nan", "inf", "x"])
+def test_a_qubit_that_is_not_a_whole_number_names_its_line(tmp_path: Path, qubit: str) -> None:
+    path = _edited(tmp_path, HERON, '"0","300"', f'"{qubit}","300"')
+    message = f"line 2, 'Qubit': {qubit!r} is not a qubit number"
+    with pytest.raises(ValueError, match=re.escape(message)):
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
+
+
+def test_a_qubit_written_as_a_float_is_read_as_that_qubit(tmp_path: Path) -> None:
+    path = _edited(tmp_path, HERON, '"3","240"', '"3.0","240"')
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
+    assert profile.table.qubit(3).disabled == _heron().table.qubit(3).disabled
+    assert profile.table.qubit(3).t1_ns == pytest.approx(240_000)
+
+
+def test_a_negative_partner_names_its_line_and_column(tmp_path: Path) -> None:
+    path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', '"-1:0.0013","1:68"')
+    with pytest.raises(ValueError, match=r"line 2, 'CZ error': '-1:0.0013' is not"):
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")

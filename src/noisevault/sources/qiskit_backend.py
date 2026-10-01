@@ -433,10 +433,11 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     keeps its own record (``statistic: individual``). A readout or prep default is left out when
     a working qubit has none of its own, so that qubit's value stays unknown. IBM's dead-gate
     sentinel (an error at or above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and
-    ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration
-    everywhere (IBM's ``rz``) is virtual. Records of a symmetric gate that agree in both
-    directions are stored once. A nonpositive or nonfinite T1/T2 is treated as missing and named
-    in a note; a device with no valid T1 (or T2) left is an error.
+    ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration on
+    every working locus (IBM's ``rz``) is virtual, and its disabled loci keep their records.
+    Records of a symmetric gate that agree in both directions are stored once. A nonpositive or
+    nonfinite T1/T2 is treated as missing and named in a note; a device with no valid T1 (or T2)
+    left is an error.
     """
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
@@ -544,25 +545,29 @@ def _without_invalid_coherence(
 def _gate(
     name: str, arity: int, entries: Sequence[Instruction], ibm: bool
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    if all(e.error == 0 and not e.duration_ns for e in entries):
-        return {"virtual": True}, []
     dead = [not e.operational or _is_sentinel(e.error, arity) for e in entries]
     working = [e for e, is_dead in zip(entries, dead, strict=True) if not is_dead]
-    definition: dict[str, Any] = {} if gates.lookup(name) else {"qubits": arity}
-    errors = [e.error for e in working if e.error is not None]
-    if errors:
-        definition |= {"avg_infidelity": statistics.median(errors), "statistic": "median"}
-        if ibm:
-            definition |= _IBM_QUALIFIERS.get(arity, {})
-    durations = [e.duration_ns for e in working if e.duration_ns is not None]
-    if durations:
-        definition["duration_ns"] = _clean(statistics.median(durations))
+    virtual = bool(working) and all(e.error == 0 and not e.duration_ns for e in working)
+    if virtual:
+        definition: dict[str, Any] = {"virtual": True}
+    else:
+        definition = {} if gates.lookup(name) else {"qubits": arity}
+        errors = [e.error for e in working if e.error is not None]
+        if errors:
+            definition |= {"avg_infidelity": statistics.median(errors), "statistic": "median"}
+            if ibm:
+                definition |= _IBM_QUALIFIERS.get(arity, {})
+        durations = [e.duration_ns for e in working if e.duration_ns is not None]
+        if durations:
+            definition["duration_ns"] = _clean(statistics.median(durations))
 
     records = []
     for entry, is_dead in zip(entries, dead, strict=True):
         record: dict[str, Any] = {"gate": name, "qubits": list(entry.qubits)}
         if is_dead:
             record["disabled"] = True
+        elif virtual:
+            continue
         else:
             if entry.error is not None:
                 record |= {"avg_infidelity": entry.error, "statistic": "individual"}
