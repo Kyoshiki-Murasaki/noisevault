@@ -6,6 +6,7 @@ import os
 import re
 import statistics
 import urllib.error
+import urllib.request
 from datetime import date
 from pathlib import Path
 
@@ -74,14 +75,32 @@ def test_at_becomes_updated_before_in_utc(served: list[str]) -> None:
 def test_unlisted_device_points_to_the_bundled_snapshot(served: list[str]) -> None:
     with pytest.raises(nv.SourceUnavailable) as info:
         ibm_public.pull("ibm_torino")
-    message = str(info.value)
-    assert "ibm_torino is not listed on the public endpoint" in message
-    assert 'nv.load("ibm_torino")' in message and "ibm_fez, ibm_kingston" in message
+    assert info.value.message == (
+        "ibm_torino is not listed on the public endpoint (it lists ibm_fez, ibm_kingston);"
+        " did you mean ibm_kingston? if not, it may be retired"
+    )
+    assert info.value.hint == "ibm_torino is bundled, so nv.load('ibm_torino') loads it offline"
+
+
+def test_unlisted_device_close_to_a_listed_one_names_it(served: list[str]) -> None:
+    with pytest.raises(nv.SourceUnavailable) as info:
+        ibm_public.pull("ibm_fezz")
+    assert info.value.message == (
+        "ibm_fezz is not listed on the public endpoint (it lists ibm_fez, ibm_kingston);"
+        " did you mean ibm_fez? if not, it may be retired"
+    )
+    assert info.value.hint == "if your IBM account can see it, pull with source='ibm-account'"
 
 
 def test_listed_device_with_no_history_that_far_back(served: list[str]) -> None:
-    with pytest.raises(nv.SourceUnavailable, match="no ibm_fez calibration older than 2019"):
+    with pytest.raises(nv.SourceUnavailable) as info:
         ibm_public.pull("ibm_fez", at="2019-01-01")
+    assert info.value.message == (
+        "IBM's public endpoint has no ibm_fez calibration older than 2019-01-01"
+    )
+    assert info.value.hint == (
+        "pick a later date, or pull through your IBM account with source='ibm-account'"
+    )
 
 
 def test_network_failure_is_a_friendly_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,8 +108,26 @@ def test_network_failure_is_a_friendly_error(monkeypatch: pytest.MonkeyPatch) ->
         raise urllib.error.URLError("Name or service not known")
 
     monkeypatch.setattr(ibm_public.urllib.request, "urlopen", refuse)
-    with pytest.raises(nv.SourceUnavailable, match="could not reach IBM's public endpoint"):
+    with pytest.raises(nv.SourceUnavailable) as info:
         ibm_public.pull("ibm_fez")
+    assert info.value.message == "could not reach IBM's public endpoint (Name or service not known)"
+    assert info.value.hint == (
+        "check the network connection, or run nv list to see every profile you can load offline"
+    )
+
+
+def test_an_http_error_says_to_try_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable(request: urllib.request.Request, timeout: float) -> None:
+        raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", {}, None)
+
+    monkeypatch.setattr(ibm_public.urllib.request, "urlopen", unavailable)
+    with pytest.raises(nv.SourceUnavailable) as info:
+        ibm_public.pull("ibm_fez")
+    url = f"{ibm_public.BASE_URL}/ibm_fez/properties"
+    assert info.value.message == f"IBM's public endpoint answered HTTP 503 for {url}"
+    assert info.value.hint == (
+        "try again later, or pull through your IBM account with source='ibm-account'"
+    )
 
 
 def test_nv_pull_saves_one_file_per_calibration(served: list[str], vault: Path) -> None:

@@ -226,11 +226,19 @@ def test_profiles_convert_on_their_natives(path: Path, layout: list[int], ops: l
 def test_errors_say_what_to_save(tmp_path: Path) -> None:
     other = tmp_path / "other.json"
     other.write_text(json.dumps({"braketSchemaHeader": {"name": "something.else", "version": "1"}}))
-    with pytest.raises(ValueError, match=r"AwsDevice\(arn\).properties.json\(\)"):
+    with pytest.raises(ValueError) as info:
         from_braket(other)
+    assert str(info.value) == (
+        "this is not Braket standardized gate-model properties; save"
+        " AwsDevice(arn).properties.json(), or its standardized part, and pass that file"
+    )
     v3_alone = json.loads(IONQ.read_text())["standardized"]
-    with pytest.raises(ValueError, match="qubit count and native gates"):
+    with pytest.raises(ValueError) as info:
         from_braket(v3_alone)
+    assert str(info.value) == (
+        "Braket v3 properties hold device-level values only; save the whole"
+        " AwsDevice(arn).properties.json() so the qubit count and native gates are known"
+    )
 
 
 def test_public_api() -> None:

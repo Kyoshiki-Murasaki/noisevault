@@ -238,17 +238,24 @@ def test_public_api_and_errors() -> None:
 
 def test_cirq_google_before_1_6_says_to_upgrade(monkeypatch: pytest.MonkeyPatch) -> None:
     # cirq-google 1.5 has no load_device_noise_properties and no willow_pink calibration
+    import cirq_google
     from cirq_google.engine import virtual_engine_factory as factory
 
     monkeypatch.delattr(factory, "load_device_noise_properties")
     monkeypatch.setattr(factory, "MEDIAN_CALIBRATIONS", {"rainbow": "x", "weber": "y"})
     for name in ("rainbow", "willow_pink"):
-        with pytest.raises(nv.errors.SourceUnavailable, match="cirq-google>=1.6"):
+        with pytest.raises(nv.errors.SourceUnavailable) as info:
             google.from_cirq_google(name)
+        assert info.value.message == (
+            f"cirq-google {cirq_google.__version__} has no {name} calibration with a noise"
+            " conversion"
+        )
+        assert info.value.hint == "pip install -U 'cirq-google>=1.6'"
 
 
 def test_missing_cirq_google_gives_an_install_command_that_works(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "cirq_google", None)
     with pytest.raises(nv.errors.SourceUnavailable) as info:
         google.from_cirq_google("rainbow")
-    assert install_hint("google") in str(info.value)
+    assert info.value.message == "cirq_google is not installed"
+    assert info.value.hint == install_hint("google")

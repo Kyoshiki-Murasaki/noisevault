@@ -88,7 +88,7 @@ def from_cirq_google(processor_id: str) -> Profile:
         from cirq_google.engine import virtual_engine_factory as factory
     except ImportError:
         raise SourceUnavailable(
-            f"cirq_google is not installed; run `{install_hint('google')}`"
+            "cirq_google is not installed", hint=install_hint("google")
         ) from None
     # both arrived in cirq-google 1.6; 1.5 has neither, and no willow_pink calibration
     if not hasattr(factory, "load_device_noise_properties") or name not in getattr(
@@ -96,7 +96,8 @@ def from_cirq_google(processor_id: str) -> Profile:
     ):
         raise SourceUnavailable(
             f"cirq-google {cirq_google.__version__} has no {name} calibration with a noise"
-            " conversion; run `pip install -U 'cirq-google>=1.6'`"
+            " conversion",
+            hint="pip install -U 'cirq-google>=1.6'",
         )
     calibration = factory.load_median_device_calibration(name)
     properties = factory.load_device_noise_properties(name)

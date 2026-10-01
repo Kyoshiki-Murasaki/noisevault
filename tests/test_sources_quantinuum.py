@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import urllib.error
+import urllib.request
 import warnings
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import numpy as np
 import pytest
 
 from noisevault import Profile
+from noisevault.errors import SourceUnavailable
 from noisevault.reference import Op, probabilities
 from noisevault.sources import quantinuum
 
@@ -149,6 +152,22 @@ def test_spec_csv_with_a_repeated_column_names_both(tmp_path: Path) -> None:
     message = f"{path}: columns 6 and 13 are both '2Q error'; delete one of them"
     with pytest.raises(ValueError, match=re.escape(message)):
         quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
+
+
+def test_a_failed_download_says_what_loads_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested = []
+
+    def offline(request: urllib.request.Request, timeout: float) -> None:
+        requested.append(request.full_url)
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(quantinuum.urllib.request, "urlopen", offline)
+    with pytest.raises(SourceUnavailable) as info:
+        quantinuum.from_repository("H2-2")
+    assert info.value.message == f"could not download {requested[0]} (timed out)"
+    assert info.value.hint == (
+        "check the network connection, or run nv list to see every profile you can load offline"
+    )
 
 
 def test_bundle_takes_the_newest_dataset_of_every_machine(monkeypatch) -> None:

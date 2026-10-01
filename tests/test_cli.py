@@ -665,8 +665,11 @@ def test_pull_network_failure_gives_one_piece_of_advice(monkeypatch) -> None:
     monkeypatch.setattr(urllib.request, "urlopen", offline)
     result = runner.invoke(app, ["pull", "ibm_fez", "--at", "2025-01-01"])
     assert result.exit_code == 1
-    assert result.stderr.startswith("error: could not reach IBM's public endpoint (timed out)")
-    assert result.stderr.count("check the network") == 1 and "hint:" not in result.stderr
+    assert result.stderr == (
+        "error: could not reach IBM's public endpoint (timed out)\n"
+        "hint: check the network connection, or run nv list to see every profile you can load"
+        " offline\n"
+    )
     assert "Traceback" not in result.output
 
 
@@ -675,7 +678,7 @@ def test_pull_errors_name_flags_not_python_arguments(monkeypatch) -> None:
 
     def no_account(device, at=None):
         raise SourceUnavailable(
-            f"could not open your IBM Quantum account (no token); {ibm_account.SETUP}"
+            "could not open your IBM Quantum account (no token)", hint=ibm_account.SETUP
         )
 
     def not_listed(url):
@@ -684,11 +687,16 @@ def test_pull_errors_name_flags_not_python_arguments(monkeypatch) -> None:
     monkeypatch.setattr(ibm_account, "pull", no_account)
     result = runner.invoke(app, ["pull", "ibm_fez", "--source", "ibm-account"])
     assert result.exit_code == 1
-    assert "to pull without an account use --source ibm" in result.stderr
-    assert "source=" not in result.stderr and "hint:" not in result.stderr
+    assert result.stderr.endswith(
+        "\nhint: set IBM_QUANTUM_TOKEN to your IBM Quantum API key, or pull without an account"
+        " with --source ibm\n"
+    )
+    assert "source=" not in result.stderr
     monkeypatch.setattr(ibm_public, "fetch", not_listed)
     result = runner.invoke(app, ["pull", "ibm_fez"])
-    assert "try nv show ibm_fez for the bundled snapshot or --source ibm-account" in result.stderr
+    assert result.stderr.endswith(
+        "\nhint: ibm_fez is bundled, so nv show ibm_fez loads it offline\n"
+    )
 
 
 def test_pull_checks_the_output_folder_before_fetching(monkeypatch, tmp_path: Path) -> None:

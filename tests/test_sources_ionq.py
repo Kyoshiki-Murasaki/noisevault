@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import urllib.error
+import urllib.request
 import warnings
 from pathlib import Path
 
@@ -165,11 +167,70 @@ def test_a_bad_edge_is_rejected_even_among_as_many_edges_as_a_complete_graph(
 def test_errors_say_what_to_do(served) -> None:
     with pytest.raises(SourceUnavailable, match="qpu.aria-1, qpu.forte-1, qpu.harmony"):
         ionq.pull("forte-9")
-    with pytest.raises(SourceUnavailable, match="pass a later at= or none"):
+    with pytest.raises(SourceUnavailable) as info:
         ionq.pull("forte-1", at="2025-01-01")
+    assert info.value.message == (
+        "IonQ publishes no qpu.forte-1 characterization at or before 2025-01-01 with plausible"
+        " 1Q and 2Q fidelities of its own (0 record(s) checked)"
+    )
+    assert info.value.hint == "pass a later at= or none"
     # every harmony record lacks a 1Q fidelity, so no date can help
-    with pytest.raises(SourceUnavailable, match="publishes no qpu.harmony .*use another backend"):
+    with pytest.raises(SourceUnavailable) as info:
         ionq.pull("harmony")
+    assert info.value.message == (
+        "IonQ publishes no qpu.harmony characterization with plausible 1Q and 2Q fidelities of"
+        " its own (2 record(s) checked)"
+    )
+    assert info.value.hint == "use another backend"
+
+
+def test_a_search_that_runs_out_of_probes_says_to_search_older(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ionq, "_MAX_PROBES", 1)
+    with pytest.raises(SourceUnavailable) as info:
+        ionq.pull("forte-1")
+    assert info.value.message == (
+        "none of the 4 newest qpu.forte-1 characterizations has plausible 1Q and 2Q fidelities"
+        " of its own"
+    )
+    assert info.value.hint == "pass an earlier at= to search older records"
+
+
+def test_a_record_without_fidelities_cannot_make_a_profile() -> None:
+    record = {"backend": "qpu.forte-1", "id": "r1", "qubits": 4, "fidelity": {}}
+    with pytest.raises(SourceUnavailable) as info:
+        ionq.to_profile(record, {"qubits": 4}, source_url="u", source_hash="h")
+    assert info.value.message == "IonQ published qpu.forte-1 record r1 without 1Q/2Q fidelities"
+    assert info.value.hint == "use a record from another date"
+
+
+def _refuse(request: urllib.request.Request, timeout: float) -> None:
+    raise urllib.error.URLError("timed out")
+
+
+def _throttle(request: urllib.request.Request, timeout: float) -> None:
+    raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {}, None)
+
+
+@pytest.mark.parametrize(
+    ("urlopen", "message", "hint"),
+    [
+        (
+            _refuse,
+            "could not reach IonQ's API (timed out)",
+            "check the network connection and try again",
+        ),
+        (_throttle, f"IonQ's API answered HTTP 429 for {ionq.API}/backends", "try again later"),
+    ],
+)
+def test_a_failed_request_says_what_to_do(
+    monkeypatch: pytest.MonkeyPatch, urlopen, message: str, hint: str
+) -> None:
+    monkeypatch.setattr(ionq.urllib.request, "urlopen", urlopen)
+    with pytest.raises(SourceUnavailable) as info:
+        ionq.pull("forte-1")
+    assert (info.value.message, info.value.hint) == (message, hint)
 
 
 def test_nothing_is_bundled() -> None:

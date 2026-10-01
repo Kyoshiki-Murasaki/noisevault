@@ -35,7 +35,7 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
     try:
         raw = fetch(url)
     except _NotFound:
-        raise SourceUnavailable(_not_found_message(name, at)) from None
+        raise _not_found(name, at) from None
     props = json.loads(raw)
     if not props.get("qubits"):
         raise SourceUnavailable(f"IBM's public endpoint returned no qubit data for {name} ({url})")
@@ -79,14 +79,15 @@ def fetch(url: str) -> bytes:
         if exc.code == 404:
             raise _NotFound(url) from None
         raise SourceUnavailable(
-            f"IBM's public endpoint answered HTTP {exc.code} for {url}; try again later, or"
-            " pull through your account with source='ibm-account'"
+            f"IBM's public endpoint answered HTTP {exc.code} for {url}",
+            hint="try again later, or pull through your IBM account with source='ibm-account'",
         ) from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         raise SourceUnavailable(
-            f"could not reach IBM's public endpoint ({reason}); check the network connection,"
-            " or use a bundled snapshot offline (`nv list` shows them)"
+            f"could not reach IBM's public endpoint ({reason})",
+            hint="check the network connection, or run nv list to see every profile you can load"
+            " offline",
         ) from None
 
 
@@ -104,26 +105,28 @@ def _processor(name: str) -> str | None:
     return processor_name(config.get("processor_type"))
 
 
-def _not_found_message(name: str, at: str | date | datetime | None) -> str:
+def _not_found(name: str, at: str | date | datetime | None) -> SourceUnavailable:
     try:
         listed = listed_devices()
     except (_NotFound, SourceUnavailable, ValueError, KeyError, TypeError):
         listed = None
     if at is not None and listed is not None and name in listed:
-        return (
-            f"IBM's public endpoint has no {name} calibration older than {at}; pick a later"
-            " date, or pull through your account with source='ibm-account'"
+        return SourceUnavailable(
+            f"IBM's public endpoint has no {name} calibration older than {at}",
+            hint="pick a later date, or pull through your IBM account with source='ibm-account'",
         )
     from ..catalog import bundled_profiles as bundled
 
     known = f" (it lists {', '.join(listed)})" if listed else ""
     guess = did_you_mean(name, listed or [])
     if any(info.id == name for info in bundled()):
-        fix = f'try nv.load("{name}") for the bundled snapshot or source="ibm-account"'
+        hint = f"{name} is bundled, so nv.load({name!r}) loads it offline"
     else:
-        fix = 'try source="ibm-account" if your IBM account can see it'
+        hint = "if your IBM account can see it, pull with source='ibm-account'"
     retired = "if not, it may be retired" if guess else "it may be retired"
-    return f"{name} is not listed on the public endpoint{known}; {guess}{retired}: {fix}"
+    return SourceUnavailable(
+        f"{name} is not listed on the public endpoint{known}; {guess}{retired}", hint=hint
+    )
 
 
 def bundled_profiles() -> list[Profile]:

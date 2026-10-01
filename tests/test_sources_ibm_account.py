@@ -105,31 +105,66 @@ def test_token_from_the_environment(calls: list[Any], monkeypatch: pytest.Monkey
 def test_missing_account_explains_the_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = require("qiskit_ibm_runtime")
 
+    missing = runtime.accounts.AccountNotFoundError("Unable to find account.")
+
     def no_account(**options: Any) -> None:
-        raise runtime.accounts.AccountNotFoundError("Unable to find account.")
+        raise missing
 
     monkeypatch.setattr(runtime, "QiskitRuntimeService", no_account)
     monkeypatch.delenv("IBM_QUANTUM_TOKEN", raising=False)
     with pytest.raises(nv.SourceUnavailable) as info:
         nv.pull("ibm_manila", source="ibm-account")
-    message = str(info.value)
-    assert "save_account" in message and "IBM_QUANTUM_TOKEN" in message
-    assert "source='ibm'" in message
+    assert info.value.message == f"could not open your IBM Quantum account ({missing})"
+    assert info.value.hint == (
+        "set IBM_QUANTUM_TOKEN to your IBM Quantum API key, or pull without an account with"
+        " source='ibm'"
+    )
 
 
 def test_device_the_account_cannot_see(calls: list[Any]) -> None:
-    with pytest.raises(nv.SourceUnavailable, match="cannot open ibm_nowhere"):
+    with pytest.raises(nv.SourceUnavailable) as info:
         ibm_account.pull("ibm_nowhere")
+    assert info.value.message == (
+        "your IBM account cannot open ibm_nowhere (No backend matches the criteria: ibm_nowhere)"
+    )
+    assert info.value.hint == (
+        "list the devices your account can see with QiskitRuntimeService().backends()"
+    )
+
+
+@pytest.mark.parametrize(
+    ("at", "message", "hint"),
+    [
+        (
+            None,
+            "IBM returned no calibration for ibm_manila; retired devices have none",
+            "run nv list to see every profile you can load offline",
+        ),
+        (
+            "2019-01-01",
+            "IBM returned no calibration for ibm_manila before 2019-01-01",
+            "pick a later date",
+        ),
+    ],
+)
+def test_no_calibration_says_what_to_try(
+    calls: list[Any], monkeypatch: pytest.MonkeyPatch, at: str | None, message: str, hint: str
+) -> None:
+    monkeypatch.setattr(_Backend, "properties", lambda self, **_: None)
+    with pytest.raises(nv.SourceUnavailable) as info:
+        ibm_account.pull("ibm_manila", at=at)
+    assert (info.value.message, info.value.hint) == (message, hint)
 
 
 def test_missing_runtime_gives_an_install_command_that_works(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "qiskit_ibm_runtime", None)
     with pytest.raises(nv.SourceUnavailable) as info:
         nv.pull("ibm_manila", source="ibm-account")
-    assert install_hint("ibm") in str(info.value)
+    assert info.value.message == "source='ibm-account' needs qiskit-ibm-runtime"
+    assert info.value.hint == install_hint("ibm")
 
 
-def test_a_calibration_request_ibm_rejects_is_a_one_line_cli_error(
+def test_a_calibration_request_ibm_rejects_is_an_error_and_a_hint(
     calls: list[Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from typer.testing import CliRunner
@@ -138,14 +173,17 @@ def test_a_calibration_request_ibm_rejects_is_a_one_line_cli_error(
 
     exceptions = require("qiskit_ibm_runtime.exceptions")
 
+    error = exceptions.IBMBackendApiProtocolError("Unexpected return value from the server.")
+
     def rejected(self: _Backend, refresh: bool = False, datetime: datetime | None = None) -> Any:
-        raise exceptions.IBMBackendApiProtocolError("Unexpected return value from the server.")
+        raise error
 
     monkeypatch.setattr(_Backend, "properties", rejected)
     with pytest.raises(nv.SourceUnavailable, match="Unexpected return value"):
         ibm_account.pull("ibm_manila")
     result = CliRunner().invoke(app, ["pull", "ibm_manila", "--source", "ibm-account"])
     assert result.exit_code == 1 and result.exception.__class__ is SystemExit
-    [line] = result.stderr.splitlines()
-    assert line.startswith("error: IBM did not return the calibration of ibm_manila")
-    assert "try again later" in line and "--source ibm" in line
+    assert result.stderr.splitlines() == [
+        f"error: IBM did not return the calibration of ibm_manila ({error})",
+        "hint: try again later, or pull without an account with --source ibm",
+    ]

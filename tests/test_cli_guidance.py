@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -11,6 +14,7 @@ from typer.testing import CliRunner
 import noisevault as nv
 from noisevault.catalog import vault_path
 from noisevault.cli import app
+from noisevault.errors import install_hint
 from noisevault.sources import ibm_public, ionq
 
 runner = CliRunner()
@@ -43,6 +47,65 @@ def test_pull_of_a_mistyped_ionq_device_names_the_close_one(monkeypatch) -> None
     monkeypatch.setattr(ionq, "_get", lambda url: json.dumps(backends).encode())
     with pytest.raises(nv.SourceUnavailable, match=r"did you mean qpu\.forte-1\?"):
         ionq.pull("ionq_forte-11")
+
+
+def _refuse(request: urllib.request.Request, timeout: float) -> None:
+    raise urllib.error.URLError("timed out")
+
+
+def _offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(urllib.request, "urlopen", _refuse)
+
+
+def _without_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "qiskit_ibm_runtime", None)
+
+
+def _only_the_listing(url: str) -> bytes:
+    if url == ibm_public.BASE_URL:
+        return json.dumps([{"name": "ibm_fez"}]).encode()
+    raise ibm_public._NotFound(url)
+
+
+def _unlisted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ibm_public, "fetch", _only_the_listing)
+
+
+@pytest.mark.parametrize(
+    ("setup", "args", "error", "hint"),
+    [
+        (
+            _offline,
+            ["pull", "ibm_fez"],
+            "could not reach IBM's public endpoint (timed out)",
+            "check the network connection, or run nv list to see every profile you can load"
+            " offline",
+        ),
+        (
+            _offline,
+            ["pull", "ionq_forte-1"],
+            "could not reach IonQ's API (timed out)",
+            "check the network connection and try again",
+        ),
+        (
+            _without_runtime,
+            ["pull", "ibm_fez", "--source", "ibm-account"],
+            "--source ibm-account needs qiskit-ibm-runtime",
+            install_hint("ibm"),
+        ),
+        (
+            _unlisted,
+            ["pull", "ibm_torino"],
+            "ibm_torino is not listed on the public endpoint (it lists ibm_fez); it may be retired",
+            "ibm_torino is bundled, so nv show ibm_torino loads it offline",
+        ),
+    ],
+)
+def test_a_failed_pull_puts_its_next_step_on_a_hint_line(
+    monkeypatch: pytest.MonkeyPatch, setup, args: list[str], error: str, hint: str
+) -> None:
+    setup(monkeypatch)
+    assert _one_error(args) == f"error: {error}\nhint: {hint}\n"
 
 
 @pytest.mark.parametrize(

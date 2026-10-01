@@ -89,7 +89,8 @@ def to_profile(
     reason = _rejection(record)
     if reason is not None:
         raise SourceUnavailable(
-            f"IonQ published {backend} record {record.get('id')} {reason}; pull another date"
+            f"IonQ published {backend} record {record.get('id')} {reason}",
+            hint="use a record from another date",
         )
     one, two = _fidelity(fidelity, "1q"), _fidelity(fidelity, "2q")
     assert one is not None and two is not None  # _rejection() checked both
@@ -293,14 +294,14 @@ def _newest_usable(
         if probes >= _MAX_PROBES:
             raise SourceUnavailable(
                 f"none of the {len(skipped)} newest {backend} characterizations{_before(at)} has"
-                " plausible 1Q and 2Q fidelities of its own; pass an earlier at= to search older"
-                " records"
+                " plausible 1Q and 2Q fidelities of its own",
+                hint="pass an earlier at= to search older records",
             )
         if not records or page >= int(body.get("pages") or 0):
-            hint = "use another backend" if at is None else "pass a later at= or none"
             raise SourceUnavailable(
                 f"IonQ publishes no {backend} characterization{_before(at)} with plausible 1Q and"
-                f" 2Q fidelities of its own ({len(skipped)} record(s) checked); {hint}"
+                f" 2Q fidelities of its own ({len(skipped)} record(s) checked)",
+                hint="use another backend" if at is None else "pass a later at= or none",
             )
         page += 1
 
@@ -335,10 +336,11 @@ def _get(url: str) -> bytes:
             return response.read()
     except urllib.error.HTTPError as exc:
         raise SourceUnavailable(
-            f"IonQ's API answered HTTP {exc.code} for {url}; try again later"
+            f"IonQ's API answered HTTP {exc.code} for {url}", hint="try again later"
         ) from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         raise SourceUnavailable(
-            f"could not reach IonQ's API ({reason}); check the network connection and retry"
+            f"could not reach IonQ's API ({reason})",
+            hint="check the network connection and try again",
         ) from None

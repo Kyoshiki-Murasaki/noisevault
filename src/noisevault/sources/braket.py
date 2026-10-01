@@ -94,7 +94,7 @@ def from_braket(
     if header.get("name") != _STANDARDIZED:
         raise ValueError(
             "this is not Braket standardized gate-model properties; save"
-            " `AwsDevice(arn).properties.json()` (or its `.standardized`) and pass that file"
+            " AwsDevice(arn).properties.json(), or its standardized part, and pass that file"
         )
     version = str(header.get("version"))
     if version not in ("1", "2", "3"):
@@ -211,7 +211,7 @@ def _device_level(
     if not paradigm.get("qubitCount") or not paradigm.get("nativeGateSet"):
         raise ValueError(
             "Braket v3 properties hold device-level values only; save the whole"
-            " `AwsDevice(arn).properties.json()` so the qubit count and native gates are known"
+            " AwsDevice(arn).properties.json() so the qubit count and native gates are known"
         )
     one = std.get("oneQubitProperties") or {}
     index, num_qubits, connectivity = _layout(paradigm, set(one), [], notes)

@@ -440,6 +440,7 @@ def _get(url: str) -> bytes:
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         raise SourceUnavailable(
-            f"could not download {url} ({reason}); check the network connection and retry,"
-            " or use the bundled Quantinuum profiles offline (`nv list` shows them)"
+            f"could not download {url} ({reason})",
+            hint="check the network connection, or run nv list to see every profile you can load"
+            " offline",
         ) from None

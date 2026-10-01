@@ -25,10 +25,8 @@ from .qiskit_backend import (
 
 CHANNEL = "ibm_quantum_platform"
 SETUP = (
-    "set up an IBM Quantum account once with"
-    " `from qiskit_ibm_runtime import QiskitRuntimeService;"
-    " QiskitRuntimeService.save_account(token='<API key>', channel='ibm_quantum_platform')`,"
-    " or set IBM_QUANTUM_TOKEN; to pull without an account use source='ibm'"
+    "set IBM_QUANTUM_TOKEN to your IBM Quantum API key, or pull without an account with"
+    " source='ibm'"
 )
 
 
@@ -43,21 +41,25 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
         backend = service.backend(device)
     except Exception as exc:  # the runtime raises several types for "not visible to you"
         raise SourceUnavailable(
-            f"your IBM account cannot open {device} ({exc}); `service.backends()` lists the"
-            " devices it can see"
+            f"your IBM account cannot open {device} ({exc})",
+            hint="list the devices your account can see with QiskitRuntimeService().backends()",
         ) from None
     when = None if at is None else as_utc(at)
     try:
         props = backend.properties(datetime=when)
     except Exception as exc:  # API, protocol and network errors all surface here
         raise SourceUnavailable(
-            f"IBM did not return the calibration of {device} ({exc}); try again later, or"
-            " pull without an account with source='ibm'"
+            f"IBM did not return the calibration of {device} ({exc})",
+            hint="try again later, or pull without an account with source='ibm'",
         ) from None
     if props is None:
+        if at is None:
+            raise SourceUnavailable(
+                f"IBM returned no calibration for {device}; retired devices have none",
+                hint="run nv list to see every profile you can load offline",
+            )
         raise SourceUnavailable(
-            f"IBM returned no calibration for {device}{'' if at is None else f' before {at}'};"
-            " retired devices have none, so try a bundled snapshot (`nv list`)"
+            f"IBM returned no calibration for {device} before {at}", hint="pick a later date"
         )
     data = props.to_dict()
     cal = replace(
@@ -86,7 +88,7 @@ def _service() -> Any:
         from qiskit_ibm_runtime import QiskitRuntimeService
     except ImportError:
         raise SourceUnavailable(
-            f"source='ibm-account' needs qiskit-ibm-runtime: {install_hint('ibm')}"
+            "source='ibm-account' needs qiskit-ibm-runtime", hint=install_hint("ibm")
         ) from None
     token = os.environ.get("IBM_QUANTUM_TOKEN")
     options: dict[str, Any] = {"channel": CHANNEL}
@@ -96,7 +98,7 @@ def _service() -> Any:
         return QiskitRuntimeService(**options)
     except Exception as exc:  # AccountNotFoundError, invalid key, network: all mean "set up"
         raise SourceUnavailable(
-            f"could not open your IBM Quantum account ({exc}); {SETUP}"
+            f"could not open your IBM Quantum account ({exc})", hint=SETUP
         ) from None
 
 
