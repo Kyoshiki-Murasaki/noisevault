@@ -692,6 +692,22 @@ def test_layout_from_coords_says_what_to_do_without_coords():
         layout_from_coords(circuit, _grid(4))
 
 
+@pytest.mark.parametrize(
+    "circuit",
+    ["QUBIT_COORDS(0, 0) 1\nCX sweep[0] 1\nM 1", "QUBIT_COORDS(0, 0) 1\nM 1\nCZ rec[-1] 1\nM 1"],
+    ids=["sweep", "feedback"],
+)
+def test_layout_from_coords_places_only_the_qubit_a_classical_control_acts_on(circuit):
+    two = {"name": "two", "vendor": "test", "technology": "superconducting", "num_qubits": 2}
+    data = toy(device=two, connectivity={"edges": [[0, 1]]})
+    data["qubits"] = [{"index": 0, "coords": [0, 0]}, {"index": 1, "coords": [0, 1]}]
+    profile = Profile.model_validate(data)
+    layout = layout_from_coords(circuit, profile)
+    assert list(layout) == [1]
+    out = to_stim(profile, circuit, layout=layout, readout="none")
+    assert [inst.name for inst in out] == [inst.name for inst in stim.Circuit(circuit)]
+
+
 @pytest.mark.timing
 def test_layout_from_coords_is_fast_for_a_distance_11_code_on_a_32x32_grid():
     circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=11, rounds=1)

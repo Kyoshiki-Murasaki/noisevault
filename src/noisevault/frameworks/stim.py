@@ -691,11 +691,12 @@ def _disjoint_chunks(groups: list[list[stim.GateTarget]]) -> list[list[list[stim
 
 
 def _acted_on(name: str, group: Sequence[stim.GateTarget]) -> list[int]:
-    """Qubits a target group of instruction ``name`` acts on. A Pauli product is reduced first:
-    factors on one qubit multiply (X*Z is Y up to phase), and a qubit whose factors cancel is
-    not acted on."""
+    """Qubits a target group of instruction ``name`` acts on; sweep bits and measurement
+    records are classical controls, not qubits. A Pauli product is reduced first: factors on
+    one qubit multiply (X*Z is Y up to phase), and a qubit whose factors cancel is not acted
+    on."""
     if name not in _COMBINED:
-        return [t.value for t in group]
+        return [t.value for t in group if t.qubit_value is not None]
     bits: dict[int, int] = {}
     for t in group:
         x, z = t.is_x_target or t.is_y_target, t.is_z_target or t.is_y_target

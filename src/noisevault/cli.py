@@ -762,9 +762,9 @@ def check(
                 markup=False,
             )
             table = Table(box=None, pad_edge=False, header_style="bold")
-            for column in ("framework", "result", "max TVD", "tolerance", "circuits", "method"):
+            for column in ("framework", "result", "TVD", "tolerance", "circuits", "method"):
                 table.add_column(
-                    column, justify="right" if column in ("max TVD", "tolerance") else "left"
+                    column, justify="right" if column in ("TVD", "tolerance") else "left"
                 )
             for f in result.frameworks:
                 verdict = "[green]pass[/green]" if f.passed else "[red]FAIL[/red]"
@@ -779,7 +779,7 @@ def check(
                 table.add_row(
                     f.framework,
                     verdict,
-                    f"{f.max_tvd:.1e}",
+                    f"{f.worst.tvd:.1e}",
                     f"{f.worst.tolerance:.1e}",
                     f"{counted}, {len(reduced)} reduced" if reduced else counted,
                     method,

@@ -42,29 +42,24 @@ _ANGLE_TOL = 1e-9
 class _PowFamily:
     """Canonical names of a Cirq EigenGate class by exponent, compared modulo ``period``.
 
-    ``names`` are the fixed gates at their exponents, ``exact`` the registry gate with a
-    parameter that equals the class at every exponent (``p`` for ``ZPowGate``), and ``other``
-    the rotation it equals up to global phase. An exponent takes the first of its fixed gate,
-    ``exact`` and ``other`` that a profile defines, under
-    :func:`~noisevault.conversion.native_name`; with none defined, the fixed gate, else
-    ``other``. When ``other`` is None too the gate is unknown and is reported as
-    ``base**exponent``.
+    ``names`` are the fixed gates at their exponents and ``other`` the registry gate with a
+    parameter that the class equals at every exponent (``p`` for ``ZPowGate``, exactly; ``rx``
+    for ``XPowGate``, up to global phase). Which calibration either takes on a profile is
+    :func:`~noisevault.conversion.native_name`'s rule. When ``other`` is None too the gate is
+    unknown at other exponents and is reported as ``base**exponent``.
     """
 
     base: str
     period: float
     names: tuple[tuple[float, str], ...]
     other: str | None
-    exact: str | None = None
 
     def name_for(self, exponent: Any, defined: Container[str]) -> str:
         fixed = self._fixed(exponent)
-        if fixed is not None and (fixed in defined or self.exact not in defined):
+        if fixed is not None:
             return native_name(fixed, defined, self.other)
-        if self.exact is not None:
-            return native_name(self.exact, defined, self.other)
         if self.other is not None:
-            return self.other
+            return native_name(self.other, defined)
         shown = f"{exponent:.6g}" if isinstance(exponent, numbers.Real) else str(exponent)
         return f"{self.base}**{shown}"
 
@@ -86,7 +81,7 @@ _POW: dict[type, _PowFamily] = {
     cirq.XPowGate: _PowFamily("x", 2, ((1, "x"), (0.5, "sx"), (-0.5, "sxdg")), "rx"),
     cirq.YPowGate: _PowFamily("y", 2, ((1, "y"),), "ry"),
     cirq.ZPowGate: _PowFamily(
-        "z", 2, ((1, "z"), (0.5, "s"), (-0.5, "sdg"), (0.25, "t"), (-0.25, "tdg")), "rz", "p"
+        "z", 2, ((1, "z"), (0.5, "s"), (-0.5, "sdg"), (0.25, "t"), (-0.25, "tdg")), "p"
     ),
     cirq.HPowGate: _PowFamily("h", 2, ((1, "h"),), None),
     cirq.CXPowGate: _PowFamily("cx", 2, ((1, "cx"),), None),
@@ -365,7 +360,8 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
     def _phased_xz(
         self, gate: cirq.PhasedXZGate, qids: Sequence[cirq.Qid], physical: tuple[int, ...]
     ) -> list[cirq.Operation]:
-        """PhasedXZ is exactly the r gate (PhasedXPow) then a Z rotation, each with its noise.
+        """PhasedXZ is exactly the r gate (PhasedXPow) then ``Z**z``, each with its noise; the
+        Z part is named as a ``Z**z`` of its own would be.
 
         Google calibrates PhasedXZ as r with a virtual Z, so it needs no typical noise there.
         Only a profile without its own ``phased_xz`` gets here.
@@ -375,7 +371,9 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
         )
         out = [x_part.on(*qids), *self._noise("r", qids, physical)]
         if cirq.is_parameterized(gate.z_exponent) or gate.z_exponent != 0:
-            out += [(cirq.Z**gate.z_exponent).on(*qids), *self._noise("rz", qids, physical)]
+            z_part = cirq.Z**gate.z_exponent
+            name = gate_name(z_part, self.profile.gates)
+            out += [z_part.on(*qids), *self._noise(name, qids, physical)]
         return out
 
     def _other_measurement(self, operation: cirq.Operation) -> cirq.Operation:

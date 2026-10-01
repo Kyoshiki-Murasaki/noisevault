@@ -160,49 +160,90 @@ def _infidelity(channels: list[tuple[list[np.ndarray], tuple[int, ...]]]) -> flo
     return 1 - np.trace(superoperator(specs, wires)).real / 4 ** len(wires)
 
 
-def _cirq_noise(profile: Profile, case: str) -> float:
+# The angle p and u1 take in the z-family cases: no fixed gate has it.
+_PHASE = 0.3
+
+
+def _cirq_noise(profile: Profile, case: str, unknown_gates: str = "error") -> float | None:
     cirq = require("cirq")
-    gate = {"sx": cirq.X**0.5, "x": cirq.X, "s": cirq.S, "zz": cirq.ZZ**0.5}[case]
+    gate = {
+        "sx": cirq.X**0.5,
+        "x": cirq.X,
+        "zz": cirq.ZZ**0.5,
+        "z": cirq.Z,
+        "s": cirq.S,
+        "sdg": cirq.S**-1,
+        "t": cirq.T,
+        "tdg": cirq.T**-1,
+        "p": cirq.ZPowGate(exponent=_PHASE / pi),
+    }.get(case)
+    if gate is None:
+        return None
     qids = cirq.LineQubit.range(cirq.num_qubits(gate))
-    noisy = profile.to_cirq(unknown_gates="error", readout=False).noisy_operation(gate.on(*qids))
+    model = profile.to_cirq(unknown_gates=unknown_gates, readout=False)
+    noisy = model.noisy_operation(gate.on(*qids))
     return _infidelity([(list(cirq.kraus(op)), tuple(q.x for q in op.qubits)) for op in noisy[1:]])
 
 
-def _pennylane_noise(profile: Profile, case: str) -> float:
+def _pennylane_noise(profile: Profile, case: str, unknown_gates: str = "error") -> float | None:
     qml = require("pennylane")
     make = {
         "sx": lambda: qml.SX(0),
         "x": lambda: qml.PauliX(0),
-        "s": lambda: qml.S(0),
         "zz": lambda: qml.IsingZZ(pi / 2, wires=[0, 1]),
+        "z": lambda: qml.PauliZ(0),
+        "s": lambda: qml.S(0),
+        "sdg": lambda: qml.adjoint(qml.S(0)),
+        "t": lambda: qml.T(0),
+        "tdg": lambda: qml.adjoint(qml.T(0)),
+        "p": lambda: qml.PhaseShift(_PHASE, wires=0),
+        "u1": lambda: qml.U1(_PHASE, wires=0),
     }[case]
-    tape = qml.tape.QuantumScript([make()], [qml.probs(wires=[0])])
-    model = profile.to_pennylane(unknown_gates="error", readout=False)
-    (noisy,), _ = qml.add_noise(tape, model)
-    return _infidelity([(op.kraus_matrices(), tuple(op.wires)) for op in noisy.operations[1:]])
+
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit():
+        make()
+        return qml.probs(wires=[0])
+
+    model = profile.to_pennylane(unknown_gates=unknown_gates, readout=False)
+    # level="top" keeps Adjoint(S) and Adjoint(T) whole instead of noising their decomposition.
+    noisy = qml.workflow.construct_tape(qml.add_noise(circuit, model, level="top"), level="user")
+    return _infidelity([(op.kraus_matrices(), tuple(op.wires)) for op in noisy().operations[1:]])
 
 
-def _stim_noise(profile: Profile, case: str) -> float:
+def _stim_noise(profile: Profile, case: str, unknown_gates: str = "error") -> float | None:
     require("stim")
     from noisevault.frameworks.stim import to_stim
 
-    gate = {"sx": "SQRT_X 0", "x": "X 0", "s": "S 0", "zz": "SQRT_ZZ 0 1"}[case]
-    noise = list(to_stim(profile, gate, unknown_gates="error", readout="none"))[1:]
+    gate = {
+        "sx": "SQRT_X 0",
+        "x": "X 0",
+        "zz": "SQRT_ZZ 0 1",
+        "z": "Z 0",
+        "s": "S 0",
+        "sdg": "S_DAG 0",
+    }.get(case)  # Stim holds only Clifford gates
+    if gate is None:
+        return None
+    noise = list(to_stim(profile, gate, unknown_gates=unknown_gates, readout="none"))[1:]
     assert all(inst.name.startswith("PAULI_CHANNEL") for inst in noise)
     return sum(p for inst in noise for p in inst.gate_args_copy())
 
 
-def _qiskit_noise(profile: Profile, case: str) -> float:
+def _qiskit_noise(profile: Profile, case: str, unknown_gates: str = "error") -> float | None:
     require("qiskit_aer")
     from qiskit import QuantumCircuit, transpile
+    from qiskit.circuit.library import PhaseGate, RZZGate, U1Gate
     from qiskit.quantum_info import Operator, SuperOp
 
-    sim = profile.to_qiskit(unknown_gates="error", readout=False)
+    sim = profile.to_qiskit(unknown_gates=unknown_gates, readout=False)
     sim.set_options(method="superop")
     circuit = QuantumCircuit(sim.target.num_qubits)
-    {"sx": circuit.sx, "x": circuit.x, "s": circuit.s, "zz": lambda: circuit.rzz(pi / 2, 0, 1)}[
-        case
-    ](*(() if case == "zz" else (0,)))
+    special = {"zz": RZZGate(pi / 2), "p": PhaseGate(_PHASE), "u1": U1Gate(_PHASE)}
+    if case in special:
+        circuit.append(special[case], [0, 1][: special[case].num_qubits])
+    else:
+        getattr(circuit, case)(0)
     native = transpile(circuit, sim, initial_layout=list(range(circuit.num_qubits)))
     ideal = SuperOp(Operator(native)).data
     native.save_superop()
@@ -219,6 +260,23 @@ _EXPORTS = {
 }
 
 
+def _export_noise(profile: Profile, case: str, unknown_gates: str = "error") -> dict:
+    """Each installed export's noise for ``case``, leaving out exports that cannot write it."""
+    got = {}
+    for name, (module, noise) in _EXPORTS.items():
+        if _installed(module):
+            value = noise(profile, case, unknown_gates)
+            if value is not None:
+                got[name] = value
+    return got
+
+
+def _channel_infidelity(profile: Profile, name: str, qubits: tuple[int, ...]) -> float:
+    report = Report.start(profile, "test", None)
+    built = resolve_op(profile.table, name, qubits, unknown_gates="error", report=report)
+    return _infidelity([(list(c.kraus), c.wires) for c in built.channels])
+
+
 @pytest.mark.parametrize(
     ("case", "rotation", "qubits"),
     [("sx", "rx", (0,)), ("x", "rx", (0,)), ("s", "rz", (0,)), ("zz", "rzz", (0, 1))],
@@ -227,18 +285,47 @@ def test_every_export_runs_a_fixed_gate_as_the_only_rotation_it_equals(
     case, rotation, qubits
 ) -> None:
     profile = Profile.model_validate(_ROTATIONS)
-    got = {
-        name: noise(profile, case)
-        for name, (module, noise) in _EXPORTS.items()
-        if _installed(module)
-    }
+    got = _export_noise(profile, case)
     if not got:
         pytest.skip("no framework is installed")
-    report = Report.start(profile, "test", None)
-    built = resolve_op(profile.table, rotation, qubits, unknown_gates="error", report=report)
-    want = _infidelity([(list(c.kraus), c.wires) for c in built.channels])
+    want = _channel_infidelity(profile, rotation, qubits)
     assert want > 0
     assert got == pytest.approx(dict.fromkeys(got, want), abs=1e-9)
+
+
+# A z-family gate takes its own calibration, else p's (it equals p exactly), else rz's (equal up
+# to global phase). Each profile gives every gate its own error, so the noise shows which one.
+_PHASE_ERRORS = {"h": 1e-2, "cz": 3e-2, "p": 4e-2, "rz": 2e-3, "own": 7e-3}
+_PHASE_PROFILES = {"p+rz": ("p", "rz"), "p": ("p",), "rz": ("rz",), "own+p+rz": ("own", "p", "rz")}
+
+
+def _phase_profile(case: str, defined: tuple[str, ...]) -> Profile:
+    errors = {name: _PHASE_ERRORS[name] for name in ("h", "cz", *defined)}
+    if "own" in errors:
+        errors[case] = errors.pop("own")
+    return Profile.model_validate(
+        toy(gates={name: {"avg_infidelity": e} for name, e in errors.items()})
+    )
+
+
+@pytest.mark.parametrize("unknown_gates", ["error", "typical"])
+@pytest.mark.parametrize("defined", sorted(_PHASE_PROFILES))
+@pytest.mark.parametrize("case", ["z", "s", "sdg", "t", "tdg", "p", "u1"])
+def test_every_export_and_the_reference_charge_a_z_family_gate_alike(
+    case, defined, unknown_gates
+) -> None:
+    from noisevault.reference import charged_as
+
+    profile = _phase_profile(case, _PHASE_PROFILES[defined])
+    want = case if case in profile.gates else "p" if "p" in profile.gates else "rz"
+    info = gates.GATES[case]
+    unitary = info.unitary(*(_PHASE,) * len(info.params))
+    assert charged_as(profile, case, unitary) == want
+    got = _export_noise(profile, case, unknown_gates)
+    if not got:
+        pytest.skip("no framework is installed")
+    expected = _channel_infidelity(profile, want, (0,))
+    assert got == pytest.approx(dict.fromkeys(got, expected), abs=1e-9)
 
 
 # Each fixed-angle two-qubit gate as Stim, Cirq and PennyLane write it, and the registry gate

@@ -455,7 +455,7 @@ def test_check_counts_a_reduced_circuit_apart_and_names_its_missing_gates(tmp_pa
     result = runner.invoke(app, ["check", str(path), "--framework", "stim"])
     assert result.exit_code == 0, result.output
     row = next(line for line in result.stdout.splitlines() if line.startswith("stim "))
-    assert "3 of 4, 1 reduced" in row
+    assert "4 of 5, 1 reduced" in row
     assert "stim: two_qubit_natives ran without rxx, ryy, rzz: rxx at" in result.stdout
     data = json.loads(
         runner.invoke(app, ["check", str(path), "--framework", "stim", "--json"]).stdout

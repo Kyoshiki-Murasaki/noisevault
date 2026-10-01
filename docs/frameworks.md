@@ -24,6 +24,13 @@ calibrate gets the noise of the typical native gate of its arity, with a warning
 `"error"`, it raises `MissingCalibrationError`. [Conventions](conventions.md) defines that rule,
 the channels and the readout matrix.
 
+A gate that the profile does not define takes the calibration of a defined gate that it equals.
+`sx` and `x` take `rx`, and `zz` takes `rzz`. The fixed phase gates `z`, `s`, `t` and their
+inverses take `p`, which they equal exactly, and else `rz`, which they equal up to a global
+phase. `u1` follows the same order, and `p` itself falls back to `rz`. Cirq, PennyLane, Stim and the `nv check` reference share
+this rule. Qiskit circuits are compiled to the profile's natives first, so there the Qiskit
+transpiler picks the gate.
+
 ## Choose qubits
 
 Profiles number physical qubits from 0. Integer circuit qubits map to the same physical qubit
@@ -125,10 +132,9 @@ print(model.report.summary())
 Qubits map this way: `LineQubit(i)` is device qubit i, and `GridQubit(r, c)` is the qubit whose
 `coords` are `[r, c]` (Google profiles record them). Other qubit types need
 `layout={qubit: index, ...}`. Gates match by Cirq class and exponent. `cirq.X**0.5` is `sx`,
-`cirq.ZZ**0.5` is `zz`, `cirq.PhasedXZGate` is split into the `r` gate and a Z rotation, each
-with its own noise. `cirq.Z**t` is exactly the phase gate `p`, so it takes a profile's `p`
-calibration ahead of `rz`. At the exponents of `s`, `t` and their inverses, a profile's own
-fixed gate comes first.
+`cirq.ZZ**0.5` is `zz`, and `cirq.Z**t` is the phase gate `p`, or `s`, `t` or their inverses at
+those exponents. `cirq.PhasedXZGate` is split into the `r` gate and `cirq.Z**z`, and each part
+gets the noise it would get on its own.
 
 What the report can list:
 
@@ -261,8 +267,11 @@ frameworks.
 `nv check REF` runs small circuits through each installed export and compares them with
 NoiseVault's own density-matrix reference simulator. Use it after changing a profile by hand.
 Stim is sampled with exact readout and compared with the reference after each gate's Pauli
-twirl. Its widest circuit is also sampled with the default symmetrized readout and compared
-with a reference that uses each qubit's mean readout error.
+twirl. Its widest circuit and a circuit that only measures are also sampled with the default
+symmetrized readout and compared with a reference that uses each qubit's mean readout error.
+The measurement-only circuit is needed because readout error leaves a uniform distribution
+unchanged. When the profile calibrates `p`, the check also runs a fixed phase gate that the
+profile does not define, such as `s`, which every export must charge as `p`.
 
 A framework that cannot express one of a circuit's gates runs the circuit without it, or skips
 the circuit when nothing useful is left. The `circuits` column counts only circuits that ran

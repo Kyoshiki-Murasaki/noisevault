@@ -689,6 +689,43 @@ def test_phased_xz_is_r_then_a_z_rotation_with_their_noise() -> None:
     assert "typical_noise_used" not in model.report.events
 
 
+@pytest.mark.parametrize("unknown_gates", ["error", "typical"])
+@pytest.mark.parametrize(
+    ("defined", "z", "z_part"),
+    [
+        (("p",), 0.4, Op("p", (0,), (PI * 0.4,))),
+        (("p", "rz"), 0.4, Op("p", (0,), (PI * 0.4,))),
+        (("rz",), 0.4, Op("rz", (0,), (PI * 0.4,))),
+        (("s", "p", "rz"), 0.5, Op("s", (0,))),
+    ],
+)
+def test_phased_xz_charges_its_z_part_as_a_z_power_on_its_own(
+    defined, z, z_part, unknown_gates
+) -> None:
+    errors = {"h": 0.01, "r": 0.01, "p": 0.2, "rz": 0.1, "s": 0.05}
+    defs = {n: {"avg_infidelity": errors[n]} for n in ("h", "r", *defined)}
+    profile = Profile.model_validate(toy(gates=defs))
+    x, a = 0.3, 0.2
+    q = cirq.LineQubit(0)
+    packed = cirq.PhasedXZGate(x_exponent=x, z_exponent=z, axis_phase_exponent=a)
+    explicit = [cirq.PhasedXPowGate(phase_exponent=a, exponent=x), cirq.Z**z]
+    ops = [Op("r", (0,), (PI * x, PI * a)), z_part, Op("h", (0,))]
+    want = reference(profile, ops, 1, readout=False, unknown_gates=unknown_gates)
+    for gates_in in ([packed], explicit):
+        model = to_cirq(profile, unknown_gates=unknown_gates)
+        circuit = cirq.Circuit([g(q) for g in gates_in], cirq.H(q))
+        assert _tvd(probabilities(circuit, model, [q], readout=False), want) <= 1e-9
+        assert "typical_noise_used" not in model.report.events
+    # Like a Z**t of its own, an unresolved Z part may turn out to be a fixed gate.
+    import sympy
+
+    unresolved = cirq.PhasedXZGate(
+        x_exponent=x, z_exponent=sympy.Symbol("t"), axis_phase_exponent=a
+    )
+    with pytest.raises(ValueError, match="resolve its parameters before adding noise"):
+        cirq.Circuit(unresolved(q)).with_noise(to_cirq(profile, unknown_gates=unknown_gates))
+
+
 def test_phased_xz_calibrated_as_its_own_gate_gets_that_calibration() -> None:
     defs = {
         "r": {"avg_infidelity": 2e-2},

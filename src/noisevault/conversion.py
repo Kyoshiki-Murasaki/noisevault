@@ -22,13 +22,16 @@ UnknownGates = Literal["typical", "error"]
 TYPICAL_FIX = "compile to native gates for realistic gate counts, or pass unknown_gates='error'"
 
 
-# Parameterless registry gates equal, up to global phase, to a rotation native at one angle.
-_ROTATION_OF: Mapping[str, str] = MappingProxyType(
+# The gates each registry gate equals, in the order a profile without its own calibration
+# takes theirs: a fixed gate equals its rotation at one angle, up to global phase. A z-family
+# fixed gate, and u1, equal p exactly, so p comes before rz.
+_FALLBACKS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
-        **dict.fromkeys(("x", "sx", "sxdg"), "rx"),
-        "y": "ry",
-        **dict.fromkeys(("z", "s", "sdg", "t", "tdg"), "rz"),
-        "zz": "rzz",
+        **dict.fromkeys(("x", "sx", "sxdg"), ("rx",)),
+        "y": ("ry",),
+        **dict.fromkeys(("z", "s", "sdg", "t", "tdg", "u1"), ("p", "rz")),
+        "p": ("rz",),
+        "zz": ("rzz",),
     }
 )
 
@@ -37,16 +40,20 @@ def native_name(name: str, defined: Container[str], rotation: str | None = None)
     """The gate whose calibration an operation equal to registry gate ``name`` uses.
 
     ``defined`` holds a profile's gate names. The profile's ``name`` comes first, then the
-    rotation the operation equals at its angle: ``rx`` for ``sx`` and the other fixed gates
-    above, or ``rotation`` for a native with parameters (``rxx`` or ``ryy`` for an ``ms``).
-    With neither defined, a fixed gate keeps its own name and a native with parameters gives
-    way to the rotation, so errors and reports name the gate the circuit wrote.
+    first defined gate it equals: ``rx`` for ``sx``; ``p``, then ``rz``, for ``s`` and the other
+    z-family gates. ``rotation`` names that gate for a native outside this table (``rxx`` or
+    ``ryy`` for an ``ms``). With none defined, the operation keeps its own name, except that a
+    native with parameters gives way to ``rotation``, so errors and reports name the gate the
+    circuit wrote.
     """
-    rotation = rotation or _ROTATION_OF.get(name)
-    if rotation is None or name in defined:
+    if name in defined:
         return name
+    equal = _FALLBACKS.get(name) or ((rotation,) if rotation else ())
+    found = next((gate for gate in equal if gate in defined), None)
+    if found is not None:
+        return found
     info = gates.lookup(name)
-    return rotation if rotation in defined or (info and info.params) else name
+    return rotation if rotation and info and info.params else name
 
 
 def resolve_op(

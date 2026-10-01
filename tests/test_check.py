@@ -89,7 +89,8 @@ def test_stim_is_compared_with_the_twirled_reference() -> None:
     result = check(profile, frameworks=["stim"], shots=shots, seed=3)
     (stim,) = result.frameworks
     assert stim.passed and len({c.circuit for c in stim.circuits}) == len(result.circuits)
-    assert len(stim.circuits) == len(result.circuits) + 1
+    # ghz_chain and readout run again with the export's default symmetrized readout
+    assert len(stim.circuits) == len(result.circuits) + 2
     # On this profile the same samples are far outside 5 sigma of the untwirled channel.
     chain = [result.layout[i] for i in range(len(result.layout))]
     ghz = next(c for c in result.circuits if c.name == "ghz_chain")
@@ -119,6 +120,48 @@ def test_stim_without_its_default_symmetrized_readout_fails(monkeypatch) -> None
     monkeypatch.setattr(nv_stim._Exporter, "_readout_flip", lambda self, qubits: 0.0)
     (stim,) = check(profile, frameworks=["stim"], layout=[0, 1]).frameworks
     assert not stim.passed
+
+
+def test_stim_without_its_default_readout_fails_where_every_circuit_ends_uniform(
+    monkeypatch,
+) -> None:
+    from noisevault.frameworks import stim as nv_stim
+
+    four = {"name": "flat", "vendor": "test", "technology": "superconducting", "num_qubits": 4}
+    ideal = {"h": {"avg_infidelity": 0.0}, "cz": {"avg_infidelity": 0.0}}
+    data = toy(device=four, connectivity={"edges": [[0, 1], [1, 2], [2, 3]]}, gates=ideal)
+    profile = Profile.model_validate({**data, "readout": {"error": 0.2}})
+    options = {"frameworks": ["stim"], "layout": [0, 1, 2, 3], "shots": 100_000, "seed": 0}
+    (good,) = check(profile, **options).frameworks
+    assert good.passed
+    monkeypatch.setattr(nv_stim._Exporter, "_readout_flip", lambda self, qubits: 0.0)
+    (stim,) = check(profile, **options).frameworks
+    assert not stim.passed
+
+
+@pytest.mark.parametrize("framework", ["cirq", "pennylane", "stim"])
+def test_an_export_that_puts_rz_before_p_for_a_fixed_phase_gate_fails(
+    monkeypatch, framework
+) -> None:
+    from noisevault.conversion import native_name
+
+    def rz_first(name, defined, rotation=None):
+        if gates.GATES[name].family == "z" and name not in defined and "rz" in defined:
+            return "rz"
+        return native_name(name, defined, rotation)
+
+    one = {"name": "one", "vendor": "test", "technology": "superconducting", "num_qubits": 1}
+    errors = {"h": 0.01, "r": 0.01, "p": 0.2, "rz": 0.1}
+    natives = {name: {"avg_infidelity": e} for name, e in errors.items()}
+    profile = Profile.model_validate(toy(device=one, connectivity={"edges": []}, gates=natives))
+    options = {"frameworks": [framework], "shots": 100_000}
+    (good,) = check(profile, **options).frameworks
+    assert good.passed
+    module = importlib.import_module(f"noisevault.frameworks.{framework}")
+    monkeypatch.setattr(module, "native_name", rz_first)
+    (bad,) = check(profile, **options).frameworks
+    assert not bad.passed
+    assert [c.passed for c in bad.circuits if c.circuit == "fixed_phase"] == [False]
 
 
 def test_stim_checks_rzz_at_its_clifford_angle() -> None:
@@ -243,11 +286,11 @@ MIXING = {"h", "sx", "sxdg", "rx", "ry", "r", "u"}
 def test_entangling_circuits_always_make_a_superposition(ref, frameworks) -> None:
     result = nv.load(ref).check(frameworks=frameworks)
     for circuit in result.circuits:
-        if circuit.name != "single_qubit":
+        if circuit.name not in ("single_qubit", "readout"):
             assert MIXING & {op.name for op in circuit.ops}, circuit
     for f in result.frameworks:
         for c in f.circuits:
-            if c.circuit != "single_qubit":
+            if c.circuit not in ("single_qubit", "readout"):
                 assert MIXING & set(c.gates), (f.framework, c)
 
 
@@ -286,11 +329,12 @@ def test_qiskit_readout_is_also_sampled_through_aer_measurement(monkeypatch) -> 
         return sim
 
     (good,) = check(nv.load("ibm_manila"), frameworks=["qiskit"]).frameworks
-    assert good.passed and [c.sampled for c in good.circuits].count(True) == 1
+    sampled = [c.circuit for c in good.circuits if c.sampled]
+    assert good.passed and sampled == ["ghz_chain", "readout"]
     monkeypatch.setattr(nv_qiskit, "to_qiskit", readout_dropped_at_run)
     (bad,) = check(nv.load("ibm_manila"), frameworks=["qiskit"]).frameworks
-    assert [c.passed for c in bad.circuits if not c.sampled] == [True, True, True]
-    assert not bad.passed
+    assert all(c.passed for c in bad.circuits if not c.sampled)
+    assert [c.passed for c in bad.circuits if c.sampled] == [False, False]
 
 
 def test_a_missing_framework_is_skipped_with_the_install_command(monkeypatch) -> None:

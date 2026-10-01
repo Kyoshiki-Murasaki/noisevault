@@ -5,8 +5,8 @@ calibrated chain of qubits, computes their outcome probabilities (readout includ
 framework-free reference simulator, and runs the same circuits through each installed export
 with that framework's own simulator and readout mechanism. Qiskit, Cirq and PennyLane are
 compared exactly; Stim is sampled and compared against the Pauli-twirled reference, which is
-the model it implements, with exact readout and, on the widest circuit, also through the
-export's default symmetrized readout.
+the model it implements, with exact readout and, on the widest circuit and the
+measurement-only one, also through the export's default symmetrized readout.
 
 A pass certifies that the exports implement the same noise model as the reference on these
 circuits. It says nothing about how closely that model matches the hardware.
@@ -56,6 +56,8 @@ _ANGLES: dict[str, tuple[float, ...]] = {
 # Rotations that at pi/2 equal a fixed native, whose noise the exports then charge when the
 # profile defines it; the check runs them at pi/4 instead (see _two_qubit_ops).
 _FIXED_AT_HALF_PI = {"rzz": "zz", "rxx": "ms", "ryy": "ms"}
+# Fixed z-family gates, which a profile without their own calibration charges as p, else rz.
+_FIXED_PHASES = ("s", "z", "sdg", "t", "tdg")
 _MAX_ORDER = 8
 
 
@@ -131,7 +133,11 @@ class FrameworkCheck:
             "method": self.method,
             "passed": self.passed,
             "max_tvd": self.max_tvd,
-            "tolerance": self.worst.tolerance,
+            "worst": {
+                "circuit": self.worst.circuit,
+                "tvd": self.worst.tvd,
+                "tolerance": self.worst.tolerance,
+            },
             "circuits": [{**c.__dict__, "gates": list(c.gates)} for c in self.circuits],
             "not_run": [
                 {"circuit": n.circuit, "reason": n.reason, "ran_without": list(n.ran_without)}
@@ -171,8 +177,8 @@ class CheckResult:
         for f in self.frameworks:
             verdict = "pass" if f.passed else "FAIL"
             lines.append(
-                f"  {f.framework:<10} {verdict}  max TVD {f.max_tvd:.2g} (tolerance"
-                f" {f.worst.tolerance:.2g}), {len(f.circuits)} circuits, {f.method}"
+                f"  {f.framework:<10} {verdict}  TVD {f.worst.tvd:.2g} on {f.worst.circuit}"
+                f" (tolerance {f.worst.tolerance:.2g}), {len(f.circuits)} circuits, {f.method}"
             )
             lines += [f"    {n.describe()}" for n in f.not_run]
         lines += [f"  {name:<10} skipped: {why}" for name, why in self.skipped]
@@ -290,7 +296,9 @@ def build_circuits(
 ) -> tuple[Circuit, ...]:
     """Check circuits from the calibrated natives on ``chain`` (circuit qubit i is ``chain[i]``)
     that ``expressible`` accepts: an entangling chain, a mirror circuit, a single-qubit
-    sequence, and every 2-qubit native on one pair when there are several."""
+    sequence, every 2-qubit native on one pair when there are several, a fixed phase gate the
+    profile charges as ``p``, and a measurement-only circuit, whose outcomes only readout
+    error moves off ``0...0``."""
     table = profile.table
     n = len(chain)
     ones = [
@@ -332,7 +340,26 @@ def build_circuits(
         circuits.append(Circuit("single_qubit", k, tuple(sequence)))
     if mix is not None and n >= 2 and len(pairs[0]) > 1:
         circuits.append(Circuit("two_qubit_natives", 2, (*layer(2), *pairs[0], *layer(2))))
+    phase = _fixed_phase(profile, chain[0])
+    if mix is not None and phase is not None and expressible(phase):
+        # Undone like the mirror circuit, so the phase gate's Z errors show as |1>.
+        forward = [*layer(1), phase]
+        undo = [_inverse(op) for op in reversed(forward)]
+        if all(ops is not None for ops in undo):
+            backward = [op for ops in undo for op in ops]  # type: ignore[union-attr]
+            circuits.append(Circuit("fixed_phase", 1, (*forward, *backward)))
+    if circuits:
+        circuits.append(Circuit("readout", n, ()))
     return tuple(circuits)
+
+
+def _fixed_phase(profile: Profile, qubit: int) -> Op | None:
+    """A fixed z-family gate the profile leaves to its ``p`` calibration, which every export
+    must then charge ahead of ``rz``; None when ``p`` is not calibrated on ``qubit``."""
+    if not _calibrated(profile.table.gate("p", (qubit,))):
+        return None
+    name = next((g for g in _FIXED_PHASES if g not in profile.gates), None)
+    return None if name is None else _op(name, (0,))
 
 
 def _unitary_natives(profile: Profile, arity: int) -> list[str]:
@@ -520,11 +547,18 @@ def _run(
     if not checks:
         reasons = dict.fromkeys(part for n in not_run for part in n.reason.split("; "))
         return "no check circuit can be expressed: " + "; ".join(reasons)
-    widest = max(circuits, key=lambda c: c.num_qubits)
-    measured = runner.sample_measured(widest, shots, seed)
-    if measured is not None:
-        want = expected(widest, twirled=runner.twirled, symmetrized=runner.symmetrized)
-        checks.append(_compare(widest, measured, want, shots, True))
+    # The widest circuit's outcomes can be uniform, which readout error leaves unchanged, so
+    # the measurement-only circuit is sampled through the framework's measurement as well.
+    widest = max((c for c in circuits if c.ops), key=lambda c: c.num_qubits)
+    measured_names = []
+    for circuit in (widest, *(c for c in circuits if not c.ops)):
+        measured = runner.sample_measured(circuit, shots, seed)
+        if measured is None:
+            break
+        want = expected(circuit, twirled=runner.twirled, symmetrized=runner.symmetrized)
+        checks.append(_compare(circuit, measured, want, shots, True))
+        measured_names.append(circuit.name)
+    names = " and ".join(measured_names)
     reports = runner.reports()
 
     def count(attr: str) -> int:
@@ -532,14 +566,14 @@ def _run(
 
     if runner.sampled:
         method = f"sampled {shots} shots vs the twirled reference"
-        if measured is not None:
-            method += f", and {widest.name} with the export's default symmetrized readout"
+        if names:
+            method += f", and {names} with the export's default symmetrized readout"
         method += f", {SIGMAS:g} sigma"
-    elif measured is None:
+    elif not names:
         method = "exact"
     else:
         method = (
-            f"exact, and {widest.name} sampled {shots} shots through the framework's"
+            f"exact, and {names} sampled {shots} shots through the framework's"
             f" measurement, {SIGMAS:g} sigma"
         )
     return FrameworkCheck(
@@ -780,10 +814,16 @@ class _Stim(_Runner):
         ]
 
     def _instruction(self, op: Op) -> str | None:
-        """A Stim gate equal to ``op`` that the export charges ``op.name``'s noise."""
+        """A Stim gate equal to ``op`` that the export charges ``op.name``'s noise, or that is
+        ``op`` itself when the profile leaves ``op`` to another gate's calibration."""
         defined = self.profile.gates
         return next(
-            (s for s in self._equal_gates(op) if self._gate_name(s, defined) == op.name), None
+            (
+                s
+                for s in self._equal_gates(op)
+                if op.name in (self._gate_name(s, defined), self._gate_name(s))
+            ),
+            None,
         )
 
     def cannot_express(self, op: Op) -> str | None:
