@@ -8,10 +8,12 @@ package skips the run, unless NOISEVAULT_REQUIRE_ALL=1.
 
 The bundled-profiles table and the terminal screenshots in assets/ are generated. When a test
 here says one is stale, regenerate it with ``python tests/test_readme.py``.
+The hero images come from assets/hero.txt through ``python scripts/build_hero.py``.
 """
 
 from __future__ import annotations
 
+import ast
 import html
 import importlib.util
 import io
@@ -122,9 +124,35 @@ def test_python_block_runs_and_prints_what_it_shows(block: Block, tmp_path: Path
     assert result.returncode == 0, result.stderr[-3000:]
     position = 0
     for line in block.expected:
-        found = result.stdout.find(line, position)
-        assert found >= 0, f"{line!r} not in output, or out of order:\n{result.stdout[-3000:]}"
-        position = found + len(line)
+        position = find_shown(result.stdout, line, position)
+        assert position >= 0, f"{line!r} not in output, or out of order:\n{result.stdout[-3000:]}"
+
+
+def literal(text: str) -> Any:
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, TypeError, SyntaxError):
+        return None
+
+
+def find_shown(output: str, shown: str, start: int) -> int:
+    """Where the first match of ``shown`` at or after ``start`` ends in ``output``, or -1.
+
+    A shown dict matches an output line holding an equal dict in any order: for the same seed,
+    Aer returns the same counts on Linux and macOS but in a different order.
+    """
+    found = output.find(shown, start)
+    if found >= 0:
+        return found + len(shown)
+    expected = literal(shown)
+    if not isinstance(expected, dict):
+        return -1
+    end = start
+    for line in output[start:].splitlines(keepends=True):
+        end += len(line)
+        if literal(line.strip()) == expected:
+            return end
+    return -1
 
 
 @pytest.mark.parametrize("target", sorted(set(local_targets(TEXT))))
@@ -281,7 +309,52 @@ def test_terminal_screenshot_shows_current_output(name: str) -> None:
     )
 
 
+def test_hero_images_match_their_grid() -> None:
+    build = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "build_hero.py"), "--check"],
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stdout + build.stderr
+
+
 FRAMEWORKS = ("qiskit", "cirq", "pennylane", "stim")
+CHECK = ("check", "ibm_fez")
+CHECK_BLOCK = re.compile(r"^```text\n\$ nv check ibm_fez\n.*?^```\n", re.S | re.M)
+ROUNDOFF = 1e-12
+
+
+def check_output() -> str:
+    """``nv check ibm_fez`` through its last result row, as the README shows it."""
+    lines = shown_text(record(CHECK)).splitlines()
+    last_row = max(i for i, line in enumerate(lines) if line.split(" ", 1)[0] in FRAMEWORKS)
+    return "\n".join(lines[: last_row + 1])
+
+
+def same_check(shown: str, current: str) -> bool:
+    shown_lines, current_lines = shown.splitlines(), current.splitlines()
+    return len(shown_lines) == len(current_lines) and all(
+        same_line(a, b) for a, b in zip(shown_lines, current_lines, strict=True)
+    )
+
+
+def same_line(shown: str, current: str) -> bool:
+    """Equal, except that a result row's max TVD and tolerance need only agree within 10x.
+
+    Exact rows differ in roundoff between library versions. Sampled rows differ between
+    platforms for the same seed (Stim's sampling depends on the CPU's SIMD width), and the
+    tolerance shown is that of the circuit closest to failing, which the samples decide.
+    """
+    if shown == current:
+        return True
+    a, b = shown.split(), current.split()
+    if a[:1] != b[:1] or a[0] not in FRAMEWORKS or a[:2] + a[4:] != b[:2] + b[4:]:
+        return False
+    try:
+        pairs = [(float(x), float(y)) for x, y in zip(a[2:4], b[2:4], strict=True)]
+    except ValueError:
+        return False
+    return all(max(x, y) < ROUNDOFF or max(x, y) <= 10 * min(x, y) for x, y in pairs)
 
 
 def test_check_output_matches_a_current_run() -> None:
@@ -291,10 +364,14 @@ def test_check_output_matches_a_current_run() -> None:
         pytest.fail(f"{missing} must be installed when NOISEVAULT_REQUIRE_ALL=1")
     if missing:
         pytest.skip(f"nv check skips {missing}, so its output differs from the README")
-    lines = shown_text(record(("check", "ibm_fez"))).splitlines()
-    last_row = max(i for i, line in enumerate(lines) if line.split(" ", 1)[0] in FRAMEWORKS)
-    shown = "\n".join(lines[: last_row + 1])
-    assert f"```text\n{shown}\n```" in TEXT, f"README.md must show this nv check output:\n{shown}"
+    block = CHECK_BLOCK.search(TEXT)
+    assert block, "README.md has no ```text block starting with $ nv check ibm_fez"
+    shown = block.group(0).removeprefix("```text\n").removesuffix("```\n").rstrip("\n")
+    current = check_output()
+    assert same_check(shown, current), (
+        "README.md must show this nv check output; regenerate it with"
+        f" python tests/test_readme.py:\n{current}"
+    )
 
 
 if __name__ == "__main__":
@@ -302,5 +379,10 @@ if __name__ == "__main__":
     for name, args in SHOTS.items():
         (ASSETS / name).write_text(terminal_svg(args), encoding="utf-8")
         print(f"wrote assets/{name}")
+    README.write_text(
+        CHECK_BLOCK.sub(lambda _: f"```text\n{check_output()}\n```\n", TEXT, count=1),
+        encoding="utf-8",
+    )
+    print("wrote the nv check output in README.md")
     print("\nbundled-profiles table for README.md:\n")
     print(bundled_table())

@@ -861,6 +861,7 @@ def test_ising_zz_at_pi_over_2_is_rzz_on_a_profile_without_zz(qml) -> None:
 
 
 def test_check_runs_pennylane_on_quantinuum() -> None:
+    require("pennylane")
     import noisevault as nv
 
     (pennylane,) = nv.load("quantinuum_h1-1").check(frameworks=["pennylane"]).frameworks

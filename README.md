@@ -1,15 +1,9 @@
-```text
-██      ██   ████   ██████   ██████ ████████     ██      ██   ████   ██    ██ ██       ██████████
-████    ██ ██    ██   ██   ██       ██           ██      ██ ██    ██ ██    ██ ██           ██
-██  ██  ██ ██    ██   ██     ████   ██████       ██      ██ ████████ ██    ██ ██           ██
-██    ████ ██    ██   ██         ██ ██             ██  ██   ██    ██ ██    ██ ██           ██
-██      ██   ████   ██████ ██████   ████████         ██     ██    ██   ████   ████████     ██
-
-                                               ●
-          _               _      _             │
-     /\  / \         /\  / \   _/ \_  /\_/\/\  │
-/\/\/  \/   \/\/\_/\/  \/   \_/     \/       \/│_________________________________________________
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img src="assets/hero-light.svg" alt="NoiseVault" width="100%">
+  </picture>
+</p>
 
 <div align="center">
 
@@ -230,7 +224,7 @@ ibm_fez nv:06404cefa54f on qubits 136-143-142-141
 framework  result  max TVD  tolerance  circuits  method
 qiskit     pass    1.1e-02    7.0e-02  3 of 3    exact + 20000 shots
 cirq       pass    3.7e-16    1.0e-09  3 of 3    exact
-pennylane  pass    6.1e-16    1.0e-09  3 of 3    exact
+pennylane  pass    5.7e-16    1.0e-09  3 of 3    exact
 stim       pass    6.9e-03    1.1e-02  3 of 3    20000 shots, 5 sigma
 ```
 

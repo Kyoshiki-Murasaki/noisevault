@@ -50,7 +50,14 @@ pennylane = ["pennylane>=0.42"]
 stim = ["stim>=1.14"]
 google = ["noisevault[cirq]", "cirq-google>=1.6"]
 all = ["noisevault[qiskit,ibm,cirq,pennylane,stim,google]"]
-dev = ["noisevault[all]", "pymatching>=2.2", "pytest>=8", "ruff>=0.9", "build>=1.2"]
+dev = [
+  "noisevault[all]",
+  "amazon-braket-schemas>=1.22",
+  "pymatching>=2.2",
+  "pytest>=8",
+  "ruff>=0.9",
+  "build>=1.2",
+]
 
 [project.scripts]
 noisevault = "noisevault.cli:app"

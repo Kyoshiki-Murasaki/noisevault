@@ -65,6 +65,25 @@ jobs:
         env:
           NOISEVAULT_REQUIRE_ALL: "1"
 
+  bundle:
+    name: tests pinned to the bundle's qiskit-ibm-runtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+      # The full job installs the newest qiskit-ibm-runtime, which may ship other snapshots than
+      # the release the bundled files name; tests that compare against those snapshots skip there
+      # and run here, under that release.
+      - run: |
+          release=$(python -c 'import gzip, json, pathlib; f = next(pathlib.Path("src/noisevault/data/profiles").glob("ibm_fez@*.json.gz")); print(json.loads(gzip.decompress(f.read_bytes()))["provenance"]["source"].split()[1])')
+          uv pip install -e '.[ibm]' pytest "qiskit-ibm-runtime==${release}"
+      - run: pytest -q tests/test_catalog_bundle.py tests/test_compat.py
+        env:
+          NOISEVAULT_REQUIRE_ALL: "1"
+
   package:
     runs-on: ubuntu-latest
     steps:

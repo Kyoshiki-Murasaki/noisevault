@@ -10,7 +10,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 import pytest
-from conftest import MANILA_V01, toy
+from conftest import MANILA_V01, require, toy
 from typer.testing import CliRunner
 
 import noisevault as nv
@@ -107,6 +107,8 @@ def test_version() -> None:
     ids=["list", "show-qubits", "show-notes", "diff", "check"],
 )
 def test_output_fits_the_terminal(args: list[str], columns: int) -> None:
+    if args[0] == "check":
+        require("cirq"), require("stim")
     result = runner.invoke(app, args, env={"COLUMNS": str(columns)})
     assert result.exit_code == 0, result.output
     assert max(len(line) for line in result.stdout.splitlines()) <= columns
@@ -415,6 +417,7 @@ def test_diff_of_identical_profiles() -> None:
 
 
 def test_check_prints_a_table_per_framework() -> None:
+    require("cirq"), require("pennylane")
     result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq,pennylane"])
     assert result.exit_code == 0, result.output
     rows = {line.split()[0]: line.split() for line in result.stdout.splitlines() if line}
@@ -426,6 +429,7 @@ def test_check_prints_a_table_per_framework() -> None:
 
 
 def test_check_failure_exits_1(monkeypatch) -> None:
+    require("cirq")
     from noisevault.frameworks import cirq as nv_cirq
 
     monkeypatch.setattr(nv_cirq.NoiseVaultNoiseModel, "_noise", lambda self, *a: [])
@@ -434,6 +438,7 @@ def test_check_failure_exits_1(monkeypatch) -> None:
 
 
 def test_check_json_and_skips() -> None:
+    require("cirq")
     result = runner.invoke(app, ["check", "quantinuum_h1-1", "--framework", "stim,cirq", "--json"])
     data = json.loads(result.stdout)
     assert [f["framework"] for f in data["frameworks"]] == ["cirq"]
@@ -527,6 +532,8 @@ def test_schema_is_the_format_json_schema() -> None:
 
 
 def test_doctor_lists_frameworks_and_the_vault(vault: Path) -> None:
+    for module in ("qiskit", "cirq", "pennylane", "stim"):
+        require(module)
     out = runner.invoke(app, ["doctor"]).stdout
     for package in ("qiskit", "cirq-core", "pennylane", "stim"):
         line = next(line for line in out.splitlines() if line.split()[:1] == [package])
@@ -548,7 +555,7 @@ def test_doctor_gives_a_whole_install_command_for_missing_frameworks(monkeypatch
     def without_stim(package: str) -> str:
         if package == "stim":
             raise PackageNotFoundError(package)
-        return version(package)
+        return "1.0"
 
     monkeypatch.setattr(cli, "version", without_stim)
     out = runner.invoke(app, ["doctor"], env={"COLUMNS": "80"}).stdout
@@ -679,7 +686,7 @@ def _doctor_without(monkeypatch: pytest.MonkeyPatch, *absent: str) -> str:
     def installed(package: str) -> str:
         if package in absent:
             raise PackageNotFoundError(package)
-        return version(package)
+        return "1.0"
 
     monkeypatch.setattr(cli, "version", installed)
     return runner.invoke(app, ["doctor"], env={"COLUMNS": "200"}).stdout

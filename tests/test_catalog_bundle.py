@@ -58,14 +58,28 @@ def test_notice_credits_every_bundled_file() -> None:
 def test_bundled_ibm_files_are_what_the_source_produces_today() -> None:
     """The committed IBM files equal a fresh conversion of the installed snapshots.
 
-    ``scripts/build_catalog.py --check`` does the same for every source at once.
+    Each file names the qiskit-ibm-runtime release it was converted from, and other releases
+    ship other snapshots, so the bytes are compared only under that release. CI's bundle job
+    installs it. ``scripts/build_catalog.py --check`` does the same for every source at once.
     """
-    require("qiskit_ibm_runtime")
+    runtime = require("qiskit_ibm_runtime")
     from noisevault.sources.qiskit_backend import bundled_profiles as ibm_profiles
 
-    by_id = {e["id"]: e for e in INDEX}
-    for profile in ibm_profiles():
-        entry = by_id[profile.id]
-        raw = gzip.decompress((DATA / entry["file"]).read_bytes())
-        assert raw == canonical_json(profile.to_dict()).encode("utf-8"), entry["file"]
-        assert entry["fingerprint"] == profile.fingerprint
+    ibm = [e for e in INDEX if e["vendor"] == "ibm"]
+    raw = {e["id"]: gzip.decompress((DATA / e["file"]).read_bytes()) for e in ibm}
+    sources = {json.loads(r)["provenance"]["source"] for r in raw.values()}
+    built_with = {re.match(r"qiskit-ibm-runtime (\S+) ", s)[1] for s in sources}
+    assert len(built_with) == 1, f"the IBM files come from several releases: {built_with}"
+    [release] = built_with
+    if runtime.__version__ != release:
+        pytest.skip(
+            f"the IBM files were converted from qiskit-ibm-runtime {release}, not the installed"
+            f" {runtime.__version__}; install {release} to compare them, or rebuild the bundle"
+            " with python scripts/build_catalog.py"
+        )
+    fresh = ibm_profiles()
+    assert {p.id for p in fresh} == set(raw)
+    by_id = {e["id"]: e for e in ibm}
+    for profile in fresh:
+        assert raw[profile.id] == canonical_json(profile.to_dict()).encode("utf-8"), profile.id
+        assert by_id[profile.id]["fingerprint"] == profile.fingerprint
