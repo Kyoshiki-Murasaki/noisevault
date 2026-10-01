@@ -4,13 +4,16 @@ import hashlib
 import json
 import re
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pytest
 from conftest import MANILA_V01, V01, migrated, require
+from typer.testing import CliRunner
 
 from noisevault.channels import gate_channels, readout_matrix, superoperator
-from noisevault.errors import MigrationWarning
+from noisevault.cli import app
+from noisevault.errors import MigrationWarning, NoiseVaultError
 from noisevault.profile import Profile, load_file
 from noisevault.table import Unavailable
 
@@ -150,8 +153,25 @@ def _first_gate(**changes) -> dict:
     ],
 )
 def test_a_malformed_0_1_file_is_refused_with_the_field_to_fix(data: dict, message: str) -> None:
-    with pytest.raises(ValueError, match=re.escape(f"not a valid NoiseVault 0.1 file: {message}")):
+    with pytest.raises(
+        ValueError, match=re.escape(f"not a valid NoiseVault 0.1 file: {message}")
+    ) as info:
         _upgrade(data)
+    assert isinstance(info.value, NoiseVaultError)
+    assert info.value.hint == "fix that field or pull the device again"
+
+
+def test_nv_show_prints_the_fix_for_a_malformed_0_1_file_on_a_hint_line(tmp_path: Path) -> None:
+    data = _v01()
+    del data["coupling_map"]
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(data))
+    result = CliRunner().invoke(app, ["show", str(path)])
+    assert result.stderr.splitlines() == [
+        f"error: {path}: not a valid NoiseVault 0.1 file: coupling_map is missing",
+        "hint: fix that field or pull the device again",
+    ]
+    assert result.exit_code == 1
 
 
 @pytest.mark.parametrize(

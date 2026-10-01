@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import importlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import noisevault as nv
 from noisevault import gates
 from noisevault.check import (
     EXACT_TOLERANCE,
+    FRAMEWORKS,
     SIGMAS,
     CheckResult,
     NotRun,
@@ -355,6 +357,35 @@ def test_a_missing_framework_is_skipped_with_the_install_command(monkeypatch) ->
     assert result.frameworks == ()
     assert result.skipped == (("stim", f"not installed: {install_hint('stim')}"),)
     assert not result.passed
+
+
+def _asks_for_an_effect() -> Profile:
+    effect = {"type": "atom_loss", "on": "readout", "prob": 1e-3, "allow": "exact"}
+    return Profile.model_validate(toy(effects=[effect]))
+
+
+def _refused(framework: str) -> str:
+    return (
+        "the export refused this profile: effect atom_loss on readout asks for allow='exact',"
+        f" but {framework} export does not model effects yet; set allow to 'omit' to convert"
+        " without it"
+    )
+
+
+def test_every_export_that_refuses_the_profile_is_skipped_with_its_reason() -> None:
+    result = check(_asks_for_an_effect())
+    assert result.frameworks == ()
+    assert result.skipped == tuple((name, _refused(name)) for name in FRAMEWORKS)
+
+
+def test_nv_check_names_every_export_that_refuses_the_profile(tmp_path: Path) -> None:
+    path = _asks_for_an_effect().save(tmp_path / "effect.json")
+    result = CliRunner().invoke(app, ["check", str(path)])
+    lines = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()
+    assert [line.split() for line in lines[3:7]] == [[name, "skipped"] for name in FRAMEWORKS]
+    assert lines[7:] == [f"{name} skipped: {_refused(name)}" for name in FRAMEWORKS]
+    assert result.stderr == "error: no framework could run the check\n"
+    assert result.exit_code == 1
 
 
 @pytest.mark.parametrize(

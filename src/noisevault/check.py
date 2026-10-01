@@ -221,8 +221,9 @@ def check(
 
     ``layout`` gives the chain of physical qubits to use (1 to 4 qubits, neighbors connected);
     by default ``profile.suggest_layout(n)`` for the largest such ``n`` with a check circuit on
-    its chain. ``shots`` and ``seed`` apply to sampled frameworks (Stim). A framework that is not
-    installed, or cannot express any check circuit, is listed in ``skipped`` with the reason.
+    its chain. ``shots`` and ``seed`` apply to sampled frameworks (Stim). ``skipped`` gives the
+    reason for each framework that is not installed, whose export refuses the profile, or that
+    cannot express any check circuit.
     """
     names = list(FRAMEWORKS if frameworks is None else frameworks)
     unknown = [n for n in names if n not in FRAMEWORKS]
@@ -243,14 +244,11 @@ def check(
         warnings.simplefilter("ignore", NoiseApproximationWarning)  # each report records it
         for name in names:
             try:
-                runner = _RUNNERS[name](profile, chain)
+                outcome = _run(_RUNNERS[name](profile, chain), circuits, expected, shots, seed)
             except ImportError:
-                skipped.append((name, f"not installed: {install_hint(_EXTRAS[name])}"))
-                continue
+                outcome = f"not installed: {install_hint(_EXTRAS[name])}"
             except NoiseVaultError as exc:
-                skipped.append((name, f"the export refused this profile: {exc}"))
-                continue
-            outcome = _run(runner, circuits, expected, shots, seed)
+                outcome = f"the export refused this profile: {exc}"
             if isinstance(outcome, str):
                 skipped.append((name, outcome))
             else:

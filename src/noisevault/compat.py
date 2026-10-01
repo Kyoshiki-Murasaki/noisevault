@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import gates
+from .errors import NoiseVaultError
 
 _IBM_PROVIDERS = {"ibm", "qiskit_fake"}
 _KINDS = {  # 0.1 provider -> (data_kind, source_kind)
@@ -127,12 +128,17 @@ def upgrade_v01(old: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class _InvalidV01(NoiseVaultError, ValueError):
+    """A 0.1 file the upgrade cannot read."""
+
+
 def _check_shape(old: dict[str, Any]) -> None:
     """Raise ValueError naming the first field the upgrade cannot read."""
 
     def fail(problem: str) -> None:
-        raise ValueError(
-            f"not a valid NoiseVault 0.1 file: {problem}; fix that field or pull the device again"
+        raise _InvalidV01(
+            f"not a valid NoiseVault 0.1 file: {problem}",
+            hint="fix that field or pull the device again",
         )
 
     for key, kind in _FIELDS.items():

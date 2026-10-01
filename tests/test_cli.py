@@ -1008,12 +1008,12 @@ _DAMAGED = {
     "legacy-empty": _Damage(
         '{"schema_version": "0.1"}',
         "not a valid NoiseVault 0.1 file: provider",
-        None,
+        "fix that field or pull the device again",
     ),
     "legacy-null-gates": _Damage(
         json.dumps({**json.loads(MANILA_V01.read_text()), "gates": None}),
-        "gates should be a list, not null; fix that field",
-        None,
+        "gates should be a list, not null",
+        "fix that field or pull the device again",
     ),
     "invalid": _Damage(
         json.dumps(toy(gates=None)),
