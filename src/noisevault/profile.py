@@ -534,7 +534,7 @@ class Profile(_Model):
         technology: Technology,
         num_qubits: int,
         one_qubit_error: float,
-        two_qubit_error: float,
+        two_qubit_error: float | None = None,
         readout_error: float | None = None,
         t1_us: float | None = None,
         t2_us: float | None = None,
@@ -547,9 +547,14 @@ class Profile(_Model):
         Every registry 1-qubit unitary gate, and on two or more qubits every 2-qubit one, is
         defined (except z-family gates, free through a virtual ``rz``, and multi-entangler gates,
         which must be decomposed), so any circuit of such gates resolves to calibrated noise
-        without approximation. A one-qubit device ignores ``two_qubit_error`` and
-        ``two_qubit_ns``.
+        without approximation. Only a device of two or more qubits needs ``two_qubit_error`` and
+        uses ``two_qubit_ns``.
         """
+        if num_qubits >= 2 and two_qubit_error is None:
+            raise ValueError(
+                f"a {num_qubits}-qubit device needs two_qubit_error, the average infidelity"
+                " of its 2-qubit gates"
+            )
         defs: dict[str, dict[str, Any]] = {"rz": {"virtual": True}}
         for info in gates.GATES.values():
             if info.unitary is None or info.family == "z" or info.multi_entangler:

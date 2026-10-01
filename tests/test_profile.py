@@ -569,14 +569,20 @@ def test_uniform_profile() -> None:
     assert "swap" not in profile.gates
 
 
-def test_a_one_qubit_uniform_profile_defines_only_one_qubit_gates() -> None:
+@pytest.mark.parametrize("two", [{"two_qubit_error": 2e-2}, {}])
+def test_a_one_qubit_uniform_profile_defines_only_one_qubit_gates(two: dict) -> None:
     profile = Profile.uniform(
-        "u", technology="superconducting", num_qubits=1, one_qubit_error=1e-2, two_qubit_error=2e-2
+        "u", technology="superconducting", num_qubits=1, one_qubit_error=1e-2, **two
     )
     table = profile.table
     assert {table.arity(name) for name in profile.gates} == {1}
     assert table.gate("h", (0,)).avg_infidelity == 1e-2
     assert table.edges() == []
+
+
+def test_a_uniform_profile_on_two_qubits_needs_two_qubit_error() -> None:
+    with pytest.raises(ValueError, match="a 2-qubit device needs two_qubit_error"):
+        Profile.uniform("u", technology="superconducting", num_qubits=2, one_qubit_error=1e-2)
 
 
 @pytest.mark.parametrize("coherence", [{"t1_us": 0}, {"t2_us": 0}])
