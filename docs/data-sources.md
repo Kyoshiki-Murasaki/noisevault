@@ -136,7 +136,8 @@ Each importer turns its source's conventions into explicit fields, so no convers
 - **IBM.** Gate errors are average infidelities from randomized benchmarking. An error at the
   physical bound d/(d+1) or above (in practice `gate_error = 1`, IBM's marker for a broken gate)
   becomes `disabled: true`, and so does a qubit or gate marked not operational. `rz` is virtual.
-  Device-wide defaults are medians. `from_qiskit_backend` disables a gate on every qubit or pair
+  Device-wide defaults are medians over working qubits and gates, so a qubit marked not
+  operational and every gate on it stay out of them. `from_qiskit_backend` disables a gate on every qubit or pair
   that the backend's `Target` does not list for it. In a CSV or a pull, a qubit or pair with no
   published error for a gate takes that gate's median, and `provenance.notes` names it.
   Two-qubit errors carry `"includes": ["1q_dressing"]`.

@@ -156,7 +156,10 @@ def from_qiskit_backend(backend: Any) -> Profile:
             cal,
             instructions=cal.instructions + dropped,
             calibrated_at=from_props.calibrated_at,
-            qubits={i: _overlay(q, from_props.qubits.get(i)) for i, q in cal.qubits.items()},
+            qubits={
+                i: _overlay(cal.qubits.get(i, QubitCalibration()), from_props.qubits.get(i))
+                for i in sorted(cal.qubits.keys() | from_props.qubits.keys())
+            },
         )
     cal = replace(
         cal,
@@ -481,9 +484,10 @@ def _in_unit(param: Mapping[str, Any] | None, unit: str) -> float | None:
 def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     """The profile of an IBM-shaped calibration.
 
-    Device-wide defaults are medians over the working loci (``statistic: median``); every locus
-    keeps its own record (``statistic: individual``). A readout or prep default is left out when
-    a working qubit has none of its own, so that qubit's value stays unknown. IBM's dead-gate
+    Device-wide defaults are medians over the working loci (``statistic: median``), which leave
+    out every locus on a disabled qubit. Every locus keeps its own record
+    (``statistic: individual``). A readout or prep default is left out when a working qubit has
+    none of its own, so that qubit's value stays unknown. IBM's dead-gate
     sentinel (an error at or above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and
     ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration on
     every working locus (IBM's ``rz``) is virtual, and its disabled loci keep their records.
@@ -517,7 +521,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
             entries = [e if e.qubits in runs_on else replace(e, operational=False) for e in entries]
             entries += [Instruction(name, locus, operational=False) for locus in unlisted]
             unpublished = []
-        definition, gate_records = _gate(name, arity, entries, ibm)
+        definition, gate_records = _gate(name, arity, entries, ibm, disabled_qubits)
         definitions[name] = definition
         records += gate_records
         unpublished += [e.qubits for e in entries if e.operational and e.error is None]
@@ -554,7 +558,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         ]
         for key in ("readout", "prep", "t1_us", "t2_us")
     }
-    readout, prep = _median_readout(qubit_records), _median_prep(qubit_records)
+    readout, prep = _median_readout(working), _median_prep(working)
     if readout and lacking["readout"]:
         readout = None
         notes.append(
@@ -565,7 +569,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         notes.append(
             f"Qubits {lacking['prep']} have no prep calibration, so their prep is unknown."
         )
-    idle = _median_idle(qubit_records, ibm)
+    idle = _median_idle(working, ibm)
     for key, label in (("t1_us", "T1"), ("t2_us", "T2")):
         if idle and key in idle and lacking[key]:
             notes.append(
@@ -615,10 +619,18 @@ def _without_invalid_coherence(
 
 
 def _gate(
-    name: str, arity: int, entries: Sequence[Instruction], ibm: bool
+    name: str,
+    arity: int,
+    entries: Sequence[Instruction],
+    ibm: bool,
+    disabled_qubits: set[int],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     dead = [not e.operational or _is_sentinel(e.error, arity) for e in entries]
-    working = [e for e, is_dead in zip(entries, dead, strict=True) if not is_dead]
+    working = [
+        e
+        for e, is_dead in zip(entries, dead, strict=True)
+        if not is_dead and disabled_qubits.isdisjoint(e.qubits)
+    ]
     virtual = bool(working) and all(e.error == 0 and not e.duration_ns for e in working)
     if virtual:
         definition: dict[str, Any] = {"virtual": True}

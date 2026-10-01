@@ -283,12 +283,13 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
                 row.where,
             )
         for key, error in v.items():
-            if not key.startswith("error:") or error is None:
+            if not key.startswith("error:"):
                 continue
             gate = key.removeprefix("error:")
-            seen_rz |= gate == "rz"
             duration = None if gate == "rz" else v.get("gate_length_1q")
-            add(Instruction(gate, (row.index,), error, duration), row.where)
+            if error is not None or duration is not None:
+                seen_rz |= gate == "rz"
+                add(Instruction(gate, (row.index,), error, duration), row.where)
         durations = row.packed.get("gate_length_2q", {})
         for key, cells in row.packed.items():
             if key == "gate_length_2q":

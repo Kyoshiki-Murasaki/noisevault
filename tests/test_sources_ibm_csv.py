@@ -172,7 +172,7 @@ def test_qubit_without_readout_stays_unknown(tmp_path: Path) -> None:
 def test_qubit_without_t1_takes_the_median_and_says_so(tmp_path: Path) -> None:
     path = _edited(tmp_path, HERON, '"0","300","250"', '"0","",""')
     profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
-    assert profile.table.qubit(0).t1_ns == pytest.approx(260_000)  # median of qubits 1 to 3
+    assert profile.table.qubit(0).t1_ns == pytest.approx(270_000)  # qubits 1 and 2; 3 is off
     assert any("Qubits [0] have no T1" in note for note in profile.provenance.notes)
 
 
@@ -181,19 +181,48 @@ def test_a_blank_gate_error_takes_the_device_median_and_says_so(tmp_path: Path) 
     path = _edited(tmp_path, HERON, row_0, '"0","","0.00015","1:0.0013"')
     profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     sx = profile.table.gate("sx", (0,))
-    assert (sx.state, sx.origin, sx.avg_infidelity) == ("calibrated", "default", 0.000185)
+    assert (sx.state, sx.origin, sx.avg_infidelity) == ("calibrated", "record", 0.000185)
     assert profile.provenance.notes == (
         "Qubits [0] have no sx error; the device median applies to them.",
     )
 
 
+def test_a_blank_gate_error_keeps_the_published_gate_length(tmp_path: Path) -> None:
+    row_0 = '"0.00015","32","0.00015","0","0.00015"'
+    path = _edited(tmp_path, HERON, row_0, '"0.00015","80","0.00015","",""')
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    sx = profile.table.gate("sx", (0,))
+    assert (sx.state, sx.avg_infidelity, sx.duration_ns) == ("calibrated", 0.000185, 80)
+    assert profile.table.gate("x", (0,)).duration_ns == 80
+    assert profile.gates["sx"].duration_ns == 32
+    assert profile.gates["rz"].virtual
+    assert profile.table.gate("rz", (0,)).state == "ideal"
+    assert profile.provenance.notes == (
+        "Qubits [0] have no sx error; the device median applies to them.",
+    )
+
+
+def test_a_disabled_qubit_stays_out_of_the_gate_medians(tmp_path: Path) -> None:
+    blank_sx = _edited(tmp_path, HERON, '"0","0.00015","0.00015"', '"0","","0.00015"')
+    path = _edited(tmp_path, blank_sx, '"0","1","1","2:1"', '"0","0.1","1","2:1"')
+    profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert profile.table.gate("sx", (0,)).avg_infidelity == 0.000185  # qubits 1 and 2
+    assert _record(profile, "sx", (3,)).avg_infidelity == 0.1
+
+
+def test_a_disabled_qubit_stays_out_of_the_qubit_medians() -> None:
+    profile = _heron()  # qubits 0 to 2 only: T1 300, 280, 260 us; T2 250, 260, 200 us
+    assert (profile.idle.t1_us, profile.idle.t2_us) == (280, 250)
+    assert (profile.readout.p1_given_0, profile.readout.p0_given_1) == (0.008, 0.016)
+
+
 @pytest.mark.parametrize(
     ("cells", "label", "shown", "median_ns"),
     [
-        ('"0","-1","250"', "T1", "-1", 260_000),
-        ('"0","0","250"', "T1", "0", 260_000),
-        ('"0","nan","250"', "T1", "nan", 260_000),
-        ('"0","300","-250"', "T2", "-250", 200_000),
+        ('"0","-1","250"', "T1", "-1", 270_000),
+        ('"0","0","250"', "T1", "0", 270_000),
+        ('"0","nan","250"', "T1", "nan", 270_000),
+        ('"0","300","-250"', "T2", "-250", 230_000),
     ],
 )
 def test_invalid_coherence_takes_the_median_and_names_the_value(

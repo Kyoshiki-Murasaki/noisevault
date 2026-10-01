@@ -181,6 +181,40 @@ def test_a_gate_the_response_omits_on_a_qubit_takes_the_median_and_says_so(
     )
 
 
+def test_a_qubit_that_is_not_operational_stays_out_of_the_device_medians(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    props = json.loads(PROPERTIES)
+    props["gates"] = [e for e in props["gates"] if (e["gate"], e["qubits"]) != ("sx", [0])]
+    stamp = props["last_update_date"]
+    for qubit, prep in zip(props["qubits"], (0.01, 0.02, 0.03, 0.5, 0.04), strict=True):
+        qubit.append({"name": "init_error", "value": prep, "unit": "", "date": stamp})
+    props["qubits"][3].append({"name": "operational", "value": 0, "unit": "", "date": stamp})
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
+    qubits = [{p["name"]: p["value"] for p in qubit} for qubit in props["qubits"]]
+    sx = {
+        e["qubits"][0]: p["value"]
+        for e in props["gates"]
+        if e["gate"] == "sx"
+        for p in e["parameters"]
+        if p["name"] == "gate_error"
+    }
+
+    def median(key: str) -> float:
+        return statistics.median(qubits[q][key] for q in (0, 1, 2, 4))
+
+    profile = ibm_public.pull("ibm_manila")
+    sx_0 = profile.table.gate("sx", (0,)).avg_infidelity
+    assert sx_0 == statistics.median(sx[q] for q in (1, 2, 4))
+    readout = profile.readout
+    assert (readout.p1_given_0, readout.p0_given_1) == (
+        median("prob_meas1_prep0"),
+        median("prob_meas0_prep1"),
+    )
+    assert profile.prep.error == 0.025  # 0.02 and 0.03; qubit 3's 0.5 is left out
+    assert (profile.idle.t1_us, profile.idle.t2_us) == pytest.approx((median("T1"), median("T2")))
+
+
 def test_invalid_coherence_in_the_response_takes_the_median(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

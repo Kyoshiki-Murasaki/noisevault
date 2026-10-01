@@ -115,6 +115,30 @@ def test_properties_do_not_enable_a_gate_on_qubits_the_target_leaves_out() -> No
     assert set(profile.to_qiskit().target["sx"]) == {(0,)}
 
 
+def test_properties_reach_qubits_the_target_has_no_properties_for() -> None:
+    models = require("qiskit_ibm_runtime.models")
+    raw = json.loads(MANILA_PROPERTIES.read_bytes())
+    stamp = raw["last_update_date"]
+    raw["qubits"][3].append({"name": "operational", "value": 0, "unit": "", "date": stamp})
+    properties = models.BackendProperties.from_dict(raw)
+    working = (0, 1, 2, 4)
+    target = Target(num_qubits=5)  # as IBM builds it with qubit 3 faulty, minus qubit_properties
+    target.add_instruction(SXGate(), {(q,): _props(0.001, 35e-9) for q in working})
+    target.add_instruction(CXGate(), {e: _props(0.01, 300e-9) for e in MANILA_EDGES if 3 not in e})
+    target.add_instruction(Measure(), {(q,): _props(0.02, 1e-6) for q in working})
+    assert target.qubit_properties is None
+    profile = nv.from_qiskit_backend(_Backend(target, properties=properties))
+    published = {p["name"]: p["value"] for p in raw["qubits"][0]}
+    assert profile.table.qubit(0).readout == (
+        published["prob_meas1_prep0"],
+        published["prob_meas0_prep1"],
+    )
+    assert profile.table.qubit(3).disabled
+    _assert_allows_exactly_what_the_target_allows(target, profile)
+    require("qiskit_aer")
+    assert set(profile.to_qiskit().target["measure"]) == set(target["measure"])
+
+
 def test_a_directed_gate_in_one_direction_of_a_pair_is_disabled_in_the_other() -> None:
     cz = {(a, b): _props(0.01, 60e-9) for a, b in ((0, 1), (1, 0), (1, 2), (2, 1))}
     target = _target(
