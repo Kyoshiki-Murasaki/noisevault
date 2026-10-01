@@ -394,19 +394,68 @@ def test_sampled_counts_include_readout(qml) -> None:
     assert np.abs(got - probabilities(profile, ops, 2, readout=False)).max() > 0.02
 
 
-def test_measurements_without_wires_ask_for_wires(qml, manila) -> None:
+def test_probs_without_wires_equals_probs_on_every_wire(qml, manila) -> None:
     from noisevault.frameworks.pennylane import to_pennylane
 
-    @qml.qnode(qml.device("default.mixed", wires=2))
+    @qml.qnode(qml.device("default.mixed", wires=3))
     def circuit():
-        qml.Hadamard(0)
+        _pl_ops(qml, MIRROR_HALF)
+        return qml.probs(), qml.probs(wires=[0, 1, 2])
+
+    model = to_pennylane(manila)
+    implicit, explicit = qml.add_noise(circuit, model)()
+    expected = probabilities(manila, MIRROR_HALF, 3)
+    assert _tvd(np.asarray(explicit), expected) <= 1e-9
+    assert _tvd(np.asarray(implicit), np.asarray(explicit)) <= 1e-12
+    assert any(a.what == "readout of measurements without wires" for a in model.report.approximated)
+
+
+@pytest.mark.parametrize("measure", ["counts", "sample"])
+def test_sampled_measurements_without_wires_include_readout(qml, manila, measure) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    shots = 100_000
+    results = {}
+    for wires in (None, [0, 1, 2]):
+
+        @qml.qnode(qml.device("default.mixed", wires=3, seed=5))
+        def circuit(wires=wires):
+            _pl_ops(qml, MIRROR_HALF)
+            return getattr(qml, measure)(wires=wires)
+
+        out = qml.set_shots(qml.add_noise(circuit, to_pennylane(manila)), shots=shots)()
+        results[str(wires)] = _frequencies(out, 3, measure)
+    expected = probabilities(manila, MIRROR_HALF, 3)
+    without_readout = probabilities(manila, MIRROR_HALF, 3, readout=False)
+    sigma = np.sqrt(expected * (1 - expected) / shots)
+    for got in results.values():
+        assert np.all(np.abs(got - expected) <= 5 * sigma + 5 / shots)
+        assert _tvd(got, without_readout) > 0.02
+    assert results["None"] == pytest.approx(results["[0, 1, 2]"], abs=1e-12)
+
+
+def test_device_wires_no_operation_touches_read_out_ideally(qml, manila) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    @qml.qnode(qml.device("default.mixed", wires=3))
+    def circuit():
+        qml.PauliX(0)
+        qml.PauliX(1)
         return qml.probs()
 
-    with pytest.raises(LayoutError, match="wires=range"):
-        qml.add_noise(circuit, to_pennylane(manila))()
-    assert np.asarray(
-        qml.add_noise(circuit, to_pennylane(manila, readout=False))()
-    ).sum() == pytest.approx(1)
+    probs = np.asarray(qml.add_noise(circuit, to_pennylane(manila))()).reshape(2, 2, 2)
+    assert probs[:, :, 1].sum() == 0
+    expected = probabilities(manila, [Op("x", (0,)), Op("x", (1,))], 2)
+    assert _tvd(probs[:, :, 0].ravel(), expected) <= 1e-9
+
+
+def _frequencies(out, n: int, measure: str) -> np.ndarray:
+    if measure == "counts":
+        keys = [format(i, f"0{n}b") for i in range(2**n)]
+        total = sum(out.values())
+        return np.array([out.get(k, 0) for k in keys]) / total
+    index = np.asarray(out, dtype=int) @ (1 << np.arange(n)[::-1])
+    return np.bincount(index, minlength=2**n) / len(index)
 
 
 def test_unknown_readout_is_reported_not_invented(qml) -> None:

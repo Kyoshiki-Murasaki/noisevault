@@ -31,6 +31,10 @@ from .errors import MigrationWarning
 from .units import DURATION, T1, T2, normalize_times
 
 if TYPE_CHECKING:
+    from collections.abc import Hashable, Mapping, Sequence
+
+    from .check import CheckResult
+    from .diff import ProfileDiff
     from .table import NoiseTable
 
 FORMAT_VERSION = "1.0"
@@ -514,6 +518,16 @@ class Profile(_Model):
 
     # presentation --------------------------------------------------------------------------
 
+    def __repr__(self) -> str:
+        dev = self.device
+        when = dev.calibrated_at.date().isoformat() if dev.calibrated_at else "undated"
+        return (
+            f"<Profile {self.id}@{when} {dev.technology} {dev.num_qubits}q"
+            f" {self.short_fingerprint}>"
+        )
+
+    __str__ = __repr__
+
     def summary(self) -> str:
         from .table import GateNoise
 
@@ -586,15 +600,22 @@ class Profile(_Model):
 
         return suggest_layout(self, n)
 
-    def diff(self, other: Profile, **options: Any) -> Any:
+    def diff(self, other: Profile, *, top: int = 5) -> ProfileDiff:
         from .diff import diff
 
-        return diff(self, other, **options)
+        return diff(self, other, top=top)
 
-    def check(self, **options: Any) -> Any:
+    def check(
+        self,
+        *,
+        frameworks: Sequence[str] | None = None,
+        layout: Mapping[Hashable, int] | Sequence[int] | None = None,
+        shots: int = 20_000,
+        seed: int | None = 0,
+    ) -> CheckResult:
         from .check import check
 
-        return check(self, **options)
+        return check(self, frameworks=frameworks, layout=layout, shots=shots, seed=seed)
 
     def to_qiskit(self, *, unknown_gates: str = "typical", **options: Any) -> Any:
         from .frameworks.qiskit import to_qiskit

@@ -5,17 +5,34 @@ build-backend = "hatchling.build"
 [project]
 name = "noisevault"
 version = "0.2.0"
-description = "Real device noise, pinned and portable: dated calibration profiles of quantum devices as noise models for Qiskit, Cirq, PennyLane and Stim."
+description = "Pins the calibrated noise of a real quantum device, on a date, as one small file, and turns it into a noise model for Qiskit, Cirq, PennyLane or Stim, with a report of what each simulator reproduced or approximated."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Dev D. Goyal" }]
-keywords = ["quantum", "noise model", "calibration", "qiskit", "cirq", "pennylane", "stim"]
+keywords = [
+  "quantum computing",
+  "quantum noise",
+  "noise model",
+  "device calibration",
+  "reproducibility",
+  "qiskit",
+  "cirq",
+  "pennylane",
+  "stim",
+  "quantum error correction",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
@@ -40,18 +57,26 @@ noisevault = "noisevault.cli:app"
 nv = "noisevault.cli:app"
 
 [project.urls]
-Repository = "https://github.com/Kyoshiki-Murasaki/noisevault"
+Homepage = "https://github.com/Kyoshiki-Murasaki/noisevault"
+Documentation = "https://github.com/Kyoshiki-Murasaki/noisevault/tree/main/docs"
+Issues = "https://github.com/Kyoshiki-Murasaki/noisevault/issues"
+Changelog = "https://github.com/Kyoshiki-Murasaki/noisevault/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/noisevault"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "LICENSE", "NOTICE", "CITATION.cff", "pyproject.toml"]
+include = [
+  "src", "tests", "docs", "examples", "scripts",
+  "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "NOTICE", "CITATION.cff", "pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["network: needs internet access to a live calibration source"]
+markers = [
+  "network: needs internet access to a live calibration source; runs with NOISEVAULT_NETWORK=1",
+]
 
 [tool.ruff]
 line-length = 100

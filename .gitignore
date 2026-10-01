@@ -10,5 +10,3 @@ dist/
 *.egg-info/
 .env
 .DS_Store
-experiments/results/*.tmp
-experiments/figures/*.tmp

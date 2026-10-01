@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+import functools
+import importlib
+import json
+import sys
+
+import numpy as np
+import pytest
+from conftest import require
+
+import noisevault as nv
+from noisevault import gates
+from noisevault.check import EXACT_TOLERANCE, SIGMAS, CheckResult, _Stim, build_circuits, check
+from noisevault.errors import LayoutError
+from noisevault.profile import Profile
+from noisevault.reference import _apply
+from noisevault.reference import probabilities as reference
+
+pytestmark = pytest.mark.filterwarnings("ignore::noisevault.errors.NoiseApproximationWarning")
+
+
+@pytest.fixture(autouse=True)
+def frameworks() -> None:
+    for module in ("qiskit_aer", "cirq", "pennylane", "stim"):
+        require(module)
+
+
+def _relaxing(readout_error: float = 0.01) -> Profile:
+    """Gates slow enough next to T1 that relaxation dominates their channel."""
+    return Profile.uniform(
+        "relaxing",
+        technology="superconducting",
+        num_qubits=3,
+        one_qubit_error=1e-3,
+        two_qubit_error=1e-2,
+        readout_error=readout_error,
+        t1_us=2,
+        t2_us=3,
+        one_qubit_ns=100,
+        two_qubit_ns=300,
+        connectivity=[(0, 1), (1, 2)],
+    )
+
+
+def test_every_export_matches_the_reference_on_manila() -> None:
+    result = nv.load("ibm_manila").check()
+    assert isinstance(result, CheckResult) and result.passed
+    assert [f.framework for f in result.frameworks] == ["qiskit", "cirq", "pennylane", "stim"]
+    assert not result.skipped
+    for f in result.frameworks:
+        assert len({c.circuit for c in f.circuits}) == len(result.circuits) >= 3
+        assert not f.not_run
+        if f.framework != "stim":
+            assert all(c.tvd <= EXACT_TOLERANCE for c in f.circuits if not c.sampled)
+            assert f.method.startswith("exact")
+
+
+def test_an_export_that_drops_gate_noise_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noisevault.frameworks import cirq as nv_cirq
+
+    monkeypatch.setattr(nv_cirq.NoiseVaultNoiseModel, "_noise", lambda self, *a: [])
+    result = check(nv.load("ibm_manila"), frameworks=["cirq", "pennylane"])
+    by_name = {f.framework: f for f in result.frameworks}
+    assert not by_name["cirq"].passed and by_name["cirq"].max_tvd > 1e-3
+    assert by_name["pennylane"].passed
+    assert not result.passed
+
+
+@pytest.mark.parametrize("framework", ["qiskit", "pennylane"])
+def test_an_export_without_readout_error_fails(monkeypatch, framework) -> None:
+    module = importlib.import_module(f"noisevault.frameworks.{framework}")
+    export = getattr(module, f"to_{framework}")
+    monkeypatch.setattr(module, f"to_{framework}", functools.partial(export, readout=False))
+    (result,) = check(nv.load("ibm_manila"), frameworks=[framework]).frameworks
+    assert not result.passed and result.max_tvd > 1e-3
+
+
+def test_stim_is_compared_with_the_twirled_reference() -> None:
+    profile, shots = _relaxing(), 50_000
+    result = check(profile, frameworks=["stim"], shots=shots, seed=3)
+    (stim,) = result.frameworks
+    assert stim.passed and len(stim.circuits) == len(result.circuits)
+    # On this profile the same samples are far outside 5 sigma of the untwirled channel.
+    chain = [result.layout[i] for i in range(len(result.layout))]
+    ghz = next(c for c in result.circuits if c.name == "ghz_chain")
+    sampled = _Stim(profile, chain).run(ghz, shots, 3)
+    full = reference(profile, ghz.ops, ghz.num_qubits, layout=chain, readout=True)
+    sigma = np.sqrt(full * (1 - full) / shots)
+    assert np.any(np.abs(sampled - full) > SIGMAS * sigma + SIGMAS / shots)
+
+
+def test_stim_without_its_readout_flips_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noisevault.frameworks import stim as nv_stim
+
+    def perfect_readout(circuit, shots, *, seed=None):
+        return circuit.compile_sampler(seed=seed).sample(shots)
+
+    monkeypatch.setattr(nv_stim, "sample_with_readout", perfect_readout)
+    (stim,) = check(_relaxing(readout_error=0.05), frameworks=["stim"]).frameworks
+    assert not stim.passed
+
+
+def test_natives_a_framework_lacks_are_explained() -> None:
+    result = nv.load("quantinuum_h1-1").check(frameworks=["pennylane", "stim"])
+    assert dict(result.skipped) == {
+        "pennylane": "no check circuit can be expressed: PennyLane has no r gate;"
+        " PennyLane has no zz gate",
+        "stim": "no check circuit can be expressed: r takes an angle; Stim circuits hold only"
+        " fixed Clifford gates",
+    }
+    (stim,) = nv.load("ibm_brisbane").check(frameworks=["stim"]).frameworks
+    assert dict(stim.not_run) == {
+        "ghz_chain": "Stim has no ecr instruction",
+        "mirror": "Stim has no ecr instruction",
+    }
+
+
+# Gates that take |0> to a superposition at the check angles.
+MIXING = {"h", "sx", "sxdg", "rx", "ry", "r", "u"}
+
+
+@pytest.mark.parametrize(
+    ("ref", "frameworks"),
+    [
+        ("quantinuum_h1-1", ["stim", "cirq"]),
+        ("google_weber", ["pennylane", "cirq"]),
+        ("ibm_brisbane", ["stim", "qiskit"]),
+    ],
+)
+def test_entangling_circuits_always_make_a_superposition(ref, frameworks) -> None:
+    result = nv.load(ref).check(frameworks=frameworks)
+    for circuit in result.circuits:
+        if circuit.name != "single_qubit":
+            assert MIXING & {op.name for op in circuit.ops}, circuit
+    for f in result.frameworks:
+        for c in f.circuits:
+            if c.circuit != "single_qubit":
+                assert MIXING & set(c.gates), (f.framework, c)
+
+
+def test_cirq_readout_must_come_before_the_measurement(monkeypatch) -> None:
+    from noisevault.frameworks import cirq as nv_cirq
+
+    measure = nv_cirq.NoiseVaultNoiseModel._measure
+
+    def after(self, operation, *args, **kwargs):
+        tree = measure(self, operation, *args, **kwargs)
+        return [operation, *(op for op in tree if op is not operation)]
+
+    monkeypatch.setattr(nv_cirq.NoiseVaultNoiseModel, "_measure", after)
+    (cirq,) = check(nv.load("ibm_manila"), frameworks=["cirq"]).frameworks
+    assert not cirq.passed and cirq.max_tvd > 1e-3
+
+
+def test_qiskit_readout_is_also_sampled_through_aer_measurement(monkeypatch) -> None:
+    from qiskit_aer.noise import NoiseModel
+
+    from noisevault.frameworks import qiskit as nv_qiskit
+
+    export = nv_qiskit.to_qiskit
+
+    def readout_dropped_at_run(profile, **options):
+        sim = export(profile, **options)
+        data = sim.noise_model.to_dict()
+        data["errors"] = [e for e in data["errors"] if e["type"] != "roerror"]
+        run = sim.run
+
+        def run_without_readout(circuits, *args, **kwargs):
+            sim.set_options(noise_model=NoiseModel.from_dict(data))
+            return run(circuits, *args, **kwargs)
+
+        sim.run = run_without_readout
+        return sim
+
+    (good,) = check(nv.load("ibm_manila"), frameworks=["qiskit"]).frameworks
+    assert good.passed and [c.sampled for c in good.circuits].count(True) == 1
+    monkeypatch.setattr(nv_qiskit, "to_qiskit", readout_dropped_at_run)
+    (bad,) = check(nv.load("ibm_manila"), frameworks=["qiskit"]).frameworks
+    assert [c.passed for c in bad.circuits if not c.sampled] == [True, True, True]
+    assert not bad.passed
+
+
+def test_a_missing_framework_is_skipped_with_the_install_command(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "stim", None)
+    result = check(nv.load("ibm_manila"), frameworks=["stim"])
+    assert result.frameworks == ()
+    assert result.skipped == (("stim", "not installed: pip install 'noisevault[stim]'"),)
+    assert not result.passed
+
+
+@pytest.mark.parametrize(
+    "ref", ["ibm_manila", "ibm_brisbane", "quantinuum_h1-1", "google_rainbow", "uniform"]
+)
+def test_mirror_circuits_undo_themselves(ref: str) -> None:
+    profile = (
+        Profile.uniform(
+            "u", technology="neutral_atom", num_qubits=4, one_qubit_error=1e-3, two_qubit_error=1e-2
+        )
+        if ref == "uniform"
+        else nv.load(ref)
+    )
+    circuits = build_circuits(profile, list(profile.suggest_layout(3).values()))
+    mirror = next(c for c in circuits if c.name == "mirror")
+    n = mirror.num_qubits
+    rho = np.zeros((2,) * (2 * n), dtype=complex)
+    rho[(0,) * (2 * n)] = 1
+    for op in mirror.ops:
+        rho = _apply(rho, [gates.GATES[op.name].unitary(*op.params)], op.qubits, n)
+    assert abs(rho[(0,) * (2 * n)]) == pytest.approx(1, abs=1e-9)
+    assert len({op.name for op in mirror.ops}) >= 2
+
+
+def test_directed_natives_run_in_their_calibrated_direction() -> None:
+    profile = nv.load("ibm_brisbane")
+    (qiskit,) = check(profile, frameworks=["qiskit"]).frameworks
+    assert qiskit.passed and "ecr" in qiskit.circuits[0].gates
+
+
+def test_a_layout_with_unconnected_neighbors_says_how_to_fix_it() -> None:
+    with pytest.raises(LayoutError, match="suggest_layout"):
+        check(nv.load("ibm_manila"), layout=[0, 2])
+
+
+def test_bad_arguments_name_the_choices() -> None:
+    profile = nv.load("ibm_manila")
+    with pytest.raises(ValueError, match="choose from qiskit, cirq, pennylane, stim"):
+        check(profile, frameworks=["qiskt"])
+    with pytest.raises(ValueError, match="positive number of shots"):
+        check(profile, shots=0)
+
+
+def test_result_serializes_and_prints() -> None:
+    result = nv.load("ibm_manila").check(frameworks=["cirq"], layout=[2, 1, 0])
+    data = json.loads(json.dumps(result.to_dict()))
+    assert data["passed"] is True and data["layout"] == {"0": 2, "1": 1, "2": 0}
+    assert data["frameworks"][0]["report"]["approximated"] >= 1
+    assert "not a measure of how well the model matches the hardware" in str(result)
+
+
+def test_profile_check_spells_out_its_options() -> None:
+    import inspect
+
+    signature = inspect.signature(Profile.check)
+    assert list(signature.parameters) == ["self", "frameworks", "layout", "shots", "seed"]
+    assert signature.return_annotation == "CheckResult"
+    assert list(inspect.signature(Profile.diff).parameters) == ["self", "other", "top"]

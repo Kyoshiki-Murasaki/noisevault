@@ -1,9 +1,29 @@
 cff-version: 1.2.0
-message: "If you use NoiseVault or its archived calibration snapshots, cite this software and the specific snapshot hash."
+message: >-
+  If you use NoiseVault, cite this software and give the fingerprint of every device profile
+  you used (nv cite <profile> prints it).
 title: "NoiseVault"
-version: 0.1.0
+abstract: >-
+  NoiseVault pins the calibrated noise of a real quantum device on a date as one small file, a
+  profile, and turns it into a working noise model for Qiskit, Cirq, PennyLane or Stim, with a
+  report of what each simulator reproduces exactly or approximates. Profiles carry provenance,
+  license and a SHA-256 fingerprint of their physics, so a simulation can be tied to the exact
+  calibration it used.
+type: software
+version: 0.2.0
+date-released: 2026-10-01
 authors:
   - family-names: "Goyal"
     given-names: "Dev D."
 license: Apache-2.0
-date-released: 2026-07-14
+repository-code: "https://github.com/Kyoshiki-Murasaki/noisevault"
+url: "https://github.com/Kyoshiki-Murasaki/noisevault"
+keywords:
+  - quantum computing
+  - noise model
+  - device calibration
+  - reproducibility
+  - qiskit
+  - cirq
+  - pennylane
+  - stim

@@ -41,7 +41,7 @@ def require(module: str) -> ModuleType:
     except ImportError as exc:
         if os.environ.get("NOISEVAULT_REQUIRE_ALL") == "1":
             pytest.fail(f"{module} must be installed when NOISEVAULT_REQUIRE_ALL=1 ({exc})")
-        pytest.skip(f"{module} is not installed")
+        pytest.skip(f"{module} is not installed", allow_module_level=True)
 
 
 def toy(**sections: Any) -> dict[str, Any]:
@@ -67,3 +67,21 @@ def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "slow: a timing or scale test that still runs by default")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Tests marked ``network`` reach live endpoints, so they run only with NOISEVAULT_NETWORK=1.
+
+    Timing budgets (``slow``) are only meaningful in a serial run; parallel workers share the CPU.
+    """
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        serial_only = pytest.mark.skip(reason="timing budget is checked in a serial run")
+        for item in items:
+            if "slow" in item.keywords and "seconds" in item.name:
+                item.add_marker(serial_only)
+    if os.environ.get("NOISEVAULT_NETWORK") == "1":
+        return
+    skip = pytest.mark.skip(reason="set NOISEVAULT_NETWORK=1 to run network tests")
+    for item in items:
+        if "network" in item.keywords:
+            item.add_marker(skip)

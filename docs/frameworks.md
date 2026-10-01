@@ -1,0 +1,224 @@
+# Frameworks
+
+Each export turns a profile into an object of the framework's own type, so it plugs into code
+you already have. Each one carries a `.report` that lists what the simulator reproduces exactly,
+what it approximates, what it leaves out, and what the profile does not know. Print it with
+`.report.summary()`, or save `.report.to_dict()` next to your results.
+
+| Framework | Call | Returns | Simulate with |
+| --- | --- | --- | --- |
+| Qiskit | `profile.to_qiskit()` | `NoiseVaultSimulator`, an `AerSimulator` | `sim.run(transpile(circuit, sim))` |
+| Cirq | `profile.to_cirq()` | `NoiseVaultNoiseModel`, a `cirq.NoiseModel` | `cirq.DensityMatrixSimulator(noise=model)` |
+| PennyLane | `profile.to_pennylane()` | `NoiseVaultPennyLaneModel`, a `qml.NoiseModel` | `qml.add_noise(qnode, model)` on `default.mixed` |
+| Stim | `profile.to_stim(circuit)` | `NoiseVaultStimCircuit`, a `stim.Circuit` | its own samplers, or `detector_error_model()` |
+
+Install the framework with its extra: `pip install 'noisevault[qiskit]'`, `[cirq]`,
+`[pennylane]`, `[stim]`, or `[all]`. Importing `noisevault` imports no framework.
+
+Every export takes `unknown_gates`. With `"typical"` (the default), a gate the profile does not
+calibrate gets the noise of the typical native gate of its arity, with a warning. With
+`"error"`, it raises `MissingCalibrationError`. [Conventions](conventions.md) defines that rule,
+the channels and the readout matrix.
+
+## Choose qubits
+
+Profiles number physical qubits from 0. Integer circuit qubits map to the same physical qubit
+unless you pass a `layout`. To run a small circuit on good qubits, ask the profile for a chain:
+
+```python
+import noisevault as nv
+
+fez = nv.load("ibm_fez")
+print(fez.suggest_layout(4))
+# {0: 136, 1: 143, 2: 142, 3: 141}
+```
+
+`suggest_layout(n)` returns a connected chain of n enabled qubits with low summed gate and
+readout error. It is a starting point, not a placer. A layout onto a disabled or missing qubit
+raises `LayoutError` with the fix.
+
+## Qiskit
+
+`to_qiskit()` builds an Aer simulator with a Qiskit `Target`: every native gate on every
+allowed locus, with the error and duration the simulator applies. `transpile(circuit, sim)`
+therefore compiles to the device's natives, routes around disabled gates and places circuits by
+noise. The noise model is keyed on physical qubits.
+
+```python
+from qiskit import QuantumCircuit, transpile
+
+import noisevault as nv
+
+sim = nv.load("ibm_fez").to_qiskit()
+ghz = QuantumCircuit(3)
+ghz.h(0)
+ghz.cx(0, 1)
+ghz.cx(1, 2)
+ghz.measure_all()
+counts = sim.run(transpile(ghz, sim, seed_transpiler=1), shots=2000).result().get_counts()
+print(counts)
+print(sim.report.summary())
+```
+
+`sim.run` accepts only circuits already in native gates on allowed loci. Anything else raises
+`CircuitNotNativeError` with the `transpile` call that fixes it. `sim.target`, `sim.noise_model`
+and `sim.profile` are available for inspection.
+
+What the report can list:
+
+- **Exact.** Gate noise as an Aer `QuantumError` per native and physical locus. Readout as
+  P(1|0) and P(0|1) per qubit with Aer's `ReadoutError`. Thermal relaxation during `delay`.
+  A bit flip with the preparation error after each `reset`, when the profile has one.
+- **Approximated.** T2 values above 2 T1 are clamped. Natives with no Qiskit instruction of
+  their own are exported under the gate that contains them: `zz` as `rzz` and `ms` as `rxx`,
+  and the alias gets the native's noise at any angle. The initial state is ideal, which the
+  report notes when the profile has a preparation error.
+- **Omitted.** Idle time outside explicit delays. Transpile with `scheduling_method="alap"` to
+  insert delays on idle qubits. Effects. Natives with no Qiskit instruction, such as Google's
+  `sqrt_iswap` and `sycamore`: Google profiles raise `UnsupportedDevice` and point you to
+  `to_cirq()`.
+- **Unknown.** Values the profile lacks. The bundled IBM snapshots have no preparation error, so
+  resets add none.
+
+`readout=False` leaves measurements noiseless.
+
+## Cirq
+
+`to_cirq()` returns a noise model that follows every gate with its channels as
+`cirq.KrausChannel` operations on the same qubits.
+
+```python
+import cirq
+
+import noisevault as nv
+
+model = nv.load("quantinuum_h1-1").to_cirq()
+a, b = cirq.LineQubit.range(2)
+circuit = cirq.Circuit(
+    cirq.PhasedXPowGate(phase_exponent=-0.5, exponent=0.5).on(a),  # the native r gate
+    (cirq.ZZ**0.5).on(a, b),  # the native zz gate
+    cirq.measure(a, b, key="m"),
+)
+result = cirq.DensityMatrixSimulator(noise=model, seed=1).run(circuit, repetitions=2000)
+print(result.histogram(key="m"))
+print(model.report.summary())
+```
+
+Qubits map this way: `LineQubit(i)` is device qubit i, and `GridQubit(r, c)` is the qubit whose
+`coords` are `[r, c]` (Google profiles record them). Other qubit types need
+`layout={qubit: index, ...}`. Gates match by Cirq class and exponent. `cirq.X**0.5` is `sx`,
+`cirq.ZZ**0.5` is `zz`, `cirq.PhasedXZGate` is split into the `r` gate and a Z rotation, each
+with its own noise.
+
+What the report can list:
+
+- **Exact.** Gate noise as Kraus channels after each gate. Readout error, as a `confusion_map`
+  on mid-circuit measurements and the equivalent channel before terminal ones. The preparation
+  error after each reset. Thermal relaxation during `cirq.WaitGate`.
+- **Approximated.** The state after a terminal measurement includes the readout flips. Sampled
+  results are exact; to inspect states, build the model with `readout=False`.
+- **Omitted.** The preparation error of the initial state, idle time outside `WaitGate`, and the
+  profile's leakage effects.
+
+Classically controlled operations raise an error that says how to restructure the circuit.
+
+## PennyLane
+
+`to_pennylane()` returns a `qml.NoiseModel`. Apply it to a QNode on `default.mixed` with
+`qml.add_noise`. Gradients flow through the noise channels.
+
+```python
+import pennylane as qml
+
+import noisevault as nv
+
+fez = nv.load("ibm_fez")
+model = fez.to_pennylane(layout=fez.suggest_layout(2))
+
+
+@qml.qnode(qml.device("default.mixed", wires=2))
+def circuit(theta):
+    qml.SX(0)
+    qml.RZ(theta, 0)
+    qml.SX(0)
+    qml.CZ([0, 1])
+    return qml.expval(qml.PauliZ(0) @ qml.PauliZ(1))
+
+
+noisy = qml.add_noise(circuit, model)
+print(noisy(0.3), qml.grad(noisy)(qml.numpy.array(0.3, requires_grad=True)))
+print(model.report.summary())
+```
+
+Integer wire i maps to device qubit i. Other wire labels need `layout`. A measurement without
+wires, such as `qml.probs()`, gets readout error only on the wires that the circuit's operations
+touch. To give every wire readout error, pass `wires=` to the measurement.
+
+What the report can list:
+
+- **Exact.** Gate errors. Readout errors, applied before each measurement in its measured
+  basis.
+- **Approximated.** The initial state is ideal, and state preparation templates are noiseless.
+  `qml.add_noise` at its default `level="user"` noises `qml.adjoint` gates and templates through
+  their decomposition; pass `level="top"` to noise `Adjoint(SX)`, `Adjoint(S)` and `Adjoint(T)`
+  as the profile's `sxdg`, `sdg` and `tdg`. The basis rotation before a Pauli measurement is
+  ideal. Gates conditioned on mid-circuit measurements get their noise whether or not the
+  condition holds. A measurement without wires gets readout error only on the wires that the
+  circuit's operations touch.
+- **Omitted.** Idle time, because PennyLane circuits have no timing. Readout on mid-circuit
+  measurements. Readout on observables not measured in one product basis. Effects.
+
+PennyLane has no operation for the `r`, `zz` and `ms` natives of trapped-ion profiles, so
+circuits there get typical noise for the gates you write. The report counts each use.
+
+## Stim
+
+`to_stim(circuit)` returns a copy of a Stim circuit with each gate followed by the Pauli twirl
+of its channel, as `PAULI_CHANNEL_1` or `PAULI_CHANNEL_2`. Annotations, `REPEAT` blocks,
+detectors and observables pass through, so decoders such as PyMatching work on the result.
+
+```python
+import stim
+
+import noisevault as nv
+
+fez = nv.load("ibm_fez")
+code = stim.Circuit.generated("repetition_code:memory", distance=5, rounds=5)
+noisy = fez.to_stim(code, layout=fez.suggest_layout(code.num_qubits), unknown_gates="typical")
+dem = noisy.detector_error_model()
+shots = noisy.compile_detector_sampler(seed=1).sample(10_000)
+print(dem.num_errors, shots.mean())
+print(noisy.report.summary())
+```
+
+`CX` is not a Fez native, so here it gets the noise of `cz` on the same pair and the report says
+so. For a grid device, `noisevault.stim.layout_from_coords(circuit, profile)` places a circuit by
+matching its `QUBIT_COORDS` to the profile's qubit coords.
+
+Options:
+
+- `readout="symmetrize"` (default) flips each result with the mean of P(1|0) and P(0|1).
+  `readout="exact"` keeps measurements perfect inside the circuit and stores the asymmetric
+  error for `noisevault.stim.sample_with_readout(noisy, shots)`.
+  `readout="none"` adds no readout error.
+- `tick_ns=` is the duration of one `TICK` layer. Qubits idle in a layer get twirled relaxation
+  for that time.
+- `existing_noise` decides what happens to noise already in the circuit: `"error"` (default)
+  raises, `"keep"` keeps it and `"strip"` removes it.
+
+What the report can list:
+
+- **Exact.** Readout error, only with `readout="exact"` and `sample_with_readout`.
+- **Approximated.** Gate noise is the Pauli twirl of each gate's channel, which keeps each
+  gate's average fidelity and drops relaxation's bias toward |0>. `detector_error_model()`
+  treats the Pauli channel components as independent (Stim's `approximate_disjoint_errors`, on
+  by default here). Symmetric readout. Idle noise per `TICK` when `tick_ns` is set.
+- **Omitted.** The initial preparation error, idle noise without `tick_ns`, and effects.
+
+Stim simulates Clifford circuits only. Write non-Clifford circuits for one of the other three
+frameworks.
+
+## Check a conversion
+
+`nv check REF` runs small circuits through each installed export and compares them with
+NoiseVault's own density-matrix reference simulator. Use it after changing a profile by hand.

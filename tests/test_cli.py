@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 from conftest import MANILA_V01, toy
 from typer.testing import CliRunner
 
+import noisevault as nv
 from noisevault.cli import app
+from noisevault.errors import SourceUnavailable
+from noisevault.profile import Profile
 
 runner = CliRunner()
 
@@ -64,6 +69,356 @@ def test_validate_notes_t2_clamps(tmp_path: Path) -> None:
     assert result.exit_code == 0 and "T2 exceeds 2*T1" in result.stderr
 
 
-def test_doctor_runs() -> None:
-    result = runner.invoke(app, ["doctor"])
-    assert result.exit_code == 0 and "noisevault" in result.stdout and "0.2.0" in result.stdout
+# profile display ------------------------------------------------------------------------------
+
+
+def test_profile_prints_as_one_line() -> None:
+    profile = nv.load("ibm_fez")
+    expected = f"<Profile ibm_fez@2025-02-26 superconducting 156q {profile.short_fingerprint}>"
+    assert repr(profile) == str(profile) == expected
+    undated = Profile.model_validate(toy())
+    assert (
+        repr(undated)
+        == f"<Profile test_toy@undated superconducting 3q {undated.short_fingerprint}>"
+    )
+
+
+# global behavior ------------------------------------------------------------------------------
+
+
+def test_version() -> None:
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0 and result.stdout == f"noisevault {nv.__version__}\n"
+
+
+@pytest.mark.parametrize("columns", [80, 120])
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["list"],
+        ["show", "ibm_fez", "--qubits", "0,1,2"],
+        ["show", "google_rainbow"],
+        ["diff", "ibm_kyiv", "ibm_brisbane"],
+        ["check", "ibm_manila", "--framework", "cirq,stim"],
+    ],
+    ids=["list", "show-qubits", "show-notes", "diff", "check"],
+)
+def test_output_fits_the_terminal(args: list[str], columns: int) -> None:
+    result = runner.invoke(app, args, env={"COLUMNS": str(columns)})
+    assert result.exit_code == 0, result.output
+    assert max(len(line) for line in result.stdout.splitlines()) <= columns
+
+
+def _pulled_ionq(vault: Path) -> None:
+    """A vault profile with the long license and source label a pulled IonQ profile has."""
+    data = nv.load("quantinuum_h1-1").model_dump(mode="json", exclude_none=True)
+    data["device"] |= {"name": "forte-1", "vendor": "ionq", "processor": "Forte"}
+    data["device"]["calibrated_at"] = "2026-09-29T00:00:00Z"
+    data["provenance"] |= {
+        "license": "IonQ EULA (not an open license)",
+        "source_kind": "public_api",
+        "redistributable": "no",
+    }
+    vault.mkdir(parents=True)
+    Profile.model_validate(data).save(vault / "ionq_forte-1.json.gz")
+
+
+@pytest.mark.parametrize("columns", [80, 120])
+def test_list_keeps_every_cell_whole_with_a_pulled_profile(vault: Path, columns: int) -> None:
+    _pulled_ionq(vault)
+    result = runner.invoke(app, ["list"], env={"COLUMNS": str(columns)})
+    lines = result.stdout.splitlines()
+    assert max(map(len, lines)) <= columns
+    group = lines.index(next(line for line in lines if line.strip() == "trapped_ion"))
+    first = lines[group + 1].split()
+    assert first == [
+        "*",
+        "ionq_forte-1",
+        "2026-09-29",
+        "20",
+        "Forte",
+        "public",
+        "API",
+        "IonQ",
+        "EULA",
+    ]
+    assert lines[group + 2].split()[:3] == ["quantinuum_h1-1", "2025-05-02", "20"]
+    assert "* in your vault" in result.stdout
+
+
+def test_diff_lists_disabled_gates_without_splitting_an_item(tmp_path: Path) -> None:
+    data = nv.load("ibm_fez").model_dump(mode="json", exclude_none=True)
+    data["device"]["calibrated_at"] = "2026-10-01T00:00:00Z"
+    for record in data["calibrations"]:
+        if {27, 28, 71, 72, 129, 130, 153, 154} & set(record["qubits"]):
+            record["disabled"] = True
+    path = tmp_path / "fez_now.json"
+    after = Profile.model_validate(data)
+    after.save(path)
+    expected = set(nv.load("ibm_fez").diff(after).newly_disabled)
+    out = runner.invoke(app, ["diff", "ibm_fez", str(path)], env={"COLUMNS": "80"}).stdout
+    lines = out.splitlines()
+    section = lines[lines.index("newly disabled") + 1 :]
+    shown, gate = set(), None
+    for line in section:
+        if not line.startswith("  "):
+            break
+        tokens = line.replace(",", " ").split()
+        if not re.fullmatch(r"\d+(-\d+)?", tokens[0]):
+            gate, tokens = tokens[0], tokens[1:]
+        shown |= {f"{gate} {locus}" for locus in tokens}
+    assert len(expected) > 20 and shown == expected
+
+
+def test_a_profile_id_that_names_a_folder_here_still_loads(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ibm_manila").mkdir()
+    result = runner.invoke(app, ["show", "ibm_manila"])
+    assert result.exit_code == 0 and result.stdout.startswith("ibm_manila@2024-05-27")
+
+
+def test_no_color_removes_color_codes() -> None:
+    args = ["diff", "ibm_kyiv", "ibm_brisbane"]
+    colored = runner.invoke(app, args, env={"FORCE_COLOR": "1"}).stdout
+    plain = runner.invoke(app, args, env={"FORCE_COLOR": "1", "NO_COLOR": "1"}).stdout
+    color = re.compile(r"\x1b\[[0-9;]*3[0-7]m")
+    assert color.search(colored) and not color.search(plain)
+
+
+@pytest.mark.parametrize(
+    ("args", "error", "hint"),
+    [
+        (["show", "ibm_fezz"], "did you mean ibm_fez?", None),
+        (["show", "ibm_fez@2020-01-01"], "available: ibm_fez@2025-02-26T20:16:25Z", "nv list"),
+        (["show", "missing.json"], "error: no file missing.json", "check the path"),
+        (["cite", "ibm fez"], "is not a profile id", None),
+        (
+            ["check", "ibm_manila", "--framework", "qiskt"],
+            "'qiskt': give one or more of qiskit",
+            None,
+        ),
+        (["list", "--tech", "photonics"], "choose from superconducting, trapped_ion", None),
+        (["show", "ibm_fez", "--qubits", "0,200"], "has qubits 0 to 155", None),
+        (["check", "ibm_manila", "--framework", ""], "--framework '': give one or more", None),
+        (["check", "ibm_manila", "--framework", ","], "--framework ',': give one or more", None),
+        (["show", "./"], "./ is a folder; give a profile file", None),
+    ],
+)
+def test_expected_failures_print_an_error_and_no_traceback(args, error, hint) -> None:
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert result.stderr.startswith("error: ") and error in result.stderr
+    if hint:
+        assert "hint: " in result.stderr and hint in result.stderr
+    assert "Traceback" not in result.output and result.stdout == ""
+
+
+# list and show --------------------------------------------------------------------------------
+
+
+def test_list_groups_profiles_by_technology() -> None:
+    result = runner.invoke(app, ["list"])
+    lines = [line.rstrip() for line in result.stdout.splitlines()]
+    assert lines[0].split() == ["id", "date", "qubits", "processor", "source", "license"]
+    row = next(line for line in lines if line.strip().startswith("ibm_fez "))
+    assert row.split() == ["ibm_fez", "2025-02-26", "156", "Heron", "r2", "package", "Apache-2.0"]
+    assert lines.index("superconducting") < lines.index(row) < lines.index("trapped_ion")
+    assert lines[-1].startswith(f"{len(nv.profiles())} profiles.")
+
+
+def test_list_filters_and_prints_json() -> None:
+    result = runner.invoke(app, ["list", "--tech", "trapped_ion", "--json"])
+    rows = json.loads(result.stdout)
+    assert rows and {r["technology"] for r in rows} == {"trapped_ion"}
+    assert {"id", "date", "num_qubits", "processor", "source_kind", "license"} <= set(rows[0])
+    vendor = json.loads(runner.invoke(app, ["list", "--vendor", "google", "--json"]).stdout)
+    assert {r["id"] for r in vendor} == {"google_rainbow", "google_weber"}
+
+
+def test_show_prints_a_card() -> None:
+    profile = nv.load("ibm_fez")
+    out = runner.invoke(app, ["show", "ibm_fez"]).stdout
+    assert out.startswith(f"ibm_fez@2025-02-26T20:16:25Z  {profile.short_fingerprint}\n")
+    for text in (
+        "ibm, Heron r2, superconducting, 156 qubits",
+        "176 edges, 1 to 3 neighbors per qubit",
+        "rz (1q)",
+        "virtual",
+        "176 (7 disabled)",
+        "median T1 144.9 us",
+        "redistributable yes",
+        profile.fingerprint,
+    ):
+        assert text in out
+    cz = next(line for line in out.splitlines() if "cz (2q)" in line)
+    assert cz.split()[-8:] == ["cz", "(2q)", "3.82e-03", "84", "ns", "176", "(7", "disabled)"]
+
+
+def test_show_qubits_and_json() -> None:
+    data = json.loads(runner.invoke(app, ["show", "ibm_fez", "--qubits", "0,5", "--json"]).stdout)
+    assert [q["qubit"] for q in data["qubits"]] == [0, 5]
+    table = nv.load("ibm_fez").table
+    assert data["qubits"][1]["t1_us"] == pytest.approx(table.qubit(5).t1_ns / 1000)
+    assert data["connectivity"] == {
+        "kind": "edges",
+        "edges": 176,
+        "directed": False,
+        "min_degree": 1,
+        "max_degree": 3,
+    }
+    cz = next(n for n in data["natives"] if n["gate"] == "cz")
+    assert cz["records"] == 176 and cz["disabled"] == 7
+    text = runner.invoke(app, ["show", "ibm_fez", "--qubits", "0,5"]).stdout
+    assert re.search(r"^\s+5\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+ \(sx\)", text, re.M)
+    assert data["qubits"][1]["gate_1q"] == "sx"
+
+
+def test_show_all_to_all_and_notes() -> None:
+    out = runner.invoke(app, ["show", "quantinuum_h1-1"], env={"COLUMNS": "200"}).stdout
+    assert "all-to-all" in out and "device-wide" in out
+    assert "T1 and T2 unknown" in out and re.search(r"not modeled\s+leakage on r\s", out)
+
+
+# pull ---------------------------------------------------------------------------------------
+
+
+def test_pull_saves_to_the_vault_and_prints_the_card(monkeypatch, vault: Path) -> None:
+    from noisevault.sources import ibm_public
+
+    pulled = nv.load("ibm_fez")
+    monkeypatch.setattr(ibm_public, "pull", lambda device, at=None: pulled)
+    result = runner.invoke(app, ["pull", "ibm_fez"])
+    assert result.exit_code == 0, result.output
+    (saved,) = vault.glob("*.json.gz")
+    assert f"saved: {saved}" in result.stdout and "ibm_fez@2025-02-26" in result.stdout
+    assert nv.load(str(saved)).fingerprint == pulled.fingerprint
+
+
+def test_pull_to_a_file(monkeypatch, tmp_path: Path) -> None:
+    from noisevault.sources import ionq
+
+    monkeypatch.setattr(ionq, "pull", lambda device, at=None: nv.load("quantinuum_h1-1"))
+    target = tmp_path / "forte.json"
+    result = runner.invoke(app, ["pull", "ionq_forte-1", "-o", str(target)])
+    assert result.exit_code == 0 and target.exists() and f"saved: {target}" in result.stdout
+
+
+def test_pull_network_failure_gives_one_piece_of_advice(monkeypatch) -> None:
+    import urllib.error
+    import urllib.request
+
+    def offline(*args, **kwargs):
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(urllib.request, "urlopen", offline)
+    result = runner.invoke(app, ["pull", "ibm_fez", "--at", "2025-01-01"])
+    assert result.exit_code == 1
+    assert result.stderr.startswith("error: could not reach IBM's public endpoint (timed out)")
+    assert result.stderr.count("check the network") == 1 and "hint:" not in result.stderr
+    assert "Traceback" not in result.output
+
+
+def test_pull_errors_name_flags_not_python_arguments(monkeypatch) -> None:
+    from noisevault.sources import ibm_account, ibm_public
+
+    def no_account(device, at=None):
+        raise SourceUnavailable(
+            f"could not open your IBM Quantum account (no token); {ibm_account.SETUP}"
+        )
+
+    def not_listed(url):
+        raise ibm_public._NotFound(url)
+
+    monkeypatch.setattr(ibm_account, "pull", no_account)
+    result = runner.invoke(app, ["pull", "ibm_fez", "--source", "ibm-account"])
+    assert result.exit_code == 1
+    assert "to pull without an account use --source ibm" in result.stderr
+    assert "source=" not in result.stderr and "hint:" not in result.stderr
+    monkeypatch.setattr(ibm_public, "fetch", not_listed)
+    result = runner.invoke(app, ["pull", "ibm_fez"])
+    assert "try `nv show ibm_fez` for the bundled snapshot or --source ibm-account" in result.stderr
+
+
+def test_pull_checks_the_output_folder_before_fetching(monkeypatch, tmp_path: Path) -> None:
+    from noisevault.sources import ibm_public
+
+    calls = []
+    monkeypatch.setattr(ibm_public, "pull", lambda device, at=None: calls.append(device))
+    result = runner.invoke(app, ["pull", "ibm_fez", "-o", str(tmp_path / "no" / "x.json")])
+    assert result.exit_code == 1 and calls == []
+    assert f"the folder {tmp_path / 'no'} does not exist" in result.stderr
+
+
+def test_pull_of_an_unsupported_vendor_says_which_sources_exist() -> None:
+    result = runner.invoke(app, ["pull", "rigetti_ankaa-3"])
+    assert result.exit_code == 1 and "IonQ devices" in result.stderr
+
+
+# diff, check, cite, schema, doctor --------------------------------------------------------------
+
+
+def test_diff_prints_tables_and_json() -> None:
+    result = runner.invoke(app, ["diff", "ibm_kyiv", "ibm_brisbane", "--top", "2"])
+    assert result.exit_code == 0
+    out = result.stdout
+    assert out.startswith("ibm_kyiv@2025-02-26 -> ibm_brisbane@2025-02-26")
+    assert "largest changes by qubit" in out and "largest changes by pair" in out
+    assert "warning: these are different devices" in result.stderr
+    data = json.loads(runner.invoke(app, ["diff", "ibm_kyiv", "ibm_brisbane", "--json"]).stdout)
+    assert data == nv.load("ibm_kyiv").diff(nv.load("ibm_brisbane")).to_dict()
+
+
+def test_diff_of_identical_profiles() -> None:
+    result = runner.invoke(app, ["diff", "ibm_fez", "ibm_fez@2025-02-26"])
+    assert result.exit_code == 0 and "No change" in result.stdout
+
+
+def test_check_prints_a_table_per_framework() -> None:
+    result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq,pennylane"])
+    assert result.exit_code == 0, result.output
+    rows = {line.split()[0]: line.split() for line in result.stdout.splitlines() if line}
+    assert rows["cirq"][1] == "pass" and rows["pennylane"][1] == "pass"
+    assert "qiskit" not in rows
+    assert "not a measure of how well the model matches the hardware" in " ".join(
+        result.stdout.split()
+    )
+
+
+def test_check_failure_exits_1(monkeypatch) -> None:
+    from noisevault.frameworks import cirq as nv_cirq
+
+    monkeypatch.setattr(nv_cirq.NoiseVaultNoiseModel, "_noise", lambda self, *a: [])
+    result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq"])
+    assert result.exit_code == 1 and "FAIL" in result.stdout
+
+
+def test_check_json_and_skips() -> None:
+    result = runner.invoke(
+        app, ["check", "quantinuum_h1-1", "--framework", "pennylane,cirq", "--json"]
+    )
+    data = json.loads(result.stdout)
+    assert [f["framework"] for f in data["frameworks"]] == ["cirq"]
+    assert data["skipped"][0]["framework"] == "pennylane"
+    assert result.exit_code == 0
+
+
+def test_cite() -> None:
+    profile = nv.load("ibm_fez")
+    text = runner.invoke(app, ["cite", "ibm_fez"]).stdout
+    assert text == profile.citation() + "\n"
+    bibtex = runner.invoke(app, ["cite", "ibm_fez", "--bibtex"]).stdout
+    assert bibtex.startswith("@misc{nv_ibm_fez_2025_02_26,") and profile.fingerprint in bibtex
+
+
+def test_schema_is_the_format_json_schema() -> None:
+    result = runner.invoke(app, ["schema"])
+    assert result.exit_code == 0 and json.loads(result.stdout) == nv.json_schema()
+
+
+def test_doctor_lists_frameworks_and_the_vault(vault: Path) -> None:
+    out = runner.invoke(app, ["doctor"]).stdout
+    for package in ("qiskit", "cirq-core", "pennylane", "stim"):
+        line = next(line for line in out.splitlines() if line.split()[:1] == [package])
+        assert line.split()[1] == version(package)
+    assert f"vault: {vault} (0 profiles)" in out
+    assert f"bundled profiles: {len(nv.catalog.bundled_profiles())}" in out

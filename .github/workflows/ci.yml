@@ -2,25 +2,112 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_SYSTEM_PYTHON: "1"
+  PYTHONUNBUFFERED: "1"
+
 jobs:
-  test:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv pip install ruff==0.16.9
+      - run: ruff check .
+      - run: ruff format --check .
+
+  core:
+    name: core install (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e '.[dev]'
-      - run: ruff check src tests
-      - run: ruff format --check src tests
+      - uses: astral-sh/setup-uv@v6
+      - run: uv pip install -e . pytest
+      # Framework tests skip here; this job proves the core works without any framework.
       - run: pytest -q
+
+  full:
+    name: full install (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv pip install -e '.[all,dev]'
+      - run: pytest -q --ignore=tests/test_examples.py
+        env:
+          NOISEVAULT_REQUIRE_ALL: "1"
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build --out-dir dist
+      - name: Wheel is smaller than 3 MB
+        run: |
+          size=$(stat -c %s dist/*.whl)
+          echo "wheel: ${size} bytes"
+          test "$size" -lt 3000000
+      - name: Install the wheel in a fresh venv outside the checkout
+        run: |
+          cd "$RUNNER_TEMP"
+          python -m venv wheel-env
+          wheel-env/bin/pip install "$GITHUB_WORKSPACE"/dist/*.whl
+          wheel-env/bin/nv list
+          wheel-env/bin/nv show ibm_fez
+          wheel-env/bin/python - <<'EOF'
+          import sys
+
+          import noisevault as nv
+
+          frameworks = {"qiskit", "qiskit_aer", "cirq", "pennylane", "stim"}
+          loaded = sorted(frameworks & set(sys.modules))
+          assert not loaded, f"import noisevault imported {loaded}"
+          assert len(nv.profiles()) == 25, len(nv.profiles())
+          print(nv.load("ibm_fez").summary())
+          EOF
+
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      # Python 3.12 so the Mitiq example runs too: Mitiq supports Python up to 3.12.
+      - run: uv pip install -e '.[all,dev]' matplotlib mitiq ply
+      - run: pytest -q tests/test_examples.py
         env:
           NOISEVAULT_REQUIRE_ALL: "1"

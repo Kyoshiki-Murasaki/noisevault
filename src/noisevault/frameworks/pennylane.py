@@ -4,7 +4,9 @@ Use it with ``qml.add_noise(qnode, model)`` on ``default.mixed``. Every gate get
 shared conversion rules assign to it on its physical qubits, as ``qml.QubitChannel`` operations
 after the gate. Readout confusion goes right before each computational-basis measurement, on every
 wire the circuit touches so that all such measurements share one simulation, and before each
-Pauli measurement in its measured basis.
+Pauli measurement in its measured basis. A measurement without wires (``qml.probs()``,
+``qml.sample()``, ``qml.counts()``) reads every device wire; it gets readout confusion on the
+wires the circuit's operations touch, because a noise model never sees the device's wires.
 """
 
 from __future__ import annotations
@@ -94,6 +96,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         self._cache: dict[tuple[str, tuple[int, ...]], CacheEntry] = {}
         self._tape_wires: dict[Hashable, None] = {}  # ordered set of wires the current tape uses
         gate_map = {
+            qml.BooleanFn(_any_op, "NoiseVaultWires"): self._touch,
             qml.BooleanFn(_is_gate, "NoiseVaultGate"): self._gate_noise,
             qml.BooleanFn(_is_reset, "NoiseVaultReset"): self._reset_noise,
         }
@@ -120,8 +123,11 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             return f"a list layout covers wires 0 to {len(self._layout) - 1}; extend the list"
         return f"add it: layout={{..., {wire!r}: <physical qubit>}}"
 
-    def _gate_noise(self, op: Operator, **_: Any) -> None:
+    def _touch(self, op: Operator, **_: Any) -> None:
+        """Record the wires of every operation; add_noise runs this before any measurement."""
         self._tape_wires.update(dict.fromkeys(op.wires))
+
+    def _gate_noise(self, op: Operator, **_: Any) -> None:
         gate = _unconditional(op)
         if gate is not op:
             self.report.approximate(
@@ -135,7 +141,6 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             qml.QubitChannel(list(kraus), wires=[wire_of[q] for q in qubits])
 
     def _reset_noise(self, op: MidMeasureMP, **_: Any) -> None:
-        self._tape_wires.update(dict.fromkeys(op.wires))
         qubit = self.physical_qubit(op.wires[0])
         error = self.profile.table.qubit(qubit).prep_error
         if error is None:
@@ -169,10 +174,11 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
 
     def _readout_noise(self, mp: Any, **_: Any) -> None:
         if not mp.wires:
-            raise LayoutError(
-                f"{type(mp).__name__} without wires measures every device wire, which the noise"
-                " model cannot see; pass wires explicitly (e.g. qml.probs(wires=range(n))) or"
-                " build the model with readout=False"
+            self.report.approximate(
+                "readout of measurements without wires",
+                "applied to every wire the circuit's operations touch",
+                "a device wire no operation touches reads out without error; pass wires="
+                " to give it readout error",
             )
         self._tape_wires.update(dict.fromkeys(mp.wires))
         basis = _measured_basis(mp.obs)
@@ -190,7 +196,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
                 "ideal rotation around the readout confusion",
                 "add the rotation to the circuit to give it gate noise",
             )
-        for wire in mp.wires:
+        for wire in mp.wires or self._tape_wires:
             if self._readout_matrix(wire) is None:
                 self.report.mark_unknown(f"readout on qubit {self.physical_qubit(wire)}")
         # Confusion on an unmeasured wire leaves the measured marginals alone, and identical
@@ -272,6 +278,10 @@ def _labels(layout: Layout) -> list[Hashable]:
 
 def _unconditional(op: Operator) -> Operator:
     return op.base if isinstance(op, Conditional) else op
+
+
+def _any_op(op: Operator) -> bool:
+    return True
 
 
 def _is_gate(op: Operator) -> bool:

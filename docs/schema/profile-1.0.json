@@ -1,0 +1,1259 @@
+{
+  "$defs": {
+    "CalibrationRecord": {
+      "additionalProperties": false,
+      "description": "Calibration of one gate on specific qubits; overrides the definition field by field.",
+      "properties": {
+        "gate": {
+          "title": "Gate",
+          "type": "string"
+        },
+        "qubits": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Qubits",
+          "type": "array"
+        },
+        "avg_infidelity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avg Infidelity"
+        },
+        "process_infidelity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Process Infidelity"
+        },
+        "depolarizing_param": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Depolarizing Param"
+        },
+        "pauli": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pauli"
+        },
+        "duration_ns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ns"
+        },
+        "virtual": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Virtual"
+        },
+        "disabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Disabled"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "enum": [
+                "rb",
+                "irb",
+                "srb",
+                "xeb",
+                "gst",
+                "layer",
+                "model",
+                "vendor"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Method"
+        },
+        "measured": {
+          "anyOf": [
+            {
+              "enum": [
+                "isolated",
+                "simultaneous"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Measured"
+        },
+        "statistic": {
+          "anyOf": [
+            {
+              "enum": [
+                "individual",
+                "median",
+                "mean"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Statistic"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "enum": [
+                "gate",
+                "cycle"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope"
+        },
+        "includes": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "1q_dressing",
+                  "leakage",
+                  "spam"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Includes"
+        },
+        "stderr": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stderr"
+        },
+        "assumption": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assumption"
+        }
+      },
+      "required": [
+        "gate",
+        "qubits"
+      ],
+      "title": "CalibrationRecord",
+      "type": "object"
+    },
+    "Connectivity": {
+      "additionalProperties": false,
+      "properties": {
+        "directed": {
+          "default": false,
+          "title": "Directed",
+          "type": "boolean"
+        },
+        "edges": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Edges",
+          "type": "array"
+        }
+      },
+      "required": [
+        "edges"
+      ],
+      "title": "Connectivity",
+      "type": "object"
+    },
+    "Device": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "vendor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vendor"
+        },
+        "technology": {
+          "enum": [
+            "superconducting",
+            "trapped_ion",
+            "neutral_atom",
+            "spin",
+            "photonic",
+            "other"
+          ],
+          "title": "Technology",
+          "type": "string"
+        },
+        "num_qubits": {
+          "minimum": 1,
+          "title": "Num Qubits",
+          "type": "integer"
+        },
+        "processor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Processor"
+        },
+        "calibrated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibrated At"
+        }
+      },
+      "required": [
+        "name",
+        "technology",
+        "num_qubits"
+      ],
+      "title": "Device",
+      "type": "object"
+    },
+    "Effect": {
+      "additionalProperties": false,
+      "description": "Physics the format records but no adapter implements yet (always reported omitted).",
+      "properties": {
+        "type": {
+          "enum": [
+            "leakage",
+            "atom_loss",
+            "erasure",
+            "crosstalk_measurement",
+            "crosstalk_zz",
+            "coherent_overrotation"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "gate": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gate"
+        },
+        "on": {
+          "anyOf": [
+            {
+              "enum": [
+                "readout",
+                "idle"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "On"
+        },
+        "qubits": {
+          "anyOf": [
+            {
+              "items": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qubits"
+        },
+        "prob": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prob"
+        },
+        "rate_per_s": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rate Per S"
+        },
+        "strength_hz": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Strength Hz"
+        },
+        "angle_rad": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Angle Rad"
+        },
+        "heralded": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Heralded"
+        },
+        "allow": {
+          "default": "omit",
+          "enum": [
+            "omit",
+            "approximate",
+            "exact"
+          ],
+          "title": "Allow",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Effect",
+      "type": "object"
+    },
+    "GateSpec": {
+      "additionalProperties": false,
+      "description": "A gate definition: arity, direction and device-wide defaults.",
+      "properties": {
+        "avg_infidelity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avg Infidelity"
+        },
+        "process_infidelity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Process Infidelity"
+        },
+        "depolarizing_param": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Depolarizing Param"
+        },
+        "pauli": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pauli"
+        },
+        "duration_ns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ns"
+        },
+        "virtual": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Virtual"
+        },
+        "disabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Disabled"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "enum": [
+                "rb",
+                "irb",
+                "srb",
+                "xeb",
+                "gst",
+                "layer",
+                "model",
+                "vendor"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Method"
+        },
+        "measured": {
+          "anyOf": [
+            {
+              "enum": [
+                "isolated",
+                "simultaneous"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Measured"
+        },
+        "statistic": {
+          "anyOf": [
+            {
+              "enum": [
+                "individual",
+                "median",
+                "mean"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Statistic"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "enum": [
+                "gate",
+                "cycle"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope"
+        },
+        "includes": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "1q_dressing",
+                  "leakage",
+                  "spam"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Includes"
+        },
+        "stderr": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stderr"
+        },
+        "assumption": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assumption"
+        },
+        "qubits": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qubits"
+        },
+        "symmetric": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symmetric"
+        }
+      },
+      "title": "GateSpec",
+      "type": "object"
+    },
+    "Idle": {
+      "additionalProperties": false,
+      "properties": {
+        "t1_us": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T1 Us"
+        },
+        "t2_us": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T2 Us"
+        },
+        "t2_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "echo",
+                "ramsey",
+                "cpmg"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T2 Kind"
+        },
+        "dephasing_rate_per_s": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dephasing Rate Per S"
+        }
+      },
+      "title": "Idle",
+      "type": "object"
+    },
+    "Prep": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Error",
+          "type": "number"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "Prep",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "data_kind": {
+          "default": "unknown",
+          "enum": [
+            "measured",
+            "vendor_model",
+            "spec_sheet",
+            "hypothetical",
+            "unknown"
+          ],
+          "title": "Data Kind",
+          "type": "string"
+        },
+        "source_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "package_snapshot",
+                "public_api",
+                "account_api",
+                "user_file",
+                "published_data",
+                "vendor_sample",
+                "hand_written",
+                "derived",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Kind"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        },
+        "license": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "License"
+        },
+        "attribution": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attribution"
+        },
+        "redistributable": {
+          "default": "unknown",
+          "enum": [
+            "yes",
+            "no",
+            "unknown"
+          ],
+          "title": "Redistributable",
+          "type": "string"
+        },
+        "retrieved_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retrieved At"
+        },
+        "source_hash": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Hash"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool"
+        },
+        "derived_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Derived From"
+        },
+        "notes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "extra": {
+          "additionalProperties": true,
+          "title": "Extra",
+          "type": "object"
+        }
+      },
+      "title": "Provenance",
+      "type": "object"
+    },
+    "QubitRecord": {
+      "additionalProperties": false,
+      "description": "Per-qubit values; idle fields override ``idle`` one by one, readout and prep as a whole.",
+      "properties": {
+        "index": {
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "t1_us": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T1 Us"
+        },
+        "t2_us": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T2 Us"
+        },
+        "t2_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "echo",
+                "ramsey",
+                "cpmg"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T2 Kind"
+        },
+        "dephasing_rate_per_s": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dephasing Rate Per S"
+        },
+        "readout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Readout"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "prep": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Prep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "coords": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coords"
+        },
+        "disabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Disabled"
+        }
+      },
+      "required": [
+        "index"
+      ],
+      "title": "QubitRecord",
+      "type": "object"
+    },
+    "Readout": {
+      "additionalProperties": false,
+      "properties": {
+        "p1_given_0": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P1 Given 0"
+        },
+        "p0_given_1": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P0 Given 1"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "duration_ns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ns"
+        }
+      },
+      "title": "Readout",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "noisevault": {
+      "const": "1.0",
+      "title": "Noisevault",
+      "type": "string"
+    },
+    "device": {
+      "$ref": "#/$defs/Device"
+    },
+    "connectivity": {
+      "anyOf": [
+        {
+          "const": "all_to_all",
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/Connectivity"
+        }
+      ],
+      "title": "Connectivity"
+    },
+    "gates": {
+      "additionalProperties": {
+        "$ref": "#/$defs/GateSpec"
+      },
+      "title": "Gates",
+      "type": "object"
+    },
+    "readout": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Readout"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "prep": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Prep"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "idle": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Idle"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "qubits": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/QubitRecord"
+      },
+      "title": "Qubits",
+      "type": "array"
+    },
+    "calibrations": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CalibrationRecord"
+      },
+      "title": "Calibrations",
+      "type": "array"
+    },
+    "effects": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Effect"
+      },
+      "title": "Effects",
+      "type": "array"
+    },
+    "benchmarks": {
+      "additionalProperties": true,
+      "title": "Benchmarks",
+      "type": "object"
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    },
+    "extensions": {
+      "additionalProperties": true,
+      "title": "Extensions",
+      "type": "object"
+    }
+  },
+  "required": [
+    "noisevault",
+    "device",
+    "connectivity",
+    "gates"
+  ],
+  "title": "Profile",
+  "type": "object"
+}

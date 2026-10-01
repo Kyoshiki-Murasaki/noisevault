@@ -3,6 +3,8 @@
 Needs: pip install 'noisevault[stim]' pymatching
 """
 
+import textwrap
+
 import numpy as np
 import pymatching
 import stim
@@ -31,6 +33,7 @@ def grid_device(side: int) -> nv.Profile:
     )
     data = device.to_dict()
     data["qubits"] = [{"index": i, "coords": divmod(i, side)} for i in range(side * side)]
+    data["prep"] = {"error": 1e-3}  # the code resets ancillas every round
     return nv.Profile.from_dict(data)
 
 
@@ -46,4 +49,8 @@ for distance in (3, 5):
     failures = np.sum(matching.decode_batch(detectors)[:, 0] != observables[:, 0])
     print(f"d={distance}: logical error per {distance}-round memory = {failures / SHOTS:.4f}")
 
-print(noisy.report.summary())
+print()
+# The report's approximated and omitted lines say where the simulation differs from the device.
+for line in noisy.report.summary().splitlines():
+    if line.startswith(("NoiseVault", "approximated", "omitted", "unknown", "clamped")):
+        print(textwrap.fill(line, 88, subsequent_indent="    "))

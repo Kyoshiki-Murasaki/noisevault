@@ -1,0 +1,183 @@
+"""The examples and the code in docs/ run as written, and docs/schema matches the code.
+
+Each example and each Python block in docs/ runs alone in a fresh interpreter with an empty
+vault. The ``# `` comment lines after a block's last print show its output and must appear in
+what it prints. A missing optional package skips the run, unless NOISEVAULT_REQUIRE_ALL=1.
+Tests that need the network run only with NOISEVAULT_NETWORK=1. A Python block preceded by a
+``<!-- not-run: reason -->`` comment is skipped.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from importlib.util import find_spec
+from pathlib import Path
+
+import pytest
+
+import noisevault as nv
+
+ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES = ROOT / "examples"
+DOCS = ROOT / "docs"
+SCHEMA = DOCS / "schema" / "profile-1.0.json"
+HAS_MITIQ = find_spec("mitiq") is not None and find_spec("ply") is not None
+# optional packages that the "all" extra does not install, so NOISEVAULT_REQUIRE_ALL never demands
+OUTSIDE_ALL = {"mitiq", "ply"}
+
+# example -> text its output must contain
+LOCAL_EXAMPLES = {
+    "quickstart.py": "GHZ success (000 or 111)",
+    "pennylane_gradient.py": "step 30",
+    "cirq_google.py": "linear XEB fidelity",
+    "custom_device.py": "omitted: effect atom_loss on readout",
+    "qec_surface_code.py": "d=5: logical error",
+}
+OTHER_EXAMPLES = {"compare_devices.py", "drift.py", "mitigation_zne.py"}
+
+FENCE = re.compile(r"^```(\w*)[^\n]*\n(.*?)^```", re.S | re.M)
+NOT_RUN = re.compile(r"<!--\s*not-run:[^>]*-->\s*$")
+
+
+def run(
+    tmp_path: Path, *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
+    environment = {
+        **os.environ,
+        "NOISEVAULT_HOME": str(tmp_path / "nv_home"),
+        "MPLBACKEND": "Agg",
+        **(env or {}),
+    }
+    return subprocess.run(
+        [sys.executable, *args],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+
+
+def skip_if_optional_missing(result: subprocess.CompletedProcess) -> None:
+    """Skip when the run failed only because an optional package is not installed."""
+    missing = re.search(r"ModuleNotFoundError: No module named '(\w+)", result.stderr)
+    if result.returncode == 0 or missing is None or missing.group(1) == "noisevault":
+        return
+    if os.environ.get("NOISEVAULT_REQUIRE_ALL") == "1" and missing.group(1) not in OUTSIDE_ALL:
+        pytest.fail(f"{missing.group(1)} must be installed when NOISEVAULT_REQUIRE_ALL=1")
+    pytest.skip(f"{missing.group(1)} is not installed")
+
+
+def check(result: subprocess.CompletedProcess, expected: str) -> None:
+    skip_if_optional_missing(result)
+    assert result.returncode == 0, result.stderr[-3000:]
+    assert expected in result.stdout, result.stdout[-3000:]
+
+
+def test_every_example_is_listed() -> None:
+    found = {path.name for path in EXAMPLES.glob("*.py")}
+    assert found == set(LOCAL_EXAMPLES) | OTHER_EXAMPLES
+
+
+@pytest.mark.parametrize("name", sorted(LOCAL_EXAMPLES))
+def test_example_runs(name: str, tmp_path: Path) -> None:
+    check(run(tmp_path, str(EXAMPLES / name)), LOCAL_EXAMPLES[name])
+
+
+def test_compare_devices_writes_the_figure(tmp_path: Path) -> None:
+    out = tmp_path / "compare.svg"
+    check(run(tmp_path, str(EXAMPLES / "compare_devices.py"), str(out)), "toy-atoms")
+    assert out.read_text(encoding="utf-8").lstrip().startswith("<?xml")
+
+
+def test_drift_exits_cleanly_offline(tmp_path: Path) -> None:
+    closed_port = "http://127.0.0.1:9"
+    result = run(
+        tmp_path,
+        str(EXAMPLES / "drift.py"),
+        env={"HTTPS_PROXY": closed_port, "https_proxy": closed_port},
+    )
+    check(result, "skipped: could not reach IBM's public endpoint")
+
+
+@pytest.mark.network
+def test_drift_pulls_and_diffs(tmp_path: Path) -> None:
+    check(run(tmp_path, str(EXAMPLES / "drift.py")), "device median")
+
+
+@pytest.mark.skipif(not HAS_MITIQ, reason="mitiq and ply are not installed (Python <= 3.12)")
+def test_mitigation_zne_runs(tmp_path: Path) -> None:
+    check(run(tmp_path, str(EXAMPLES / "mitigation_zne.py")), "ZNE       P(000)")
+
+
+@pytest.mark.skipif(HAS_MITIQ, reason="mitiq is installed")
+def test_mitigation_zne_says_how_to_install_mitiq(tmp_path: Path) -> None:
+    result = run(tmp_path, str(EXAMPLES / "mitigation_zne.py"))
+    assert result.returncode == 1
+    assert "pip install mitiq ply" in result.stdout
+
+
+@dataclass(frozen=True)
+class Block:
+    doc: str
+    line: int
+    code: str
+
+    @property
+    def expected(self) -> list[str]:
+        """Output lines a ``# `` comment after the last print shows; text before ``...`` only."""
+        lines = self.code.splitlines()
+        prints = [i for i, line in enumerate(lines) if "print(" in line]
+        if not prints:
+            return []
+        shown = [line[2:] for line in lines[prints[-1] + 1 :] if line.startswith("# ")]
+        return [text.split("...", 1)[0].rstrip() for text in shown if not text.startswith("...")]
+
+
+def fenced(path: Path, language: str) -> list[Block]:
+    text = path.read_text(encoding="utf-8")
+    blocks = []
+    for match in FENCE.finditer(text):
+        before = text[: match.start()].rstrip().rsplit("\n", 1)[-1]
+        if match.group(1) == language and not NOT_RUN.search(before):
+            line = text.count("\n", 0, match.start()) + 1
+            blocks.append(Block(path.name, line, match.group(2)))
+    return blocks
+
+
+DOC_BLOCKS = [block for path in sorted(DOCS.glob("*.md")) for block in fenced(path, "python")]
+
+
+def test_docs_have_code() -> None:
+    assert len({block.doc for block in DOC_BLOCKS}) >= 5, DOC_BLOCKS
+
+
+@pytest.mark.parametrize("block", DOC_BLOCKS, ids=lambda block: f"{block.doc}:{block.line}")
+def test_doc_python_block_runs_and_prints_what_it_shows(block: Block, tmp_path: Path) -> None:
+    script = tmp_path / "doc.py"
+    script.write_text(block.code, encoding="utf-8")
+    result = run(tmp_path, str(script))
+    skip_if_optional_missing(result)
+    assert result.returncode == 0, result.stderr[-3000:]
+    for line in block.expected:
+        assert line in result.stdout, f"{line!r} not in output:\n{result.stdout[-3000:]}"
+
+
+@pytest.mark.parametrize("name", sorted(p.name for p in DOCS.glob("*.md")))
+def test_doc_profiles_are_valid(name: str) -> None:
+    for block in fenced(DOCS / name, "json"):
+        if '"noisevault"' in block.code:
+            nv.Profile.from_dict(json.loads(block.code))
+
+
+def test_schema_file_is_current() -> None:
+    expected = json.dumps(nv.json_schema(), indent=2) + "\n"
+    assert SCHEMA.read_text(encoding="utf-8") == expected, (
+        "docs/schema/profile-1.0.json is stale; regenerate it with:"
+        " nv schema > docs/schema/profile-1.0.json"
+    )
