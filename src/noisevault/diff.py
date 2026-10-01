@@ -33,8 +33,8 @@ DEFAULT = "default"  # all-to-all pairs without a 2-qubit record
 METRICS: dict[str, tuple[str, bool]] = {
     "t1_us": ("T1 (us)", True),
     "t2_us": ("T2 (us)", True),
-    "error_1q": ("1q error", False),
-    "error_2q": ("2q error", False),
+    "error_1q": ("1q avg infidelity", False),
+    "error_2q": ("2q avg infidelity", False),
     "readout_error": ("readout error", False),
 }
 
@@ -109,7 +109,7 @@ class ProfileDiff:
             if changes:
                 lines.append(f"largest changes by {title[:-1]}:")
                 lines += [
-                    f"  {_where(title, c.where):<14} {METRICS[c.metric][0]:<14}"
+                    f"  {_where(title, c.where):<14} {METRICS[c.metric][0]:<17}"
                     f" {fmt_metric(c.metric, c.before)} -> {fmt_metric(c.metric, c.after)}"
                     f" ({fmt_relative(c.relative)})"
                     for c in changes

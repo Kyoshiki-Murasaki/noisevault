@@ -613,6 +613,18 @@ def test_citation_names_source_and_full_fingerprint() -> None:
     assert bib.startswith("@misc{nv_test_toy") and "Test Lab" in bib and profile.fingerprint in bib
 
 
+def test_citation_names_the_noisevault_version_and_the_ref_to_load() -> None:
+    data = toy()
+    undated = Profile.model_validate(data)
+    assert f"NoiseVault {nv.__version__} profile test_toy, fingerprint" in undated.citation()
+    data["device"]["calibrated_at"] = "2025-02-26T09:12:00Z"
+    dated = Profile.model_validate(data)
+    ref = f"NoiseVault {nv.__version__} profile test_toy@2025-02-26T09:12:00Z"
+    assert f"{ref}, fingerprint sha256:{dated.fingerprint}." in dated.citation()
+    bib = ref.replace("_", "\\_")
+    assert f"howpublished = {{{bib}, sha256:{dated.fingerprint}}}" in dated.citation("bibtex")
+
+
 def test_undated_citation_states_no_year() -> None:
     data = toy()
     bib = Profile.model_validate(data).citation("bibtex")

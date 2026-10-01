@@ -559,7 +559,7 @@ def _run(
     ]
     if not checks:
         reasons = dict.fromkeys(part for n in not_run for part in n.reason.split("; "))
-        return "no check circuit can be expressed: " + "; ".join(reasons)
+        return " ".join(f"{reason[:1].upper()}{reason[1:]}." for reason in reasons)
     # The widest circuit's outcomes can be uniform, which readout error leaves unchanged, so
     # the measurement-only circuit is sampled through the framework's measurement as well.
     widest = max((c for c in circuits if c.ops), key=lambda c: c.num_qubits)
@@ -849,7 +849,10 @@ class _Stim(_Runner):
                 f"Stim's {equal[0]} equals {op.name} here but takes the profile's {charged} noise"
             )
         if gates.GATES[op.name].params:
-            return f"{op.name} at the check angles is no Clifford gate, and Stim holds only those"
+            return (
+                f"Stim simulates only Clifford gates, and this profile's {op.name} gate is not"
+                " Clifford at the check angles"
+            )
         return f"Stim has no {op.name} instruction"
 
     def run(self, circuit: Circuit, shots: int, seed: int | None) -> np.ndarray:

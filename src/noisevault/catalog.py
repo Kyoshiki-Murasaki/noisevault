@@ -73,7 +73,7 @@ class ProfileInfo:
 
     @property
     def ref(self) -> str:
-        return f"{self.id}@{_stamp(self.calibrated_at)}" if self.calibrated_at else self.id
+        return _ref(self.id, self.calibrated_at)
 
     def load(self) -> Profile:
         return load_bytes(self.path.read_bytes())
@@ -274,15 +274,14 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
         newest = max(_epoch(i.calibrated_at) for i in candidates)
         matches = [i for i in candidates if _epoch(i.calibrated_at) == newest]
     if not matches:
-        dates = ", ".join(sorted(i.ref for i in candidates))
-        raise ProfileNotFound(f"no {ref.id} profile at that time; available: {dates}")
+        raise ProfileNotFound(_no_calibration(ref, candidates))
     if expect is not None:
         want = _expect_prefix(expect)
         pinned = [i for i in matches if i.fingerprint.startswith(want)]
         if not pinned:
-            found = ", ".join(f"nv:{i.fingerprint[:12]}" for i in matches)
             raise FingerprintMismatch(
-                f"{ref.id} at that time is {found}, not the expected {expect}"
+                f"{_loaded(ref, matches)}, not the expected {expect}"
+                + _pinned_elsewhere(ref.id, want, known)
             )
         matches = pinned
     shadowed = {_epoch(i.calibrated_at) for i in matches if i.location == "vault"}
@@ -310,11 +309,12 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
     if isinstance(target, Path):
         if not target.exists():
             raise ProfileNotFound(f"no file {target}")
-        profile = load_file(target)
+        path, profile = target, load_file(target)
     else:
-        profile = resolve(target, expect=expect).load()
+        info = resolve(target, expect=expect)
+        path, profile = info.path, info.load()
     if expect is not None:
-        _check_expect(profile, expect)
+        _check_expect(profile, expect, path)
     return profile
 
 
@@ -392,10 +392,14 @@ def pull_and_save(
 _DEFAULT_SOURCES = {"ibm_": "ibm", "ionq": "ionq"}  # id prefix -> source that pulls it
 
 
+def _pull_source(device: str) -> str | None:
+    return next((s for p, s in _DEFAULT_SOURCES.items() if device.lower().startswith(p)), None)
+
+
 def _default_source(device: str) -> str:
-    for prefix, source in _DEFAULT_SOURCES.items():
-        if device.lower().startswith(prefix):
-            return source
+    source = _pull_source(device)
+    if source is not None:
+        return source
     bundled = any(i.id == device for i in bundled_profiles())
     hint = f"; {device} is bundled, so nv.load({device!r}) loads it offline" if bundled else ""
     raise SourceUnavailable(
@@ -427,12 +431,53 @@ def _expect_prefix(expect: str) -> str:
     return want
 
 
-def _check_expect(profile: Profile, expect: str) -> None:
-    if not profile.fingerprint.startswith(_expect_prefix(expect)):
+def _check_expect(profile: Profile, expect: str, path: Path | Traversable) -> None:
+    want = _expect_prefix(expect)
+    if not profile.fingerprint.startswith(want):
+        held = _ref(profile.id, profile.device.calibrated_at)
         raise FingerprintMismatch(
-            f"{profile.id} has fingerprint {profile.short_fingerprint}"
-            f" ({profile.fingerprint}), not the expected {expect}"
+            f"{path} holds {held} ({profile.short_fingerprint}), not the expected {expect}"
+            + _pinned_elsewhere(profile.id, want, profiles())
         )
+
+
+def _loaded(ref: Ref, held: list[ProfileInfo]) -> str:
+    """The ref as given and the fingerprints it loads, with the newest ref when the id is bare."""
+    said = f"{ref.id}@{ref.date}" if ref.date else _ref(ref.id, ref.timestamp)
+    newest = said if ref.date or ref.timestamp else held[0].ref
+    found = " or ".join(f"nv:{i.fingerprint[:12]}" for i in held)
+    return f"{said} is {found}" if newest == said else f"{said} loads {newest} ({found})"
+
+
+def _pinned_elsewhere(device: str, want: str, known: list[ProfileInfo]) -> str:
+    """The profile you have with the pinned fingerprint, or how to get its file."""
+    match = next((i for i in known if i.fingerprint.startswith(want)), None)
+    if match is not None:
+        return f"; {match.ref}, which you have, has that fingerprint; load that ref instead"
+    fetch = ""
+    if _pull_source(device):
+        fetch = (
+            f", or fetch that calibration with `nv pull {device} --at <a time it was in effect>`"
+            " if the source still serves it"
+        )
+    return (
+        ", and no profile you have has that fingerprint; ask whoever pinned it for the profile"
+        f" file{fetch}"
+    )
+
+
+def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> str:
+    """What a dated ref's date means when it names no profile, and what you have instead."""
+    have = ", ".join(sorted(i.ref for i in candidates))
+    if ref.timestamp is not None:
+        return f"no {ref.id} profile calibrated at {_stamp(ref.timestamp)}; you have {have}"
+    message = f"no {ref.id} profile calibrated on {ref.date} UTC; you have {have}"
+    if _pull_source(ref.id):
+        message += (
+            f"; to fetch the calibration in effect at {ref.date}, run"
+            f" `nv pull {ref.id} --at {ref.date}`"
+        )
+    return message
 
 
 def _dedupe(infos: list[ProfileInfo]) -> list[ProfileInfo]:
@@ -453,3 +498,7 @@ def _epoch(when: datetime | None) -> float:
 
 def _stamp(when: datetime) -> str:
     return when.isoformat().replace("+00:00", "Z")
+
+
+def _ref(device: str, when: datetime | None) -> str:
+    return f"{device}@{_stamp(when)}" if when else device

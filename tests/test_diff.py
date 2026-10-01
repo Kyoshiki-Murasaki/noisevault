@@ -130,7 +130,15 @@ def test_a_change_shared_by_every_qubit_is_one_row() -> None:
     result = diff(device(1e-4, 1e-3), device(2e-4, 1e-3), top=5)
     assert [(c.where, c.metric) for c in result.qubits] == [("all", "error_1q")]
     assert result.qubits[0].relative == pytest.approx(1.0) and result.pairs == ()
-    assert "all qubits     1q error" in result.summary()
+    assert "all qubits     1q avg infidelity 1.00e-04 -> 2.00e-04 (+100.0%)" in result.summary()
+
+
+def test_summary_lines_up_the_values_of_every_metric() -> None:
+    summary = nv.load("ibm_fez").diff(nv.load("ibm_marrakesh"), top=5).summary()
+    rows = [line for line in summary.splitlines() if line.startswith(("  qubit ", "  pair "))]
+    labels = {"readout error", "1q avg infidelity", "2q avg infidelity"}
+    assert all(any(label in row for row in rows) for label in labels)
+    assert len({row.index(" -> ") for row in rows}) == 1, rows
 
 
 def test_added_and_removed_qubits_and_other_devices_are_flagged() -> None:

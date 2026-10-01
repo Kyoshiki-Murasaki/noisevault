@@ -22,10 +22,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Annotated, Any, NoReturn, get_args
+from typing import Annotated, Any, NamedTuple, NoReturn, get_args
 
 import typer
 from pydantic import ValidationError
+from rich.cells import cell_len
 from rich.console import Console
 from rich.table import Table
 from typer.core import TyperGroup
@@ -34,7 +35,6 @@ from . import __version__, catalog
 from .diff import METRICS, describe_delta, fmt_error, fmt_metric, fmt_relative, fmt_time
 from .errors import (
     REPOSITORY,
-    FingerprintMismatch,
     NoiseVaultError,
     ProfileNotFound,
     did_you_mean,
@@ -72,6 +72,11 @@ class _Commands(TyperGroup):
         except _USAGE_ERROR as exc:
             _usage_error(exc)
 
+    def format_help(self, ctx: Any, formatter: Any) -> None:
+        # typer 0.27.0 joins the lines of an epilog= into one line, so the epilog is written here.
+        super().format_help(ctx, formatter)
+        formatter.write(_START)
+
     def invoke(self, ctx: Any) -> Any:
         try:
             return super().invoke(ctx)
@@ -98,6 +103,13 @@ def _usage_error(exc: Any) -> NoReturn:
     raise typer.Exit(2) from None
 
 
+_START = """
+ Start with:
+   nv list             the bundled devices, offline
+   nv show ibm_fez     one device's calibration
+   nv check ibm_fez    test each installed framework export
+"""
+
 app = typer.Typer(
     cls=_Commands,
     no_args_is_help=True,
@@ -120,19 +132,26 @@ _PACKAGES: dict[str, str | None] = {
     "pymatching": None,
 }
 _INSTALL_ALL = install_hint("all")
-_SOURCE_LABELS = {  # short forms of provenance.source_kind for the list table
-    "package_snapshot": "package",
-    "public_api": "public API",
-    "account_api": "account",
-    "user_file": "your file",
-    "published_data": "published",
-    "vendor_sample": "sample",
-    "hand_written": "by hand",
+
+
+class _SourceWords(NamedTuple):
+    list_label: str
+    show_phrase: str
+
+
+_SOURCE_KINDS = {
+    "package_snapshot": _SourceWords("package", "package snapshot"),
+    "public_api": _SourceWords("public API", "public API"),
+    "account_api": _SourceWords("account", "account API"),
+    "user_file": _SourceWords("your file", "imported file"),
+    "published_data": _SourceWords("published", "published data"),
+    "vendor_sample": _SourceWords("sample", "vendor sample"),
+    "hand_written": _SourceWords("by hand", "written by hand"),
+    "derived": _SourceWords("derived", "derived from another profile"),
 }
 # What to do next, by failure type; the first match wins.
 _HINTS: tuple[tuple[type[BaseException], str], ...] = (
     (ProfileNotFound, "run `nv list` to see every profile you can load offline"),
-    (FingerprintMismatch, "load the ref without a pin to see what it holds now"),
     (ImportError, f"install the frameworks: {_INSTALL_ALL}"),
     (ValidationError, "run `nv validate FILE` to list every problem in the file"),
     (FileNotFoundError, "check the path, or give a profile id such as ibm_fez"),
@@ -211,36 +230,56 @@ def list_profiles(
         for row, info in zip(rows, infos, strict=True):
             stamp = info.calibrated_at
             row["when"] = _when(stamp, same_day[info.id, stamp.date()]) if stamp else "undated"
-        # Grouped under technology headings so the table fits 80 columns. Only processor and
-        # license may wrap; the other cells are short and must stay whole.
-        table = Table(box=None, pad_edge=False, header_style="bold")
-        for column in ("id", "date", "qubits", "processor", "source", "license"):
-            table.add_column(
-                column,
-                justify="right" if column == "qubits" else "left",
-                no_wrap=column not in ("processor", "license"),
-                overflow="fold",
-            )
-        for technology in sorted({row["technology"] for row in rows}):
-            table.add_row(f"[bold]{technology}[/bold]")
-            group = [r for r in rows if r["technology"] == technology]
-            for row in sorted(group, key=lambda r: r["location"] != "vault"):
-                mark = "* " if row["location"] == "vault" else "  "
-                table.add_row(
-                    f"{mark}{row['id']}",
-                    row["when"],
-                    str(row["num_qubits"]),
-                    row["processor"] or "-",
-                    _SOURCE_LABELS.get(row["source_kind"], row["source_kind"] or "-"),
-                    (row["license"] or "-").split(" (")[0],
-                )
+            row["shown_license"] = (row["license"] or "-").split(" (")[0]
+        licenses = {row["shown_license"] for row in rows}
+        shared = licenses.pop() if len(licenses) == 1 and "-" not in licenses else None
+        columns = ["id", "date", "qubits", "processor", "source"]
+        if shared is None:
+            columns.append("license")
+        unlimited = out.options.update_width(10_000)
+        table = _list_table(rows, columns)
+        if out.measure(table, options=unlimited).maximum > out.width:
+            columns.remove("source")
+            table = _list_table(rows, columns)
+        excess = out.measure(table, options=unlimited).maximum - out.width
+        if excess > 0:
+            widest = max([len("processor")] + [cell_len(r["processor"] or "-") for r in rows])
+            table.columns[columns.index("processor")].max_width = max(1, widest - excess)
         out.print(table)
-        in_vault = sum(r["location"] == "vault" for r in rows)
-        if in_vault:
+        if any(r["location"] == "vault" for r in rows):
             out.print("* in your vault (`nv doctor` shows its folder)", markup=False)
-        out.print(
-            f"{len(rows)} profiles. Load one with nv.load('<id>'); see one with `nv show <id>`."
-        )
+        count = _count(len(rows), "profile")
+        if shared:
+            count += f", all {shared}" if len(rows) > 1 else f", {shared}"
+        out.print(f"{count}. See one with `nv show <id>`.", markup=False)
+        out.print('Load one in Python with nv.load("<id>").', markup=False)
+
+
+def _list_table(rows: list[dict[str, Any]], columns: list[str]) -> Table:
+    """The rows under technology headings. A cell too wide for its column ends in an ellipsis."""
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for column in columns:
+        justify = "right" if column == "qubits" else "left"
+        table.add_column(column, justify=justify, no_wrap=True, overflow="ellipsis")
+    for technology in sorted({row["technology"] for row in rows}):
+        table.add_row(f"[bold]{technology}[/bold]")
+        group = [r for r in rows if r["technology"] == technology]
+        for row in sorted(group, key=lambda r: r["location"] != "vault"):
+            mark = "* " if row["location"] == "vault" else "  "
+            cells = {
+                "id": f"{mark}{row['id']}",
+                "date": row["when"],
+                "qubits": str(row["num_qubits"]),
+                "processor": row["processor"] or "-",
+                "source": _source_label(row["source_kind"]),
+                "license": row["shown_license"],
+            }
+            table.add_row(*(cells[column] for column in columns))
+    return table
+
+
+def _source_label(kind: str | None) -> str:
+    return _SOURCE_KINDS[kind].list_label if kind in _SOURCE_KINDS else kind or "-"
 
 
 def _when(stamp: datetime, same_day: list[datetime]) -> str:
@@ -295,9 +334,29 @@ def show(
         if as_json:
             _echo_json(data)
             return
-        _print_card(data)
+        _print_card(data, on_hand=_on_hand(ref, profile))
         if indices is not None:
             _print_qubits(data["qubits"])
+
+
+class _OnHand(NamedTuple):
+    count: int
+    other_bundled_ref: str | None
+
+
+def _on_hand(ref: str, profile: Profile) -> _OnHand | None:
+    """How many calibrations a bare id had to pick from, and the bundled one's ref when the id
+    loaded another. None for a dated ref, a file, or an id with one calibration."""
+    target = parse_ref(ref)
+    if isinstance(target, Path) or target.date or target.timestamp:
+        return None
+    same = [info for info in catalog.profiles() if info.id == profile.id]
+    if len(same) < 2:
+        return None
+    bundled = [
+        i.ref for i in same if i.location == "bundled" and i.fingerprint != profile.fingerprint
+    ]
+    return _OnHand(len(same), bundled[0] if bundled else None)
 
 
 def card(profile: Profile) -> dict[str, Any]:
@@ -393,7 +452,9 @@ def _effects(profile: Profile) -> list[str]:
     return [f"{key} ({n} records)" if n > 1 else key for key, n in counts.items()]
 
 
-def _print_card(data: dict[str, Any], *, brief: bool = False) -> None:
+def _print_card(
+    data: dict[str, Any], *, brief: bool = False, on_hand: _OnHand | None = None
+) -> None:
     out.print(f"[bold]{data['ref']}[/bold]  {data['short_fingerprint']}", soft_wrap=True)
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold", no_wrap=True)
@@ -409,18 +470,20 @@ def _print_card(data: dict[str, Any], *, brief: bool = False) -> None:
         if x
     )
     grid.add_row("device", device)
+    if on_hand:
+        grid.add_row("calibrations", f"newest of the {on_hand.count} you have")
+        if on_hand.other_bundled_ref:
+            grid.add_row("", f"{on_hand.other_bundled_ref} is the bundled one")
     grid.add_row("connectivity", _describe_connectivity(data["connectivity"]))
     grid.add_row("natives", _natives_table(data["natives"]))
     grid.add_row("coherence", _coherence(data))
     grid.add_row("readout", _readout(data))
     if data["disabled_qubits"]:
         grid.add_row("disabled", "qubits " + ", ".join(map(str, data["disabled_qubits"])))
+    if not brief:
+        _add_lines(grid, "not modeled", data["effects"])
     prov = data["provenance"]
-    kind = prov.get("source_kind") or "source kind unknown"
-    grid.add_row(
-        "provenance",
-        f"{prov.get('data_kind', 'unknown')} data, {kind}: {prov.get('source') or 'unknown'}",
-    )
+    grid.add_row("provenance", _provenance(prov))
     grid.add_row(
         "license",
         f"{prov.get('license') or 'unknown'}, redistributable {prov.get('redistributable')}",
@@ -429,14 +492,27 @@ def _print_card(data: dict[str, Any], *, brief: bool = False) -> None:
         grid.add_row("attribution", prov["attribution"])
     grid.add_row("fingerprint", data["fingerprint"])
     if not brief:
-        for label, items in (
-            ("assumptions", data["assumptions"]),
-            ("notes", data["notes"]),
-            ("not modeled", data["effects"]),
-        ):
-            for i, item in enumerate(items):
-                grid.add_row(label if i == 0 else "", item)
+        _add_lines(grid, "assumptions", data["assumptions"])
+        _add_lines(grid, "notes", data["notes"])
     out.print(grid)
+
+
+def _add_lines(grid: Table, label: str, items: list[str]) -> None:
+    for i, item in enumerate(items):
+        grid.add_row(label if i == 0 else "", item)
+
+
+def _provenance(prov: dict[str, Any]) -> str:
+    """``measured, package snapshot, qiskit-ibm-runtime 0.49.0 FakeFez``."""
+    kind = prov.get("data_kind", "unknown")
+    words = ["unknown kind" if kind == "unknown" else kind.replace("_", " ")]
+    if prov.get("source_kind") in _SOURCE_KINDS:
+        words.append(_SOURCE_KINDS[prov["source_kind"]].show_phrase)
+    if prov.get("source"):
+        words.append(prov["source"])
+    elif len(words) == 1:
+        words.append("source unknown")
+    return ", ".join(words)
 
 
 def _describe_connectivity(conn: dict[str, Any]) -> str:
@@ -450,7 +526,7 @@ def _describe_connectivity(conn: dict[str, Any]) -> str:
 
 def _natives_table(natives: list[dict[str, Any]]) -> Table:
     table = Table(box=None, pad_edge=False, show_edge=False, header_style="italic")
-    for column in ("gate", "median error", "duration", "records"):
+    for column in ("gate", "median avg infidelity", "duration", "records"):
         table.add_column(column, justify="left" if column == "gate" else "right")
     for n in natives:
         arity = f" ({n['qubits']}q)" if n["qubits"] else ""
@@ -458,14 +534,15 @@ def _natives_table(natives: list[dict[str, Any]]) -> Table:
             table.add_row(f"{n['gate']}{arity}", "virtual", "-", "-")
             continue
         records = str(n["records"]) if n["records"] else "device-wide"
+        has_error = n["median_avg_infidelity"] is not None
         notes = [
             f"{count} {word}"
-            for state, word in (
-                ("ideal", "virtual"),
-                ("uncalibrated", "no metric"),
-                ("disabled", "disabled"),
+            for count, word in (
+                (n["loci"]["ideal"], "virtual"),
+                (n["loci"]["uncalibrated"] if has_error else 0, "without error"),
+                (n["loci"]["disabled"], "disabled"),
             )
-            if (count := n["loci"][state])
+            if count
         ]
         if notes:
             records += f" ({', '.join(notes)})"
@@ -529,7 +606,7 @@ def _qubit_row(profile: Profile, index: int) -> dict[str, Any]:
 
 def _print_qubits(rows: list[dict[str, Any]]) -> None:
     table = Table(box=None, pad_edge=False, header_style="bold")
-    for column in ("qubit", "T1 (us)", "T2 (us)", "P(1|0)", "P(0|1)", "1q error", "state"):
+    for column in ("qubit", "T1 (us)", "T2 (us)", "P(1|0)", "P(0|1)", "1q avg infidelity", "state"):
         table.add_column(column, justify="right" if column != "state" else "left")
     for r in rows:
         one = f"{fmt_error(r['error_1q'])} ({r['gate_1q']})" if r["gate_1q"] else "-"
@@ -752,11 +829,16 @@ def check(
             frameworks=tuple(f for part in parts for f in part.frameworks),
             skipped=tuple(s for part in parts for s in part.skipped),
         )
+        missing = [n for n, why in result.skipped if why.startswith("not installed")]
         if as_json:
             _echo_json(result.to_dict())
-        else:
+        elif len(missing) < len(names):
             chain = "-".join(str(result.layout[i]) for i in range(len(result.layout)))
-            out.print(f"[bold]{profile.id}[/bold] {profile.short_fingerprint} on qubits {chain}")
+            on_hand = _on_hand(ref, profile)
+            newest = f" (newest of {on_hand.count})" if on_hand else ""
+            out.print(
+                f"[bold]{profile.id}[/bold]{newest} {profile.short_fingerprint} on qubits {chain}"
+            )
             out.print(
                 f"{len(result.circuits)} circuits: {', '.join(c.name for c in result.circuits)}",
                 markup=False,
@@ -784,7 +866,6 @@ def check(
                     f"{counted}, {len(reduced)} reduced" if reduced else counted,
                     method,
                 )
-            missing = [n for n, why in result.skipped if why.startswith("not installed")]
             for name, _ in result.skipped:
                 table.add_row(name, "not installed" if name in missing else "skipped")
             out.print(table)
@@ -797,11 +878,32 @@ def check(
             if missing:
                 command = install_hint(",".join(missing))
                 out.print(f"To add the missing frameworks: {command}", markup=False, soft_wrap=True)
-            out.print(NOTE, markup=False)
+            if any(f.passed for f in result.frameworks):
+                out.print(NOTE, markup=False)
+        if len(missing) == len(names):
+            _none_installed(missing, named=framework is not None)
         if not result.frameworks:
-            raise NoiseVaultError(f"no framework could run the check; install one: {_INSTALL_ALL}")
+            raise NoiseVaultError("no framework could run the check")
         if not result.passed:
             raise typer.Exit(1)
+
+
+def _none_installed(missing: list[str], *, named: bool) -> NoReturn:
+    """One error and one install command, for a check with no framework to run."""
+    if named:
+        which = " and ".join(filter(None, (", ".join(missing[:-1]), missing[-1])))
+        error = f"{which} {'is' if len(missing) == 1 else 'are'} not installed"
+        hint = install_hint(",".join(missing))
+    else:
+        first, *others = missing
+        error = "none is installed"
+        hint = (
+            f"{install_hint(first)}\n      (or {', '.join(others[:-1])} or {others[-1]},"
+            f" or several, as in noisevault[{first},{others[-1]}])"
+        )
+    err.print(f"error: nv check needs a framework to check, and {error}", markup=False)
+    err.print(f"hint: {hint}", markup=False)
+    raise typer.Exit(1)
 
 
 # cite, validate, doctor, schema ---------------------------------------------------------------
@@ -959,8 +1061,7 @@ def _error(exc: BaseException) -> None:
         message = _cli_terms(str(exc) or type(exc).__name__)
     err.print(f"error: {message}", markup=False)
     hint = next((h for kind, h in _HINTS if isinstance(exc, kind)), None)
-    command = re.search(r"`[^`]+`", hint or "")
-    if hint and "did you mean" not in message and not (command and command[0] in message):
+    if hint and "did you mean" not in message and "`nv " not in message:
         err.print(f"hint: {hint}", markup=False)
     raise typer.Exit(1) from None
 
@@ -1007,11 +1108,17 @@ def _duration(ns: float | None) -> str:
     return f"{ns / 1e3:.3g} us" if ns >= 1e3 else f"{ns:.3g} ns"
 
 
+_PLAIN_ERRORS = {
+    "extra_forbidden": "not a format 1.0 key; put your own data under extensions",
+    "missing": "missing; format 1.0 requires it",
+}
+
+
 def _validation_lines(exc: ValidationError) -> list[str]:
     lines = []
     for error in exc.errors():
         where = ".".join(str(part) for part in error["loc"])
-        message = error["msg"].removeprefix("Value error, ")
+        message = _PLAIN_ERRORS.get(error["type"]) or error["msg"].removeprefix("Value error, ")
         for part in message.split("\n"):
             lines.append(f"{where}: {part}" if where else part)
     return lines

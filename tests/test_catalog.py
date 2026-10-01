@@ -99,8 +99,24 @@ def test_vault_refs_newest_date_and_ambiguity(vault: Path) -> None:
     with pytest.raises(AmbiguousRef) as info:
         nv.load("test_toy@2025-01-01")
     assert "2025-01-01T08:00:00Z" in str(info.value) and "2025-01-01T20:00:00Z" in str(info.value)
-    with pytest.raises(ProfileNotFound, match="available"):
+    with pytest.raises(ProfileNotFound, match="2024-12-31 UTC; you have test_toy@2025-01-01T08"):
         nv.load("test_toy@2024-12-31")
+
+
+def test_a_ref_date_that_misses_says_it_names_the_calibration_day() -> None:
+    misses = {
+        "ibm_fez@2025-03-01": "no ibm_fez profile calibrated on 2025-03-01 UTC; you have"
+        " ibm_fez@2025-02-26T20:16:25Z; to fetch the calibration in effect at 2025-03-01, run"
+        " `nv pull ibm_fez --at 2025-03-01`",
+        "quantinuum_h2-1@2020-01-01": "no quantinuum_h2-1 profile calibrated on 2020-01-01 UTC;"
+        " you have quantinuum_h2-1@2025-04-30T00:00:00Z",
+        "ibm_fez@2025-02-26T00:00:00Z": "no ibm_fez profile calibrated at 2025-02-26T00:00:00Z;"
+        " you have ibm_fez@2025-02-26T20:16:25Z",
+    }
+    for ref, message in misses.items():
+        with pytest.raises(ProfileNotFound) as info:
+            nv.load(ref)
+        assert str(info.value) == message
 
 
 def test_unknown_id_suggests_close_matches() -> None:
@@ -165,6 +181,45 @@ def test_vault_profile_shadows_a_bundled_one_of_the_same_time(vault: Path) -> No
     assert nv.load("ibm_manila", expect=bundled.short_fingerprint) == bundled
     with pytest.raises(FingerprintMismatch, match=mine.short_fingerprint):
         nv.load("ibm_manila", expect="nv:000000000000")
+
+
+def _later_manila() -> Profile:
+    data = _changed_manila(5e-4).to_dict()
+    data["device"]["calibrated_at"] = "2024-06-03T10:00:00Z"
+    return Profile.model_validate(data)
+
+
+def test_a_fingerprint_mismatch_names_the_calibration_that_has_the_pin(vault: Path) -> None:
+    bundled = nv.load("ibm_manila")
+    later = _later_manila()
+    path = later.save(vault_path(later))
+    pin, held = bundled.short_fingerprint, later.short_fingerprint
+    heads = {
+        "ibm_manila": f"ibm_manila loads ibm_manila@2024-06-03T10:00:00Z ({held})",
+        "ibm_manila@2024-06-03": f"ibm_manila@2024-06-03 is {held}",
+        str(path): f"{path} holds ibm_manila@2024-06-03T10:00:00Z ({held})",
+    }
+    found = "ibm_manila@2024-05-27T18:27:23Z, which you have, has that fingerprint"
+    for ref, head in heads.items():
+        with pytest.raises(FingerprintMismatch) as info:
+            nv.load(ref, expect=pin)
+        assert str(info.value) == f"{head}, not the expected {pin}; {found}; load that ref instead"
+    assert nv.load("ibm_manila@2024-05-27T18:27:23Z", expect=pin) == bundled
+
+
+def test_a_fingerprint_no_profile_has_says_how_to_get_the_file() -> None:
+    nowhere, held = "nv:000000000000", nv.load("ibm_manila").short_fingerprint
+    with pytest.raises(FingerprintMismatch) as info:
+        nv.load("ibm_manila", expect=nowhere)
+    assert str(info.value) == (
+        f"ibm_manila loads ibm_manila@2024-05-27T18:27:23Z ({held}), not the expected"
+        f" {nowhere}, and no profile you have has that fingerprint; ask whoever"
+        " pinned it for the profile file, or fetch that calibration with"
+        " `nv pull ibm_manila --at <a time it was in effect>` if the source still serves it"
+    )
+    with pytest.raises(FingerprintMismatch) as info:
+        nv.load("quantinuum_h2-1", expect=nowhere)
+    assert str(info.value).endswith("; ask whoever pinned it for the profile file")
 
 
 def test_same_time_profiles_in_the_vault_are_told_apart_by_expect(vault: Path) -> None:

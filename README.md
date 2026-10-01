@@ -21,7 +21,14 @@ Load a device by name and simulate your circuits under the noise it had on a giv
 
 <br/>
 
-<img src="assets/cli-show.svg" alt="Terminal output of nv show ibm_fez: a 156-qubit Heron r2 device with its native gates, median gate errors and durations, median T1, T2 and readout error, the data source and license, and the profile fingerprint." width="830">
+Try it without installing, using [uv](https://docs.astral.sh/uv/):
+
+<!-- not-run: needs the network to fetch NoiseVault from GitHub -->
+```bash
+uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault nv show ibm_fez
+```
+
+<img src="assets/cli-show.svg" alt="Terminal output of nv show ibm_fez: a 156-qubit Heron r2 device with its native gates, their median average infidelity and duration, median T1, T2 and readout error, where the data comes from, its license, and the profile fingerprint." width="830">
 
 </div>
 
@@ -34,12 +41,6 @@ framework:
 
 ```bash
 pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
-```
-
-To try the command line without installing NoiseVault, run it with [uv](https://docs.astral.sh/uv/):
-
-```bash
-uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault nv list
 ```
 
 Replace `qiskit` with the extra you need, or name several, as in `noisevault[qiskit,stim]`. In a
@@ -100,8 +101,8 @@ from IonQ, with no account, and saves them to your vault in `~/.noisevault/profi
 
 <!-- not-run: nv pull and nv diff fetch calibrations from IBM over the network -->
 ```bash
-nv pull ibm_fez --at 2025-06-01   # the newest calibration before that time
-nv cite ibm_fez@2025-05-31        # a citation with the full fingerprint
+nv pull ibm_fez --at 2025-06-01   # saves ibm_fez@2025-05-31T22:01:04Z, the newest before then
+nv cite ibm_fez@2025-05-31        # cite it by the date the pull printed
 nv diff ibm_fez@2025-02-26 ibm_fez@2025-05-31
 ```
 
@@ -164,6 +165,13 @@ A pass means the export matches the reference on these circuits. It says nothing
 well the model matches the hardware. Calibration-derived models approximate the hardware. They
 are not a digital twin. [Limitations](docs/limitations.md) lists what no export models.
 
+To run the check with uv and no install:
+
+<!-- not-run: needs the network to fetch NoiseVault and Qiskit -->
+```bash
+uvx --from "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault" nv check ibm_fez
+```
+
 ## Documentation
 
 | Page | What it covers |
@@ -186,8 +194,8 @@ the development setup, the tests and how to add a source.
 
 If you use NoiseVault, cite the software with [CITATION.cff](CITATION.cff), or with
 **Cite this repository** on GitHub. Also give the fingerprint of every profile you used.
-`nv cite REF` prints it with the source and calibration time, and `nv cite REF --bibtex` prints
-a BibTeX entry.
+`nv cite REF` prints it with the source, the calibration time and the NoiseVault version, and
+`nv cite REF --bibtex` prints a BibTeX entry.
 
 ## License
 

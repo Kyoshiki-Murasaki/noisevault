@@ -37,7 +37,7 @@ from pydantic import (
     model_validator,
 )
 
-from . import compat, gates, metrics
+from . import __version__, compat, gates, metrics
 from .errors import MigrationWarning
 from .units import DURATION, T1, T2, normalize_times
 
@@ -619,10 +619,12 @@ class Profile(_Model):
         dev, prov = self.device, self.provenance
         when = _iso_z(dev.calibrated_at) if dev.calibrated_at else "undated"
         who = prov.attribution or dev.vendor or "unknown source"
+        ref = f"{self.id}@{when}" if dev.calibrated_at else self.id
+        profile = f"NoiseVault {__version__} profile {ref}"
         if style == "text":
             return (
                 f"{who}. Calibration of {dev.name}, {when}. {prov.source or 'source unknown'}. "
-                f"NoiseVault profile {self.id}, fingerprint sha256:{self.fingerprint}."
+                f"{profile}, fingerprint sha256:{self.fingerprint}."
             )
         dated = dev.calibrated_at is not None
         key = re.sub(r"[^a-z0-9]+", "_", f"{self.id}_{when[:10]}" if dated else self.id)
@@ -630,7 +632,7 @@ class Profile(_Model):
         year = f"  year = {{{when[:4]}}},\n" if dated else ""
         via = _VIA.fullmatch(who)
         retrieved = f"Retrieved via {via['via']}. " if via else ""
-        published = f"NoiseVault profile {self.id}, sha256:{self.fingerprint}"
+        published = f"{profile}, sha256:{self.fingerprint}"
         note = f"{retrieved}Source: {prov.source or 'unknown'}; license {prov.license or 'unknown'}"
         # Double braces: BibTeX would lowercase the title and split an organization into
         # first and last names.

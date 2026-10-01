@@ -233,8 +233,13 @@ def test_stim_adding_noise_to_a_noiseless_profile_fails(monkeypatch: pytest.Monk
 def test_natives_a_framework_lacks_are_explained() -> None:
     result = nv.load("quantinuum_h1-1").check(frameworks=["stim"])
     assert dict(result.skipped) == {
-        "stim": "no check circuit can be expressed: r at the check angles is no Clifford gate,"
-        " and Stim holds only those",
+        "stim": "Stim simulates only Clifford gates, and this profile's r gate is not Clifford"
+        " at the check angles.",
+    }
+    result = nv.load("google_weber").check(frameworks=["stim"])
+    assert dict(result.skipped) == {
+        "stim": "Stim simulates only Clifford gates, and this profile's r gate is not Clifford"
+        " at the check angles. Stim has no sqrt_iswap instruction.",
     }
     (stim,) = nv.load("ibm_brisbane").check(frameworks=["stim"]).frameworks
     assert stim.not_run == (
@@ -259,7 +264,8 @@ def test_a_circuit_run_without_some_of_its_gates_names_them() -> None:
         NotRun(
             "two_qubit_natives",
             "; ".join(
-                f"{g} at the check angles is no Clifford gate, and Stim holds only those"
+                f"Stim simulates only Clifford gates, and this profile's {g} gate is not Clifford"
+                " at the check angles"
                 for g in ("rxx", "ryy", "rzz")
             ),
             ran_without=("rxx", "ryy", "rzz"),
@@ -268,7 +274,10 @@ def test_a_circuit_run_without_some_of_its_gates_names_them() -> None:
     (entry,) = result.to_dict()["frameworks"][0]["not_run"]
     assert entry["circuit"] == "two_qubit_natives"
     assert entry["ran_without"] == ["rxx", "ryy", "rzz"]
-    assert "two_qubit_natives ran without rxx, ryy, rzz: rxx at" in result.summary()
+    assert (
+        "two_qubit_natives ran without rxx, ryy, rzz: Stim simulates only Clifford gates"
+        in result.summary()
+    )
 
 
 # Gates that take |0> to a superposition at the check angles.

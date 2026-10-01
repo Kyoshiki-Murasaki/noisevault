@@ -309,6 +309,20 @@ def test_terminal_screenshot_shows_current_output(name: str) -> None:
     )
 
 
+def test_the_command_above_the_screenshot_is_the_one_it_shows() -> None:
+    above = re.search(r"```bash\n([^\n]+)\n```\s*<img src=\"assets/cli-show\.svg\"", TEXT)
+    assert above, "README.md needs a bash block directly above the cli-show.svg screenshot"
+    assert above[1].endswith(f" nv {' '.join(SHOTS['cli-show.svg'])}"), above[1]
+
+
+def test_the_pin_example_cites_the_calibration_its_pull_saves() -> None:
+    saved = re.search(r"^nv pull \S+ .*# saves (\S+)@(\d{4}-\d\d-\d\d)T", TEXT, re.M)
+    cited = re.search(r"^nv cite (\S+)@(\S+) ", TEXT, re.M)
+    compared = re.search(r"^nv diff \S+ (\S+)@(\S+)$", TEXT, re.M)
+    assert saved and cited and compared, "README.md's pin example must say what nv pull saves"
+    assert cited.groups() == compared.groups() == saved.groups()
+
+
 def test_hero_images_match_their_grid() -> None:
     build = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "build_hero.py"), "--check"],

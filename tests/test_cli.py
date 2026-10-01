@@ -72,6 +72,19 @@ def test_validate_notes_t2_clamps(tmp_path: Path) -> None:
     assert result.exit_code == 0 and "T2 exceeds 2*T1" in result.stderr
 
 
+def test_validate_says_what_an_unknown_or_a_missing_key_means(tmp_path: Path) -> None:
+    data = toy(unknown_field=1)
+    del data["device"]
+    path = tmp_path / "keys.json"
+    path.write_text(json.dumps(data))
+    result = runner.invoke(app, ["validate", str(path)])
+    assert result.exit_code == 1
+    assert result.stderr.splitlines() == [
+        "error: device: missing; format 1.0 requires it",
+        "error: unknown_field: not a format 1.0 key; put your own data under extensions",
+    ]
+
+
 # profile display ------------------------------------------------------------------------------
 
 
@@ -181,7 +194,7 @@ def test_no_color_removes_color_codes() -> None:
     ("args", "error", "hint"),
     [
         (["show", "ibm_fezz"], "did you mean ibm_fez?", None),
-        (["show", "ibm_fez@2020-01-01"], "available: ibm_fez@2025-02-26T20:16:25Z", "nv list"),
+        (["show", "ibm_fez@2020-01-01"], "you have ibm_fez@2025-02-26T20:16:25Z", None),
         (["show", "missing.json"], "error: no file missing.json", "check the path"),
         (["cite", "ibm fez"], "is not a profile id", None),
         (
@@ -202,6 +215,8 @@ def test_expected_failures_print_an_error_and_no_traceback(args, error, hint) ->
     assert result.stderr.startswith("error: ") and error in result.stderr
     if hint:
         assert "hint: " in result.stderr and hint in result.stderr
+    else:
+        assert "hint: " not in result.stderr
     assert "Traceback" not in result.output and result.stdout == ""
 
 
@@ -209,13 +224,16 @@ def test_expected_failures_print_an_error_and_no_traceback(args, error, hint) ->
 
 
 def test_list_groups_profiles_by_technology() -> None:
-    result = runner.invoke(app, ["list"])
+    result = runner.invoke(app, ["list"], env={"COLUMNS": "80"})
     lines = [line.rstrip() for line in result.stdout.splitlines()]
-    assert lines[0].split() == ["id", "date", "qubits", "processor", "source", "license"]
+    assert lines[0].split() == ["id", "date", "qubits", "processor", "source"]
     row = next(line for line in lines if line.strip().startswith("ibm_fez "))
-    assert row.split() == ["ibm_fez", "2025-02-26", "156", "Heron", "r2", "package", "Apache-2.0"]
+    assert row.split() == ["ibm_fez", "2025-02-26", "156", "Heron", "r2", "package"]
     assert lines.index("superconducting") < lines.index(row) < lines.index("trapped_ion")
-    assert lines[-1].startswith(f"{len(nv.profiles())} profiles.")
+    assert lines[-2:] == [
+        f"{len(nv.profiles())} profiles, all Apache-2.0. See one with `nv show <id>`.",
+        'Load one in Python with nv.load("<id>").',
+    ]
 
 
 def test_list_filters_ignore_case_and_dashes() -> None:
@@ -233,6 +251,27 @@ def test_list_filters_and_prints_json() -> None:
     assert {"id", "date", "num_qubits", "processor", "source_kind", "license"} <= set(rows[0])
     vendor = json.loads(runner.invoke(app, ["list", "--vendor", "google", "--json"]).stdout)
     assert {r["id"] for r in vendor} == {"google_rainbow", "google_weber"}
+
+
+@pytest.mark.parametrize("columns", [60, 72, 80, 120])
+def test_list_keeps_every_row_on_one_line(columns: int) -> None:
+    infos = nv.profiles()
+    result = runner.invoke(app, ["list"], env={"COLUMNS": str(columns)})
+    lines = result.stdout.splitlines()
+    assert max(map(len, lines)) <= columns
+    assert len(lines) == 1 + len({i.technology for i in infos}) + len(infos) + 2
+    rows = {tuple(line.split()[:3]) for line in lines if line.startswith("  ")}
+    assert rows == {(i.id, i.calibrated_at.date().isoformat(), str(i.num_qubits)) for i in infos}
+    header = ["id", "date", "qubits", "processor"] + (["source"] if columns >= 72 else [])
+    assert lines[0].split() == header
+
+
+def test_list_shortens_processors_before_any_other_cell() -> None:
+    lines = runner.invoke(app, ["list"], env={"COLUMNS": "50"}).stdout.splitlines()
+    assert max(map(len, lines)) <= 50 and lines[0].split() == ["id", "date", "qubits", "processor"]
+    row = next(line for line in lines if "quantinuum_h1-1 " in line)
+    assert row.split()[:3] == ["quantinuum_h1-1", "2025-05-02", "20"]
+    assert row.rstrip().endswith("System M\u2026")
 
 
 def test_show_prints_a_card() -> None:
@@ -276,7 +315,7 @@ def test_show_qubits_and_json() -> None:
 @pytest.mark.parametrize("ref", ["ibm_fez", "ibm_kyiv", "ibm_manila"])
 def test_show_qubits_names_a_real_gate_not_the_identity(ref: str) -> None:
     text = runner.invoke(app, ["show", ref, "--qubits", "0,1,2,3,4"]).stdout
-    rows = text[text.index("1q error") :].splitlines()[1:]
+    rows = text[text.index("1q avg infidelity") :].splitlines()[1:]
     assert len(rows) == 5 and all(row.endswith("(sx)") for row in map(str.rstrip, rows))
 
 
@@ -284,6 +323,113 @@ def test_show_all_to_all_and_notes() -> None:
     out = runner.invoke(app, ["show", "quantinuum_h1-1"], env={"COLUMNS": "200"}).stdout
     assert "all-to-all" in out and "device-wide" in out
     assert "T1 and T2 unknown" in out and re.search(r"not modeled\s+leakage on r\s", out)
+
+
+def test_show_and_diff_name_the_error_metric(tmp_path: Path) -> None:
+    lines = runner.invoke(app, ["show", "ibm_fez"], env={"COLUMNS": "80"}).stdout.splitlines()
+    assert max(map(len, lines)) <= 80
+    header = next(line for line in lines if line.startswith("natives"))
+    assert header.split()[1:] == ["gate", "median", "avg", "infidelity", "duration", "records"]
+    reset = next(line for line in lines if "reset (1q)" in line)
+    assert reset.split() == ["reset", "(1q)", "-", "1.58", "us", "156"]
+    gates = {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}, "cz": {"duration_ns": 70}}
+    calibrations = [{"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.02}]
+    path = tmp_path / "toy.json"
+    path.write_text(json.dumps(toy(gates=gates, calibrations=calibrations)))
+    out = runner.invoke(app, ["show", str(path)], env={"COLUMNS": "120"}).stdout
+    cz = next(line for line in out.splitlines() if "cz (2q)" in line)
+    assert cz.split()[2:] == ["2.00e-02", "70", "ns", "1", "(1", "without", "error)"]
+    drift = runner.invoke(app, ["diff", "ibm_kyiv", "ibm_brisbane"], env={"COLUMNS": "80"}).stdout
+    medians = [line.split("  ")[0] for line in drift.splitlines()[1:7]]
+    assert medians == [
+        "device median",
+        "T1 (us)",
+        "T2 (us)",
+        "1q avg infidelity",
+        "2q avg infidelity",
+        "readout error",
+    ]
+    assert re.search(r"^\d+-\d+ +2q avg infidelity ", drift, re.M)
+
+
+def test_show_says_where_the_data_came_from_in_plain_words(tmp_path: Path) -> None:
+    def provenance(ref: str) -> str:
+        out = runner.invoke(app, ["show", ref], env={"COLUMNS": "200"}).stdout
+        return next(line for line in out.splitlines() if line.startswith("provenance")).rstrip()
+
+    assert provenance("ibm_fez") == (
+        "provenance    measured, package snapshot, qiskit-ibm-runtime 0.49.0 FakeFez"
+    )
+    assert provenance("quantinuum_h1-1") == (
+        "provenance    measured, published data, Quantinuum hardware specifications,"
+        " data/H1-1/2025_05_02 at 59e68bb55bd6"
+    )
+    uniform = Profile.uniform(
+        "u", technology="trapped_ion", num_qubits=2, one_qubit_error=1e-4, two_qubit_error=1e-3
+    ).save(tmp_path / "u.json")
+    assert provenance(str(uniform)) == "provenance    hypothetical, written by hand"
+
+
+def test_show_lists_what_the_model_leaves_out_before_provenance_and_notes() -> None:
+    out = runner.invoke(app, ["show", "google_weber"], env={"COLUMNS": "120"}).stdout
+    labels = [line.split("  ")[0] for line in out.splitlines()[1:] if line[:1].isalpha()]
+    assert labels == [
+        "device",
+        "connectivity",
+        "natives",
+        "coherence",
+        "readout",
+        "not modeled",
+        "provenance",
+        "license",
+        "attribution",
+        "fingerprint",
+        "assumptions",
+        "notes",
+    ]
+
+
+def _manila_in_the_vault(calibrated_at: str) -> Profile:
+    data = nv.load("ibm_manila").model_dump(mode="json", exclude_none=True)
+    data["device"]["calibrated_at"] = calibrated_at
+    data["qubits"][0]["t1_us"] *= 1.1
+    profile = Profile.model_validate(data)
+    path = nv.catalog.vault_path(profile)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    profile.save(path)
+    return profile
+
+
+def test_show_says_which_calibration_a_bare_id_picked(vault: Path) -> None:
+    bundled = nv.load("ibm_manila")
+    assert "calibrations" not in runner.invoke(app, ["show", "ibm_manila"]).stdout
+    newer = _manila_in_the_vault("2024-06-03T10:00:00Z")
+    lines = runner.invoke(app, ["show", "ibm_manila"], env={"COLUMNS": "80"}).stdout.splitlines()
+    assert lines[0] == f"ibm_manila@2024-06-03T10:00:00Z  {newer.short_fingerprint}"
+    assert [line.rstrip() for line in lines[2:4]] == [
+        "calibrations  newest of the 2 you have",
+        "              ibm_manila@2024-05-27T18:27:23Z is the bundled one",
+    ]
+    assert nv.load("ibm_manila@2024-05-27T18:27:23Z").fingerprint == bundled.fingerprint
+    for ref in ("ibm_manila@2024-05-27", "ibm_manila@2024-06-03T10:00:00Z"):
+        assert "calibrations" not in runner.invoke(app, ["show", ref]).stdout
+
+
+def test_show_counts_the_calibrations_when_the_bundled_one_is_the_newest(vault: Path) -> None:
+    _manila_in_the_vault("2024-01-02T10:00:00Z")
+    lines = runner.invoke(app, ["show", "ibm_manila"], env={"COLUMNS": "80"}).stdout.splitlines()
+    assert lines[0].startswith("ibm_manila@2024-05-27T18:27:23Z")
+    assert lines[2].rstrip() == "calibrations  newest of the 2 you have"
+    assert lines[3].startswith("connectivity")
+
+
+def test_check_says_which_calibration_a_bare_id_picked(vault: Path) -> None:
+    require("cirq")
+    newer = _manila_in_the_vault("2024-06-03T10:00:00Z")
+    out = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq"]).stdout
+    assert out.startswith(f"ibm_manila (newest of 2) {newer.short_fingerprint} on qubits ")
+    dated = runner.invoke(app, ["check", "ibm_manila@2024-06-03", "--framework", "cirq"]).stdout
+    assert dated.startswith(f"ibm_manila {newer.short_fingerprint} on qubits ")
 
 
 # pull ---------------------------------------------------------------------------------------
@@ -458,6 +604,7 @@ def test_check_failure_exits_1(monkeypatch) -> None:
     monkeypatch.setattr(nv_cirq.NoiseVaultNoiseModel, "_noise", lambda self, *a: [])
     result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq"])
     assert result.exit_code == 1 and "FAIL" in result.stdout
+    assert "A pass means" not in result.stdout
 
 
 def test_check_json_and_skips() -> None:
@@ -479,7 +626,10 @@ def test_check_counts_a_reduced_circuit_apart_and_names_its_missing_gates(tmp_pa
     assert result.exit_code == 0, result.output
     row = next(line for line in result.stdout.splitlines() if line.startswith("stim "))
     assert "4 of 5, 1 reduced" in row
-    assert "stim: two_qubit_natives ran without rxx, ryy, rzz: rxx at" in result.stdout
+    assert (
+        "stim: two_qubit_natives ran without rxx, ryy, rzz: Stim simulates only Clifford gates,"
+        " and this profile's rxx gate is not Clifford" in " ".join(result.stdout.split())
+    )
     data = json.loads(
         runner.invoke(app, ["check", str(path), "--framework", "stim", "--json"]).stdout
     )
@@ -505,18 +655,33 @@ def test_check_names_one_whole_install_command_for_the_missing_frameworks(monkey
 def test_cite() -> None:
     profile = nv.load("ibm_fez")
     text = runner.invoke(app, ["cite", "ibm_fez"]).stdout
-    assert text == profile.citation() + "\n"
+    assert text == (
+        "IBM Quantum, via qiskit-ibm-runtime. Calibration of ibm_fez, 2025-02-26T20:16:25Z."
+        f" qiskit-ibm-runtime 0.49.0 FakeFez. NoiseVault {nv.__version__} profile"
+        f" ibm_fez@2025-02-26T20:16:25Z, fingerprint sha256:{profile.fingerprint}.\n"
+    )
     bibtex = runner.invoke(app, ["cite", "ibm_fez", "--bibtex"]).stdout
     assert bibtex == (
         "@misc{nv_ibm_fez_2025_02_26,\n"
         "  title = {{Calibrated noise of ibm\\_fez at 2025-02-26T20:16:25Z}},\n"
         "  author = {{IBM Quantum}},\n"
         "  year = {2025},\n"
-        f"  howpublished = {{NoiseVault profile ibm\\_fez, sha256:{profile.fingerprint}}},\n"
+        f"  howpublished = {{NoiseVault {nv.__version__} profile"
+        f" ibm\\_fez@2025-02-26T20:16:25Z, sha256:{profile.fingerprint}}},\n"
         "  note = {Retrieved via qiskit-ibm-runtime."
         " Source: qiskit-ibm-runtime 0.49.0 FakeFez; license Apache-2.0}\n"
         "}\n"
     )
+
+
+def test_cite_names_a_ref_that_loads_the_cited_calibration(vault: Path) -> None:
+    bundled = nv.load("ibm_manila")
+    _manila_in_the_vault("2024-06-03T10:00:00Z")
+    for style in ([], ["--bibtex"]):
+        text = runner.invoke(app, ["cite", "ibm_manila@2024-05-27", *style]).stdout
+        ref = re.search(rf"NoiseVault {re.escape(nv.__version__)} profile (\S+),", text)
+        assert ref, text
+        assert nv.load(ref[1].replace("\\_", "_")).fingerprint == bundled.fingerprint
 
 
 def _special_characters_profile(tmp_path: Path) -> Path:
@@ -542,7 +707,8 @@ def test_cite_bibtex_escapes_latex_specials(tmp_path: Path) -> None:
         "  title = {{Calibrated noise of toy at 2025-02-26T09:12:00Z}},\n"
         "  author = {{R\\&D Lab}},\n"
         "  year = {2025},\n"
-        f"  howpublished = {{NoiseVault profile test\\_toy, sha256:{fingerprint}}},\n"
+        f"  howpublished = {{NoiseVault {nv.__version__} profile"
+        f" test\\_toy@2025-02-26T09:12:00Z, sha256:{fingerprint}}},\n"
         "  note = {Retrieved via my\\_tool \\#2."
         " Source: 50\\% of run\\_7 \\{raw\\}; license CC0-1.0}\n"
         "}\n"
@@ -598,9 +764,6 @@ def test_doctor_lists_frameworks_and_the_vault(vault: Path) -> None:
     assert f"bundled profiles: {len(nv.catalog.bundled_profiles())}" in out
 
 
-_INSTALL_ALL = install_hint("all")
-
-
 def test_doctor_gives_a_whole_install_command_for_missing_frameworks(monkeypatch) -> None:
     from importlib.metadata import PackageNotFoundError
 
@@ -616,11 +779,36 @@ def test_doctor_gives_a_whole_install_command_for_missing_frameworks(monkeypatch
     assert f"To add the missing frameworks: {install_hint('stim')}" in out.splitlines()
 
 
-def test_check_with_no_framework_installed_gives_the_install_command(monkeypatch) -> None:
+def test_check_with_no_framework_installed_is_one_error_and_one_install_command(
+    monkeypatch,
+) -> None:
+    for module in ("qiskit", "cirq", "pennylane", "stim"):
+        monkeypatch.setitem(sys.modules, module, None)
+    result = runner.invoke(app, ["check", "ibm_manila"], env={"COLUMNS": "80"})
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr.splitlines() == [
+        "error: nv check needs a framework to check, and none is installed",
+        f"hint: {install_hint('qiskit')}",
+        "      (or cirq, pennylane or stim, or several, as in noisevault[qiskit,stim])",
+    ]
+
+
+def test_check_of_a_named_framework_that_is_not_installed_installs_that_one(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "cirq", None)
     result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq"])
-    assert result.exit_code == 1
-    assert f"no framework could run the check; install one: {_INSTALL_ALL}" in result.stderr
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr.splitlines() == [
+        "error: nv check needs a framework to check, and cirq is not installed",
+        f"hint: {install_hint('cirq')}",
+    ]
+
+
+def test_check_states_what_a_pass_means_only_after_a_pass() -> None:
+    require("stim")
+    result = runner.invoke(app, ["check", "quantinuum_h1-1", "--framework", "stim"])
+    assert result.exit_code == 1 and "A pass means" not in result.stdout
+    assert "stim skipped: Stim simulates only Clifford gates" in result.stdout
+    assert result.stderr == "error: no framework could run the check\n"
 
 
 # bad input never prints a traceback -----------------------------------------------------------
@@ -872,8 +1060,10 @@ def test_diff_says_new_or_gone_and_colors_every_change(vault: Path) -> None:
     rows = {tuple(line.split()[:3]): line.split()[-1] for line in lines if line[:1].isalnum()}
     assert rows[("3", "T1", "(us)")] == "new"
     assert rows[("4", "T1", "(us)")] == "gone"
-    assert rows[("default", "2q", "error")] == "+22.4%"
-    assert re.search(r"^5 +1q error +0\.00e\+00 +4\.00e-05 +\x1b\[31m-\x1b\[0m$", out, re.M)
+    assert rows[("default", "2q", "avg")] == "+22.4%"
+    assert re.search(
+        r"^5 +1q avg infidelity +0\.00e\+00 +4\.00e-05 +\x1b\[31m-\x1b\[0m$", out, re.M
+    )
     assert max(map(len, lines)) <= 80
 
 
@@ -920,6 +1110,22 @@ def test_nv_alone_prints_the_help_and_no_error() -> None:
     text = re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # typer forces color on CI runners
     assert "Usage: nv" in text and "list" in text
     assert "error" not in text
+
+
+def test_help_ends_with_the_commands_to_start_with() -> None:
+    start = [
+        " Start with:",
+        "   nv list             the bundled devices, offline",
+        "   nv show ibm_fez     one device's calibration",
+        "   nv check ibm_fez    test each installed framework export",
+    ]
+    for args in ([], ["--help"]):
+        result = runner.invoke(app, args, env={"COLUMNS": "60"}, prog_name="nv")
+        assert result.exit_code == 0, result.output
+        lines = re.sub(r"\x1b\[[0-9;]*m", "", result.output).rstrip().splitlines()
+        assert lines[-4:] == start and lines[-5] == ""
+    sub = runner.invoke(app, ["show", "--help"], env={"COLUMNS": "80"}, prog_name="nv")
+    assert "Start with" not in sub.output
 
 
 def test_an_unexpected_failure_is_one_line_unless_debugging(monkeypatch) -> None:
