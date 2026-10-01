@@ -300,8 +300,6 @@ def _vendor(backend: Any) -> str | None:
 
 
 def _technology(backend: Any) -> Technology:
-    """What the backend's package or its provider's device names say; any other backend could
-    be a simulator or any hardware."""
     if _vendor(backend) == "ibm":
         return "superconducting"
     package = type(backend).__module__.partition(".")[0]
@@ -485,8 +483,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     sentinel (an error at or above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and
     ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration on
     every working locus (IBM's ``rz``) is virtual, and its disabled loci keep their records.
-    A source lists each gate on every locus it runs on, so a qubit or connected pair the gate
-    is not listed on gets a ``disabled: true`` record instead of the device default.
+    A qubit or connected pair that the source does not list for a gate gets ``disabled: true``.
     Records of a symmetric gate that agree in both directions are stored once. A nonpositive or
     nonfinite T1/T2 is treated as missing and named in a note; a device with no valid T1 (or T2)
     left is an error.
@@ -642,13 +639,11 @@ def _unlisted(
     num_qubits: int,
     connectivity: Mapping[str, Any],
 ) -> list[Instruction]:
-    """The loci the gate's device default would cover that the source does not list, as
-    non-operational entries."""
     if arity == 1:
         loci = [(q,) for q in range(num_qubits)]
     elif arity == 2:
         loci = [tuple(edge) for edge in connectivity["edges"]]
-    else:  # the format applies no default to a wider gate
+    else:
         return []
     listed = {e.qubits for e in entries}
     if arity == 2 and gates.is_symmetric(name):

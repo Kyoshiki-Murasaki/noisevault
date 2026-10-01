@@ -1,5 +1,3 @@
-"""Profiles from Qiskit backends that are not IBM's: hand-built Targets and other providers."""
-
 from __future__ import annotations
 
 from itertools import permutations
