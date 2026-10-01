@@ -1,11 +1,12 @@
 """Stim export: a noisy copy of a Stim circuit that carries its conversion report.
 
 Every Clifford gate is followed by the Pauli twirl of the channel the shared conversion rules
-give it (PAULI_CHANNEL_1 or PAULI_CHANNEL_2). Twirling keeps each gate's average fidelity but
-drops relaxation's pull toward |0>, so the export matches the twirled model, not the full
-channel. Measurements get readout error, resets get preparation error, and with ``tick_ns``
-every qubit left idle in a TICK layer gets twirled relaxation for that time. Annotations,
-REPEAT blocks, detectors and observables pass through unchanged.
+give it: PAULI_CHANNEL_1 or PAULI_CHANNEL_2, or for a Pauli product on three or more qubits a
+CORRELATED_ERROR chain with the same probabilities. Twirling keeps each gate's average
+fidelity but drops relaxation's pull toward |0>, so the export matches the twirled model, not
+the full channel. Measurements get readout error, resets get preparation error, and with
+``tick_ns`` every qubit left idle in a TICK layer gets twirled relaxation for that time.
+Annotations, REPEAT blocks, detectors and observables pass through unchanged.
 """
 
 from __future__ import annotations
@@ -31,8 +32,8 @@ try:
 except ImportError as exc:
     raise ImportError(f"the Stim export needs stim: {install_hint('stim')}") from exc
 
-from .. import gates
-from ..channels import ChannelSpec, pauli_twirl, thermal_relaxation_kraus
+from .. import gates, metrics
+from ..channels import ChannelSpec, GateChannels, pauli_twirl, thermal_relaxation_kraus
 from ..conversion import UnknownGates, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
@@ -110,8 +111,9 @@ class NoiseVaultStimCircuit(stim.Circuit):
     ) -> stim.DetectorErrorModel:
         """Stim's detector error model, reading PAULI_CHANNEL components as independent.
 
-        Stim refuses PAULI_CHANNEL_1/2 without ``approximate_disjoint_errors``, an O(p^2)
-        approximation, so it is on by default here; pass False to get Stim's refusal.
+        Stim refuses PAULI_CHANNEL_1/2 and ELSE_CORRELATED_ERROR without
+        ``approximate_disjoint_errors``, an O(p^2) approximation, so it is on by default here;
+        pass False to get Stim's refusal.
         """
         return super().detector_error_model(
             approximate_disjoint_errors=approximate_disjoint_errors, **options
@@ -421,7 +423,9 @@ class _Exporter:
                     continue
                 busy.update(qubits)
                 channel = self._gate_channel(inst.name, qubits)
-                if channel:
+                if channel and len(qubits) > 2:
+                    lines.append(channel)  # a correlated chain names its own targets
+                elif channel:
                     noise.setdefault(channel, []).extend(qubits)
             lines.extend(_noise_lines(noise))
         return busy
@@ -487,18 +491,30 @@ class _Exporter:
         wires = tuple(self.physical[q] for q in qubits)
         before = {event: Counter(counts) for event, counts in self.report.events.items()}
         try:
-            if stim_name in _MULTI_ENTANGLER:
-                raise MissingCalibrationError(
-                    f"{stim_name} needs two native entangling gates, so no single calibration"
-                    " describes it; decompose it into the profile's native gates first"
-                )
-            name = gate_name(stim_name, self.defined)
-            built = resolve_op(
-                self.table, name, wires, unknown_gates=self.unknown_gates, report=self.report
-            )
+            built = self._channels(stim_name, wires)
         except (MissingCalibrationError, DisabledGateError, LayoutError) as exc:
             raise type(exc)(self._explain(stim_name, qubits, wires, exc)) from exc
-        return self._twirl(built.channels, wires), _added_events(before, self.report.events)
+        events = _added_events(before, self.report.events)
+        if len(qubits) > 2:
+            return _correlated_errors(pauli_twirl(built.channels, wires), qubits), events
+        return self._twirl(built.channels, wires), events
+
+    def _channels(self, stim_name: str, wires: tuple[int, ...]) -> GateChannels:
+        name = gate_name(stim_name, self.defined)
+        if stim_name not in _MULTI_ENTANGLER:
+            return resolve_op(
+                self.table, name, wires, unknown_gates=self.unknown_gates, report=self.report
+            )
+        # CXSWAP and the like are not registry gates, so resolve_op's rule that keeps typical
+        # noise off SWAP does not cover them.
+        try:
+            return resolve_op(self.table, name, wires, unknown_gates="error", report=self.report)
+        except MissingCalibrationError:
+            raise MissingCalibrationError(
+                f"{stim_name} needs two native entangling gates, so no single native gate's"
+                f" calibration describes it; decompose it into the profile's native gates, or"
+                f" calibrate {name} itself"
+            ) from None
 
     def _explain(
         self, stim_name: str, qubits: tuple[int, ...], wires: tuple[int, ...], exc: Exception
@@ -678,6 +694,24 @@ def _pauli_channel(probs: Sequence[float]) -> str:
     if not any(probs):
         return ""
     return f"{_PAULI_CHANNEL[len(probs)]}({','.join(map(repr, probs))})"
+
+
+def _correlated_errors(probs: Sequence[float], qubits: Sequence[int]) -> str:
+    """The Pauli channel ``probs`` on 3+ ``qubits``, which no PAULI_CHANNEL instruction takes.
+
+    An ELSE_CORRELATED_ERROR fires only when no earlier error in its chain did, so each takes
+    its probability divided by the chance that none has fired yet (at most 1, which rounding
+    can pass at the end of a channel with no identity part).
+    """
+    lines: list[str] = []
+    untouched = 1.0
+    for label, p in zip(metrics.pauli_labels(len(qubits)), probs, strict=True):
+        if p > 0:
+            targets = " ".join(f"{c}{q}" for c, q in zip(label, qubits, strict=True) if c != "I")
+            given = p / untouched if p < untouched else 1.0
+            lines.append(f"{'ELSE_' if lines else ''}CORRELATED_ERROR({given!r}) {targets}")
+            untouched -= p
+    return "\n".join(lines)
 
 
 def _noise_lines(noise: dict[str, list[int]]) -> list[str]:

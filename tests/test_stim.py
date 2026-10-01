@@ -10,7 +10,7 @@ from conftest import MANILA_V01, migrated, require, toy
 
 stim = require("stim")
 
-from noisevault import gates  # noqa: E402
+from noisevault import gates, metrics  # noqa: E402
 from noisevault.channels import (  # noqa: E402
     ChannelSpec,
     gate_channels,
@@ -21,6 +21,7 @@ from noisevault.channels import (  # noqa: E402
 )
 from noisevault.conversion import resolve_op  # noqa: E402
 from noisevault.errors import (  # noqa: E402
+    DisabledGateError,
     LayoutError,
     MissingCalibrationError,
     NoiseApproximationWarning,
@@ -90,6 +91,12 @@ def _grid(n: int, *, worse_rows: int = 0) -> Profile:
     bad = [e for e in edges if e[0] < worse_rows * n]
     data["calibrations"] = [{"gate": "cz", "qubits": list(e), "avg_infidelity": 0.05} for e in bad]
     return Profile.from_dict(data)
+
+
+def _all_to_all(n: int, gate: str, spec: dict) -> Profile:
+    device = {"name": "toy", "vendor": "test", "technology": "superconducting", "num_qubits": n}
+    defs = {"rz": {"virtual": True}, gate: spec}
+    return Profile.model_validate(toy(device=device, connectivity="all_to_all", gates=defs))
 
 
 def _program(ops, n: int) -> stim.Circuit:
@@ -298,6 +305,23 @@ def test_report_events_count_every_gate_application(tick_ns):
 def test_gates_needing_two_or_more_entanglers_must_be_decomposed(gate):
     with pytest.raises(MissingCalibrationError, match=f"`{gate} 0 1`.*decompose"):
         to_stim(_manila(), f"{gate} 0 1")
+
+
+@pytest.mark.parametrize("gate", ["CXSWAP", "SWAPCX", "CZSWAP"])
+def test_a_two_entangler_gate_takes_the_profiles_own_calibration_of_it(gate):
+    def export(spec: dict, unknown_gates: str = "typical") -> stim.Circuit:
+        profile = _all_to_all(2, gate.lower(), {"qubits": 2, **spec})
+        return to_stim(profile, f"{gate} 0 1", readout="none", unknown_gates=unknown_gates)
+
+    calibrated = export({"avg_infidelity": 0.02})
+    assert _noise_after(calibrated, gate) == pytest.approx(metrics.uniform_pauli(0.02, 2))
+    assert "typical_noise_used" not in calibrated.report.events
+    assert str(export({"virtual": True})) == f"{gate} 0 1"
+    with pytest.raises(DisabledGateError, match=f"`{gate} 0 1`.*disabled"):
+        export({"disabled": True})
+    for unknown_gates in ("typical", "error"):
+        with pytest.raises(MissingCalibrationError, match=f"`{gate} 0 1`.*decompose"):
+            export({}, unknown_gates)
 
 
 def test_two_qubit_identity_gets_no_noise():
@@ -515,6 +539,49 @@ def test_a_pauli_product_gate_is_noised_on_the_qubits_left_after_reducing_it():
     assert out.report.events["typical_noise_used"] == {"spp": 1}
     placed = "QUBIT_COORDS(0, 0) 0\nQUBIT_COORDS(0, 1) 1\nSPP X0*X0\nCZ 0 1"
     assert layout_from_coords(placed, _grid(3)) == {0: 0, 1: 1}
+
+
+def _paulis_seen_by_stim(noise: stim.Circuit, n: int) -> dict[str, float]:
+    """Pauli errors that ``noise`` puts on qubits 0..n-1, read from Stim's error model.
+
+    Qubit q starts in a Bell pair with qubit q + n, so the Bell measurement after the noise
+    flips a different set of detectors for each Pauli.
+    """
+    data, partners = " ".join(map(str, range(n))), " ".join(map(str, range(n, 2 * n)))
+    pairs = " ".join(f"{q} {q + n}" for q in range(n))
+    detectors = "\n".join(f"DETECTOR rec[{i - 2 * n}]" for i in range(2 * n))
+    bell = stim.Circuit(f"H {data}\nCX {pairs}")
+    probe = bell + noise + bell.inverse() + stim.Circuit(f"M {data} {partners}\n{detectors}")
+    seen = {}
+    for error in probe.detector_error_model(approximate_disjoint_errors=True):
+        if error.type == "error":
+            flipped = {t.val for t in error.targets_copy()}
+            label = "".join("IXZY"[(q + n in flipped) + 2 * (q in flipped)] for q in range(n))
+            seen[label] = error.args_copy()[0]
+    return seen
+
+
+_DISTINCT_3Q = tuple(1e-4 * (k + 1) for k in range(63))
+
+
+@pytest.mark.parametrize(
+    ("n", "metric", "expected"),
+    [
+        (3, {"avg_infidelity": 0.02}, metrics.uniform_pauli(0.02, 3)),
+        (3, {"pauli": _DISTINCT_3Q}, _DISTINCT_3Q),
+        (4, {"avg_infidelity": 0.02}, metrics.uniform_pauli(0.02, 4)),
+    ],
+)
+def test_a_calibrated_product_on_three_or_more_qubits_gets_its_whole_pauli_channel(
+    n, metric, expected
+):
+    product = "*".join(f"Z{q}" for q in range(n))
+    layout = [(q + 1) % n for q in range(n)]
+    profile = _all_to_all(n, "spp", {"qubits": n, **metric})
+    out = to_stim(profile, f"SPP {product}", layout=layout, readout="none")
+    assert str(out[0]) == f"SPP {product}"
+    want = dict(zip(metrics.pauli_labels(n), expected, strict=True))
+    assert _paulis_seen_by_stim(out[1:], n) == pytest.approx(want, rel=1e-9)
 
 
 @pytest.mark.parametrize(

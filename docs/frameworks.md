@@ -225,7 +225,8 @@ checks only the wires its operations or readout reach.
 ## Stim
 
 `to_stim(circuit)` returns a copy of a Stim circuit with each gate followed by the Pauli twirl
-of its channel, as `PAULI_CHANNEL_1` or `PAULI_CHANNEL_2`. Annotations, `REPEAT` blocks,
+of its channel, as `PAULI_CHANNEL_1` or `PAULI_CHANNEL_2`, or on three or more qubits as a chain
+of `CORRELATED_ERROR` and `ELSE_CORRELATED_ERROR`. Annotations, `REPEAT` blocks,
 detectors and observables pass through, so decoders such as PyMatching work on the result.
 
 ```python
