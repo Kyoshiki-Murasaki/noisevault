@@ -285,12 +285,9 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
         want = _expect_prefix(expect)
         pinned = [i for i in matches if i.fingerprint.startswith(want)]
         if not pinned:
-            raise _mismatch(_loaded(ref, matches), expect, ref.id, known)
+            raise _mismatch(_loaded(ref, _unshadowed(matches)), expect, ref.id, known)
         matches = pinned
-    shadowed = {_epoch(i.calibrated_at) for i in matches if i.location == "vault"}
-    matches = [
-        i for i in matches if i.location == "vault" or _epoch(i.calibrated_at) not in shadowed
-    ]
+    matches = _unshadowed(matches)
     if len(matches) > 1:
         listing = "; ".join(f"{i.ref} ({i.location}, nv:{i.fingerprint[:12]})" for i in matches)
         if len({i.calibrated_at for i in matches}) > 1:
@@ -465,13 +462,16 @@ def _loaded(ref: Ref, held: list[ProfileInfo]) -> str:
 def _mismatch(
     loaded: str, expect: str, device: str, known: list[ProfileInfo]
 ) -> FingerprintMismatch:
-    """The error for a profile that misses its pin. The hint names the profile you have with the
-    pinned fingerprint, or says how to get that file."""
+    """The error for a profile that misses its pin. If you have a profile with that fingerprint,
+    the hint is the nv.load call, with the same pin, that loads it. If not, the hint says how to
+    get the file."""
     want = _expect_prefix(expect)
     missed = f"{loaded}, not the expected {expect}"
     match = next((i for i in known if i.fingerprint.startswith(want)), None)
     if match is not None:
-        return FingerprintMismatch(missed, hint=f"load {match.ref}, which has that fingerprint")
+        where = match.ref if match.calibrated_at else str(match.path)
+        call = f"nv.load({where!r}, expect={expect!r})"
+        return FingerprintMismatch(missed, hint=f"{call} loads the profile with that fingerprint")
     hint = "ask whoever pinned it for the profile file"
     if _pull_source(device):
         hint += (
@@ -483,7 +483,7 @@ def _mismatch(
 
 def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> ProfileNotFound:
     """What a dated ref's date means when it names no profile, and what you have instead."""
-    have = ", ".join(sorted(i.ref for i in candidates))
+    have = ", ".join(sorted({i.ref for i in candidates}))
     if ref.timestamp is not None:
         return ProfileNotFound(
             f"no {ref.id} profile calibrated at {_stamp(ref.timestamp)}; you have {have}"
@@ -495,6 +495,12 @@ def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> ProfileNotFound:
         f"no {ref.id} profile calibrated on {ref.date} UTC; you have {have}",
         hint=fetch if _pull_source(ref.id) else None,
     )
+
+
+def _unshadowed(infos: list[ProfileInfo]) -> list[ProfileInfo]:
+    """Profiles of one id, without each bundled one that a vault profile of its time shadows."""
+    shadowed = {_epoch(i.calibrated_at) for i in infos if i.location == "vault"}
+    return [i for i in infos if i.location == "vault" or _epoch(i.calibrated_at) not in shadowed]
 
 
 def _dedupe(infos: list[ProfileInfo]) -> list[ProfileInfo]:

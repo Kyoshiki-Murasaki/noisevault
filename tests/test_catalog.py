@@ -35,7 +35,7 @@ FRAMEWORKS = {
 }
 
 
-def _dated(stamp: str, error: float = 1e-3) -> Profile:
+def _dated(stamp: str | None, error: float = 1e-3) -> Profile:
     data = toy(
         device={
             "name": "toy",
@@ -211,14 +211,80 @@ def test_vault_profile_shadows_a_bundled_one_of_the_same_time(vault: Path) -> No
     for ref in ("ibm_manila", "ibm_manila@2024-05-27", "ibm_manila@2024-05-27T18:27:23Z"):
         assert nv.load(ref).fingerprint == mine.fingerprint, ref
     assert nv.load("ibm_manila", expect=bundled.short_fingerprint) == bundled
-    with pytest.raises(FingerprintMismatch, match=mine.short_fingerprint):
+    with pytest.raises(FingerprintMismatch) as info:
         nv.load("ibm_manila", expect="nv:000000000000")
+    assert info.value.message == (
+        f"ibm_manila loads ibm_manila@2024-05-27T18:27:23Z ({mine.short_fingerprint}), not the"
+        " expected nv:000000000000, and no profile you have has that fingerprint"
+    )
 
 
 def _later_manila() -> Profile:
     data = _changed_manila(5e-4).to_dict()
     data["device"]["calibrated_at"] = "2024-06-03T10:00:00Z"
     return Profile.model_validate(data)
+
+
+def _follow(hint: str | None) -> Profile:
+    """Load what a FingerprintMismatch hint says to load, exactly as it says it."""
+    assert hint is not None
+    target = re.search(r"load[ (]'?([^\s',]+)", hint)
+    pin = re.search(r"expect='([^']+)'", hint)
+    assert target is not None, hint
+    return nv.load(target.group(1), expect=pin.group(1) if pin else None)
+
+
+def _shadowed_manila() -> Profile:
+    """A vault copy of Manila's bundled calibration with qubit 0's T1 at 99 us, and a newer one."""
+    data = nv.load("ibm_manila").to_dict()
+    data["qubits"][0]["t1_us"] = 99.0
+    mine = Profile.model_validate(data)
+    later = _later_manila()
+    for profile in (mine, later):
+        profile.save(vault_path(profile))
+    return mine
+
+
+def test_following_a_mismatch_hint_loads_the_pinned_profile_past_a_vault_copy(
+    vault: Path,
+) -> None:
+    bundled = nv.load("ibm_manila")
+    mine = _shadowed_manila()
+    ref, pin = "ibm_manila@2024-05-27T18:27:23Z", bundled.short_fingerprint
+    assert nv.load(ref).fingerprint == mine.fingerprint
+    with pytest.raises(FingerprintMismatch) as info:
+        nv.load("ibm_manila", expect=pin)
+    assert _follow(info.value.hint).fingerprint == bundled.fingerprint
+    hint = f"nv.load('{ref}', expect='{pin}') loads the profile with that fingerprint"
+    assert info.value.hint == hint
+    assert str(info.value) == f"{info.value.message}; {hint}"
+
+
+def test_a_mismatch_hint_names_the_file_of_an_undated_profile(vault: Path) -> None:
+    undated, dated = _dated(None), _dated("2025-01-01T00:00:00Z")
+    path = undated.save(vault_path(undated))
+    dated.save(vault_path(dated))
+    pin = undated.short_fingerprint
+    with pytest.raises(FingerprintMismatch) as info:
+        nv.load("test_toy@2025-01-01", expect=pin)
+    assert _follow(info.value.hint).fingerprint == undated.fingerprint
+    assert info.value.hint == (
+        f"nv.load('{path}', expect='{pin}') loads the profile with that fingerprint"
+    )
+
+
+def test_a_missed_date_lists_each_ref_once_past_a_vault_copy(vault: Path) -> None:
+    _shadowed_manila()
+    error = (
+        "no ibm_manila profile calibrated on 2025-01-01 UTC;"
+        " you have ibm_manila@2024-05-27T18:27:23Z, ibm_manila@2024-06-03T10:00:00Z"
+    )
+    with pytest.raises(ProfileNotFound) as info:
+        nv.load("ibm_manila@2025-01-01")
+    assert info.value.message == error
+    result = CliRunner().invoke(app, ["show", "ibm_manila@2025-01-01"])
+    assert result.exit_code == 1
+    assert result.stderr.splitlines()[0] == f"error: {error}"
 
 
 def test_a_fingerprint_mismatch_names_the_calibration_that_has_the_pin(vault: Path) -> None:
@@ -231,7 +297,10 @@ def test_a_fingerprint_mismatch_names_the_calibration_that_has_the_pin(vault: Pa
         "ibm_manila@2024-06-03": f"ibm_manila@2024-06-03 is {held}",
         str(path): f"{path} holds ibm_manila@2024-06-03T10:00:00Z ({held})",
     }
-    hint = "load ibm_manila@2024-05-27T18:27:23Z, which has that fingerprint"
+    hint = (
+        f"nv.load('ibm_manila@2024-05-27T18:27:23Z', expect='{pin}') loads the profile with that"
+        " fingerprint"
+    )
     for ref, head in heads.items():
         with pytest.raises(FingerprintMismatch) as info:
             nv.load(ref, expect=pin)
@@ -376,20 +445,18 @@ def test_a_pull_never_replaces_a_vault_file_of_another_calibration(
 def test_a_failed_pull_to_a_file_leaves_the_existing_file_whole(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    resource = pytest.importorskip("resource")
     target = _dated("2025-01-01T00:00:00Z").save(tmp_path / "existing.json.gz")
     before = target.read_bytes()
     newer = _dated("2025-02-01T00:00:00Z")
     _serve(monkeypatch, newer)
-
-    def disk_full(self: Path, data: bytes) -> int:
-        with open(self, "wb") as handle:
-            handle.write(data[:20])
-        raise OSError(errno.ENOSPC, "No space left on device")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(Path, "write_bytes", disk_full)
-        with pytest.raises(OSError, match="No space"):
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (20, hard))
+    try:
+        with pytest.raises(OSError, match="File too large"):
             _pull_quietly(output=target)
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
     assert target.read_bytes() == before
     assert list(tmp_path.iterdir()) == [target]
     assert _pull_quietly(output=target) == (newer, target, True)
