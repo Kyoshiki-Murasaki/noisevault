@@ -186,7 +186,10 @@ PennyLane has no operation named after the `r`, `zz` and `ms` natives of trapped
 A `qml.Rot(a, theta, -a)` gets the profile's `r` noise and `qml.IsingZZ(pi/2)` its `zz` noise.
 On a profile with an `ms` native, `qml.IsingXX(±pi/2)` and `qml.IsingYY(±pi/2)` get its `ms`
 noise. Other angles, and gates the profile has no native for, get typical noise with a warning,
-and the report counts each use.
+and the report counts each use. A broadcast operation gets one noise channel for all its
+elements, so the model raises an error when its angles call for different gates' noise, such as
+`qml.IsingXX` over `[pi/2, 0.4]`. Expand the broadcast before adding noise:
+`qml.add_noise(qml.transforms.broadcast_expand(qnode), model)`.
 
 ## Stim
 

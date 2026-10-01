@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import warnings
+from functools import partial
 from types import ModuleType
 
 import numpy as np
@@ -580,6 +581,21 @@ def test_composed_models_still_refuse_shot_vectors_with_readout(qml) -> None:
         qml.set_shots(qml.add_noise(circuit, composed), [100, 200])()
 
 
+def test_a_model_stripped_of_readout_runs_shot_vectors(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    @qml.qnode(qml.device("default.mixed", wires=1, seed=3))
+    def circuit():
+        qml.PauliX(0)
+        return qml.probs(wires=[0])
+
+    model = to_pennylane(_two_readouts())
+    stripped = model - {"meas_map": model.meas_map}
+    out = qml.set_shots(qml.add_noise(circuit, stripped), [100, 200])()
+    # x is ideal, so without readout every shot reads 1
+    assert [np.asarray(r).tolist() for r in out] == [[0.0, 1.0], [0.0, 1.0]]
+
+
 def test_noise_functions_outside_add_noise_refuse_to_guess_the_circuit(qml) -> None:
     from noisevault.frameworks.pennylane import to_pennylane
 
@@ -967,6 +983,72 @@ def test_ising_zz_at_pi_over_2_is_rzz_on_a_profile_without_zz(qml) -> None:
 
     qml.add_noise(circuit, model)()
     assert not model.report.events.get("typical_noise_used")
+
+
+def _noisy_natives() -> Profile:
+    """ms and r much noisier than rxx and the typical h, so each choice shows in the results."""
+    data = toy(
+        gates={
+            "ms": {"avg_infidelity": 0.2, "duration_ns": 70},
+            "rxx": {"avg_infidelity": 0.01, "duration_ns": 70},
+            "r": {"avg_infidelity": 0.2, "duration_ns": 35},
+            "h": {"avg_infidelity": 0.01, "duration_ns": 35},
+        },
+        qubits=[{"index": 0}, {"index": 1}],
+    )
+    return Profile.model_validate(data)
+
+
+def _broadcast_circuit(qml, gate):
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit(angle):
+        gate(angle)
+        return qml.probs(wires=[0, 1])
+
+    return circuit
+
+
+def test_broadcast_angles_that_select_different_natives_raise(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    model = to_pennylane(_noisy_natives())
+    circuit = _broadcast_circuit(qml, lambda a: qml.IsingXX(a, wires=[0, 1]))
+    angles = [np.pi / 2, 0.4]
+    with pytest.raises(ValueError, match=r"ms, rxx.*qml\.transforms\.broadcast_expand"):
+        qml.add_noise(circuit, model)(np.array(angles))
+
+    expanded = qml.add_noise(qml.transforms.broadcast_expand(circuit), model)(np.array(angles))
+    each = [np.asarray(qml.add_noise(circuit, model)(a)) for a in angles]
+    assert np.asarray(expanded) == pytest.approx(np.array(each), abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("profile", "gate", "angles"),
+    [
+        (_noisy_natives, "IsingXX", [np.pi / 2, -np.pi / 2]),
+        (_noisy_natives, "IsingXX", [0.3, 0.4]),
+        (partial(_trapped_ion, two_qubit="rxx"), "IsingXX", [np.pi / 2, 0.4]),
+        (_noisy_natives, "Rot", [0.2, 0.5]),
+        (_noisy_natives, "RX", [0.2, 0.5]),
+    ],
+    ids=["ms twice", "rxx twice", "rxx without ms", "r twice", "no native at an angle"],
+)
+def test_broadcasts_whose_angles_share_a_native_match_running_each_angle(
+    qml, profile, gate, angles
+) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    apply = {
+        "IsingXX": lambda a: qml.IsingXX(a, wires=[0, 1]),
+        "Rot": lambda a: qml.Rot(a, 1.0, -a, wires=0),
+        "RX": lambda a: qml.RX(a, wires=0),
+    }[gate]
+    model = to_pennylane(profile())
+    circuit = _broadcast_circuit(qml, apply)
+
+    batched = np.asarray(qml.add_noise(circuit, model)(np.array(angles)))
+    each = [np.asarray(qml.add_noise(circuit, model)(a)) for a in angles]
+    assert batched == pytest.approx(np.array(each), abs=1e-12)
 
 
 def test_check_runs_pennylane_on_quantinuum() -> None:

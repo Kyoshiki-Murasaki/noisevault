@@ -133,8 +133,10 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
                 f"NoiseVault noise ran outside qml.add_noise (PennyLane {qml.__version__}),"
                 " where it cannot see the circuit's wires; use qml.add_noise(qnode, model)"
             )
-        tape = frame.f_locals[frame.f_code.co_varnames[0]]  # its first parameter, the tape
-        if self.meas_map and tape.shots.has_partitioned_shots:
+        # Its first two parameters: the tape and the model it applies. That model, not this one,
+        # decides readout, because composing can remove or add a measurement map.
+        tape, model = (frame.f_locals[name] for name in frame.f_code.co_varnames[:2])
+        if model.meas_map and tape.shots.has_partitioned_shots:
             raise ValueError(
                 "qml.add_noise keeps only part of a shot vector's results when readout noise is"
                 " on; run each shot count separately or pass readout=False"
@@ -272,7 +274,8 @@ def to_pennylane(
     ``qml.IsingYY(+-pi/2)`` that of its ``ms``, and ``qml.Rot(a, theta, -a)`` that of its ``r``
     (:func:`operation_for` builds zz and r); see :func:`gate_name`. Traced angles, as under
     ``jax.jit``, cannot be compared, so those operations then get ``rzz``, ``rxx`` or ``ryy``
-    noise or the typical-noise rule.
+    noise or the typical-noise rule. A broadcast whose angles call for different gates' noise
+    raises ValueError; apply ``qml.transforms.broadcast_expand`` before ``qml.add_noise``.
     """
     return NoiseVaultPennyLaneModel(
         profile, layout=layout, unknown_gates=unknown_gates, readout=readout
@@ -288,8 +291,17 @@ def gate_name(op: Operator, defined: Container[str] = ()) -> str:
     (``SX`` as ``rx``); ``defined`` is a profile's gate names.
     """
     own = _CANONICAL.get(op.name, op.name)
-    native = _native_at_angle(op)
-    return native_name(own, defined) if native is None else native_name(native, defined, own)
+    names = {
+        native_name(own, defined) if native is None else native_name(native, defined, own)
+        for native in _natives_at_angle(op)
+    }
+    if len(names) > 1:
+        raise ValueError(
+            f"{op.name} is broadcast over angles that get the noise of different gates"
+            f" ({', '.join(sorted(names))}), and one operation takes one noise channel; expand"
+            " the broadcast first: qml.add_noise(qml.transforms.broadcast_expand(qnode), model)"
+        )
+    return names.pop()
 
 
 def operation_for(name: str) -> Callable[..., Operator] | None:
@@ -333,15 +345,24 @@ def _describe(report: Report, readout: bool) -> None:
     )
 
 
-def _native_at_angle(op: Operator) -> str | None:
+def _natives_at_angle(op: Operator) -> set[str | None]:
+    """The native each angle of ``op`` equals, None for an angle that equals none; a broadcast
+    operation has one angle per element."""
     if op.name not in _AT_ANGLE:
-        return None
+        return {None}
     native, angle_of, values = _AT_ANGLE[op.name]
     angle = angle_of(op.parameters)
-    if qml.math.is_abstract(angle) or qml.math.ndim(angle) != 0:
-        return None
-    gaps = [(float(qml.math.toarray(angle)) - value) % (2 * pi) for value in values]
-    return native if any(min(gap, 2 * pi - gap) < _ANGLE_TOL for gap in gaps) else None
+    if qml.math.is_abstract(angle):
+        return {None}
+    return {
+        native if any(_same_angle(a, value) for value in values) else None
+        for a in np.ravel(qml.math.toarray(angle))
+    }
+
+
+def _same_angle(a: float, b: float) -> bool:
+    gap = (float(a) - b) % (2 * pi)
+    return min(gap, 2 * pi - gap) < _ANGLE_TOL
 
 
 def _labels(layout: Layout) -> list[Hashable]:
