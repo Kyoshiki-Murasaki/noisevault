@@ -8,6 +8,7 @@ import subprocess
 import sys
 from importlib.metadata import version
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from conftest import MANILA_V01, require, toy
@@ -19,6 +20,10 @@ from noisevault.errors import SourceUnavailable, install_hint
 from noisevault.profile import Profile
 
 runner = CliRunner()
+
+
+def _unstyled(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)  # typer forces color on CI runners
 
 
 def test_validate_accepts_a_0_1_file_and_reports_the_migration() -> None:
@@ -197,7 +202,7 @@ _OUTPUTS = [
 def test_no_output_line_ends_in_spaces(columns: int, color: dict[str, str]) -> None:
     for args in _OUTPUTS:
         out = runner.invoke(app, args, env={"COLUMNS": str(columns), **color}).stdout
-        plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+        plain = _unstyled(out)
         padded = [line for line in plain.splitlines() if line != line.rstrip()]
         assert not padded, (args, padded[:3])
 
@@ -217,7 +222,7 @@ def test_no_output_line_ends_in_spaces(columns: int, color: dict[str, str]) -> N
 )
 def test_output_writes_commands_without_backticks(args: list[str]) -> None:
     result = runner.invoke(app, args, env={"COLUMNS": "200"}, prog_name="nv")
-    output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    output = _unstyled(result.output)
     assert "nv " in output and "`" not in output, output
 
 
@@ -981,21 +986,28 @@ def test_check_states_what_a_pass_means_only_after_a_pass() -> None:
 # bad input never prints a traceback -----------------------------------------------------------
 
 _PROFILE_FILE = "give a profile file (.json or .json.gz)"
-# file text -> what the error line says, and the hint line (with {path}), if any
+
+
+class _Damage(NamedTuple):
+    text: str
+    error: str
+    hint: str | None
+
+
 _DAMAGED = {
-    "not-json": ("{not json", "is not JSON (Expecting property name", _PROFILE_FILE),
-    "empty": ("", "is not JSON (Expecting value", _PROFILE_FILE),
-    "legacy-empty": (
+    "not-json": _Damage("{not json", "is not JSON (Expecting property name", _PROFILE_FILE),
+    "empty": _Damage("", "is not JSON (Expecting value", _PROFILE_FILE),
+    "legacy-empty": _Damage(
         '{"schema_version": "0.1"}',
         "not a valid NoiseVault 0.1 file: provider",
         None,
     ),
-    "legacy-null-gates": (
+    "legacy-null-gates": _Damage(
         json.dumps({**json.loads(MANILA_V01.read_text()), "gates": None}),
         "gates should be a list, not null; fix that field",
         None,
     ),
-    "invalid": (
+    "invalid": _Damage(
         json.dumps(toy(gates=None)),
         "is not a valid profile (1 problem)",
         "run nv validate {path} to list them",
@@ -1016,7 +1028,7 @@ _COMMANDS = {
 def test_every_command_names_a_damaged_file_and_what_is_wrong(
     tmp_path: Path, command: str, damage: str
 ) -> None:
-    text, expected, hint = _DAMAGED[damage]
+    text, error, hint = _DAMAGED[damage]
     path = tmp_path / f"{damage}.json"
     path.write_text(text)
     result = runner.invoke(app, _COMMANDS[command](str(path)), env={"COLUMNS": "80"})
@@ -1026,7 +1038,7 @@ def test_every_command_names_a_damaged_file_and_what_is_wrong(
         assert result.stderr == "error: gates: Input should be a valid dictionary\n"
         return
     first, *rest = result.stderr.splitlines()
-    assert first.startswith(f"error: {path}") and expected in first
+    assert first.startswith(f"error: {path}") and error in first
     assert rest == ([f"hint: {hint.format(path=path)}"] if hint else [])
 
 
@@ -1230,7 +1242,7 @@ def test_diff_says_new_or_gone_and_colors_every_change(vault: Path) -> None:
     before, after = _same_day(vault)
     env = {"COLUMNS": "80", "FORCE_COLOR": "1"}
     out = runner.invoke(app, ["diff", before, after], env=env).stdout
-    plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+    plain = _unstyled(out)
     lines = plain.splitlines()
     assert (
         lines[0] == "quantinuum_h1-1 2025-05-02T09:15:00Z -> 2025-05-02T14:30:00Z  (5 hours later)"
@@ -1288,7 +1300,7 @@ def test_a_usage_mistake_is_an_error_and_at_most_one_hint(args: list[str], error
 def test_every_ref_argument_is_described_the_same_way() -> None:
     def help_text(command: str) -> str:
         result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "200"}, prog_name="nv")
-        return re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # typer forces color on CI runners
+        return _unstyled(result.output)
 
     for command in ("show", "check", "cite"):
         assert "Profile id (ibm_fez), id@date, or a file path." in help_text(command), command
@@ -1300,7 +1312,7 @@ def test_every_ref_argument_is_described_the_same_way() -> None:
 def test_nv_alone_prints_the_help_and_no_error() -> None:
     result = runner.invoke(app, [], env={"COLUMNS": "80"}, prog_name="nv")
     assert result.exit_code == 0, result.output
-    text = re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # typer forces color on CI runners
+    text = _unstyled(result.output)
     assert "Usage: nv" in text and "list" in text
     assert "error" not in text
 
@@ -1315,7 +1327,7 @@ def test_help_ends_with_the_commands_to_start_with() -> None:
     for args in ([], ["--help"]):
         result = runner.invoke(app, args, env={"COLUMNS": "60"}, prog_name="nv")
         assert result.exit_code == 0, result.output
-        lines = re.sub(r"\x1b\[[0-9;]*m", "", result.output).rstrip().splitlines()
+        lines = _unstyled(result.output).rstrip().splitlines()
         assert lines[-4:] == start and lines[-5] == ""
     sub = runner.invoke(app, ["show", "--help"], env={"COLUMNS": "80"}, prog_name="nv")
     assert "Start with" not in sub.output

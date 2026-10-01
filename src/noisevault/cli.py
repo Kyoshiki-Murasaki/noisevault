@@ -147,8 +147,7 @@ _SOURCE_KINDS = {
     "hand_written": _SourceWords("by hand", "written by hand"),
     "derived": _SourceWords("derived", "derived from another profile"),
 }
-# What to do next after a failure that carries no hint of its own; the first match wins.
-_HINTS: tuple[tuple[type[BaseException], str], ...] = (
+_FOREIGN_ERROR_HINTS: tuple[tuple[type[BaseException], str], ...] = (
     (ImportError, f"install the frameworks: {_INSTALL_ALL}"),
     (ValidationError, "run nv validate FILE to list every problem in the file"),
     (FileNotFoundError, "check the path, or give a profile id such as ibm_fez"),
@@ -248,7 +247,7 @@ def list_profiles(
             if column in columns:
                 columns.remove(column)
                 table = _list_table(rows, columns)
-        _emit(table, width=out.measure(table, options=unlimited).maximum)
+        _emit(table, natural_width=out.measure(table, options=unlimited).maximum)
         if any(r["location"] == "vault" for r in rows):
             _emit("* in your vault (nv doctor shows its folder)")
         count = _count(len(rows), "profile")
@@ -264,7 +263,6 @@ _LIST_DROPS = ("source", "processor", "license")
 
 
 def _licenses(rows: list[dict[str, Any]]) -> str:
-    """The most common license, and the profiles under each other one."""
     by_license: dict[str, list[str]] = {}
     for row in rows:
         by_license.setdefault(row["shown_license"], []).append(row["short_ref"])
@@ -277,7 +275,6 @@ def _licenses(rows: list[dict[str, Any]]) -> str:
 
 
 def _list_table(rows: list[dict[str, Any]], columns: list[str]) -> Table:
-    """The rows under technology headings, in the order given. No cell is cut."""
     table = Table(box=None, pad_edge=False, header_style="bold")
     for column in columns:
         justify = "right" if column == "qubits" else "left"
@@ -303,8 +300,6 @@ def _source_label(kind: str | None) -> str:
 
 
 def _when(stamp: datetime, same_day: list[datetime]) -> str:
-    """The date, and under it as much of the time as tells apart one device's calibrations that
-    day. Under, not beside: a wider date column would wrap every processor at 80 columns."""
     day = stamp.date().isoformat()
     if len(same_day) < 2:
         return day
@@ -361,11 +356,11 @@ def show(
 
 class _OnHand(NamedTuple):
     count: int
-    bundled: str | None
+    bundled_note: str | None
 
 
 def _on_hand(ref: str, profile: Profile) -> _OnHand | None:
-    """How many calibrations a bare id had to pick from, and where the bundled one stands.
+    """How many calibrations a bare id had to pick from.
     None for a dated ref, a file, or an id with one calibration."""
     target = catalog.target(ref)
     if isinstance(target, Path) or target.date or target.timestamp:
@@ -495,8 +490,8 @@ def _print_card(
     grid.add_row("device", device)
     if on_hand:
         grid.add_row("calibrations", f"newest of the {on_hand.count} you have")
-        if on_hand.bundled:
-            grid.add_row("", on_hand.bundled)
+        if on_hand.bundled_note:
+            grid.add_row("", on_hand.bundled_note)
     grid.add_row("connectivity", _describe_connectivity(data["connectivity"]))
     grid.add_row("natives", _natives_table(data["natives"]))
     grid.add_row("coherence", _coherence(data))
@@ -526,7 +521,6 @@ def _add_lines(grid: Table, label: str, items: list[str]) -> None:
 
 
 def _provenance(prov: dict[str, Any]) -> str:
-    """``measured, package snapshot, qiskit-ibm-runtime 0.49.0 FakeFez``."""
     kind = prov.get("data_kind", "unknown")
     words = ["unknown kind" if kind == "unknown" else kind.replace("_", " ")]
     if prov.get("source_kind") in _SOURCE_KINDS:
@@ -628,7 +622,7 @@ def _qubit_row(profile: Profile, index: int) -> dict[str, Any]:
 
 
 def _print_qubits(rows: list[dict[str, Any]]) -> None:
-    """One row per qubit. The state column appears only when a qubit has a state."""
+    """One row per qubit."""
     columns = ["qubit", "T1 (us)", "T2 (us)", "P(1|0)", "P(0|1)", "1q avg infidelity", "state"]
     cells = [
         [
@@ -642,8 +636,9 @@ def _print_qubits(rows: list[dict[str, Any]]) -> None:
         ]
         for r in rows
     ]
-    if not any(row[-1] for row in cells):
-        columns.pop()
+    has_state = any(r["disabled"] or r["label"] for r in rows)
+    if not has_state:
+        columns.remove("state")
     table = Table(box=None, pad_edge=False, header_style="bold")
     for column in columns:
         table.add_column(column, justify="right" if column != "state" else "left")
@@ -929,7 +924,6 @@ def check(
 
 
 def _none_installed(missing: list[str], *, named: bool) -> NoReturn:
-    """One error and one install command, for a check with no framework to run."""
     if named:
         which = " and ".join(filter(None, (", ".join(missing[:-1]), missing[-1])))
         error = f"{which} {'is' if len(missing) == 1 else 'are'} not installed"
@@ -1051,25 +1045,35 @@ _UNREADABLE = (ValueError, OSError, EOFError, zlib.error)
 _PROFILE_FILE = "give a profile file (.json or .json.gz)"
 
 
-def _unreadable(path: Path, exc: BaseException) -> tuple[str, str | None]:
-    """What is wrong with a file, and what to do about it."""
+class _FileProblem(NamedTuple):
+    message: str
+    hint: str | None
+
+
+def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
     if isinstance(exc, ValidationError):
         problems = _count(exc.error_count(), "problem")
-        return f"{path} is not a valid profile ({problems})", f"run nv validate {path} to list them"
+        return _FileProblem(
+            f"{path} is not a valid profile ({problems})", f"run nv validate {path} to list them"
+        )
     if isinstance(exc, json.JSONDecodeError):
         where = f"{exc.msg} at line {exc.lineno}, column {exc.colno}"
-        return f"{path} is not JSON ({where})", _PROFILE_FILE
+        return _FileProblem(f"{path} is not JSON ({where})", _PROFILE_FILE)
     if isinstance(exc, UnicodeDecodeError):
-        return f"{path} is not JSON (not UTF-8 text)", _PROFILE_FILE
+        return _FileProblem(f"{path} is not JSON (not UTF-8 text)", _PROFILE_FILE)
     if isinstance(exc, EOFError | zlib.error | gzip.BadGzipFile):
-        return f"cannot read {path}: it is a damaged gzip file ({exc})", "copy or pull it again"
+        return _FileProblem(
+            f"cannot read {path}: it is a damaged gzip file ({exc})", "copy or pull it again"
+        )
     if isinstance(exc, IsADirectoryError):
-        return f"cannot read {path}: it is a folder", _PROFILE_FILE
+        return _FileProblem(f"cannot read {path}: it is a folder", _PROFILE_FILE)
     if isinstance(exc, OSError):
-        return f"cannot read {path}: {exc.strerror or exc}", "check the file and its permissions"
+        return _FileProblem(
+            f"cannot read {path}: {exc.strerror or exc}", "check the file and its permissions"
+        )
     if isinstance(exc, NoiseVaultError):
-        return f"{path}: {exc.message}", exc.hint
-    return f"{path}: {exc}", None
+        return _FileProblem(f"{path}: {exc.message}", exc.hint)
+    return _FileProblem(f"{path}: {exc}", None)
 
 
 @contextmanager
@@ -1096,7 +1100,7 @@ def _report_warnings(caught: list[warnings.WarningMessage]) -> None:
 def _error(exc: BaseException) -> NoReturn:
     if isinstance(exc, NoiseVaultError):
         _fail(_cli_terms(exc.message), exc.hint and _cli_terms(exc.hint))
-    hint = next((h for kind, h in _HINTS if isinstance(exc, kind)), None)
+    hint = next((h for kind, h in _FOREIGN_ERROR_HINTS if isinstance(exc, kind)), None)
     if isinstance(exc, ValidationError):
         _fail(f"not a valid profile ({_count(exc.error_count(), 'problem')})", hint)
     if isinstance(exc, FileNotFoundError) and exc.filename:
@@ -1129,20 +1133,17 @@ def _count(n: int, noun: str) -> str:
 
 
 def _fail(message: str, hint: str | None = None, *, code: int = 1) -> NoReturn:
-    """The fact on an ``error:`` line, and the next step, if any, on a ``hint:`` line."""
     err.print(f"error: {message}", markup=False)
     if hint:
         err.print(f"hint: {hint}", markup=False)
     raise typer.Exit(code) from None
 
 
-def _emit(renderable: RenderableType, *, width: int | None = None) -> None:
-    """Print without the spaces rich pads and wraps lines with, so pasted output is clean. A
-    string is plain text, not markup. With a ``width`` above the terminal's, rich lays the lines
-    out at that width and the terminal wraps them, so no cell is cut."""
+def _emit(renderable: RenderableType, *, natural_width: int | None = None) -> None:
+    """Print without the spaces rich pads and wraps lines with, so pasted output is clean."""
     if isinstance(renderable, str):
         renderable = Text(renderable)
-    options = out.options if width is None else out.options.update_width(width)
+    options = out.options if natural_width is None else out.options.update_width(natural_width)
     for line in out.render_lines(renderable, options, pad=False):
         text = Text.assemble(*((segment.text, segment.style) for segment in line))
         text.rstrip()
@@ -1154,7 +1155,6 @@ def _echo_json(data: Any) -> None:
 
 
 def _ref(profile: Profile) -> str:
-    """The ref that loads this calibration: ``id@timestamp``, or the id when it has no date."""
     when = profile.device.calibrated_at
     return f"{profile.id}@{_iso(when)}" if when else profile.id
 

@@ -23,7 +23,6 @@ Load a device by name and simulate your circuits under the noise it had on a giv
 
 Try it without installing, using [uv](https://docs.astral.sh/uv/):
 
-<!-- not-run: needs the network to fetch NoiseVault from GitHub -->
 ```bash
 uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault nv show ibm_fez
 ```
@@ -99,7 +98,6 @@ frameworks, each as the framework's own type with its own report.
 A bundled profile is one calibration. `nv pull` fetches others from IBM's public endpoint or
 from IonQ, with no account, and saves them to your vault in `~/.noisevault/profiles`:
 
-<!-- not-run: nv pull and nv diff fetch calibrations from IBM over the network -->
 ```bash
 nv pull ibm_fez --at 2025-06-01   # saves ibm_fez@2025-05-31T22:01:04Z, the newest before then
 nv cite ibm_fez@2025-05-31        # cite it by the date the pull printed
@@ -168,7 +166,6 @@ lists what no export models.
 
 To run the check with uv and no install:
 
-<!-- not-run: needs the network to fetch NoiseVault and Qiskit -->
 ```bash
 uvx --from "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault" nv check ibm_fez
 ```
