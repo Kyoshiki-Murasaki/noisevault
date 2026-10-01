@@ -149,6 +149,9 @@ GATE_CASES = [
     (cirq.XX**0.3, (0, 2), "rxx", (0.3 * PI,)),
     (cirq.YY**0.2, (2, 1), "ryy", (0.2 * PI,)),
     (cirq.ms(PI / 4), (0, 1), "ms", (0.0, 0.0)),
+    (cirq.ms(-PI / 4), (1, 0), "ms", (PI, 0.0)),
+    (cirq.XX**0.5, (0, 2), "ms", (0.0, 0.0)),
+    (cirq.ms(0.2), (2, 1), "rxx", (0.4,)),
     (ECRGate(), (0, 1), "ecr", ()),
     (ECRGate(), (2, 0), "ecr", ()),
 ]
@@ -180,6 +183,7 @@ def _rotations_only() -> Profile:
     defs |= {
         "cx": {"qubits": 2, "avg_infidelity": 0.2},
         "rzz": {"qubits": 2, "avg_infidelity": 0.01},
+        "rxx": {"qubits": 2, "avg_infidelity": 0.03},
     }
     return Profile.model_validate(toy(connectivity="all_to_all", gates=defs))
 
@@ -188,6 +192,8 @@ def _rotations_only() -> Profile:
     ("gate", "name", "params"),
     [
         (cirq.ZZ**0.5, "rzz", (PI / 2,)),
+        (cirq.ms(PI / 4), "rxx", (PI / 2,)),
+        (cirq.XX**-0.5, "rxx", (-PI / 2,)),
         (cirq.X, "rx", (PI,)),
         (cirq.X**-0.5, "rx", (-PI / 2,)),
         (cirq.Y, "ry", (PI,)),
@@ -552,6 +558,18 @@ def test_non_native_cirq_gates_are_unknown(gate, name) -> None:
         model.noisy_operation(gate.on(*qids))
 
 
+def test_ms_off_its_native_angle_is_an_xx_rotation() -> None:
+    defs = {"rz": {"virtual": True}, "ms": {"qubits": 2, "avg_infidelity": 0.02}}
+    model = to_cirq(Profile.model_validate(toy(connectivity="all_to_all", gates=defs)))
+    q = cirq.LineQubit.range(2)
+    for native in (cirq.ms(PI / 4), cirq.ms(-PI / 4), cirq.XX**0.5, cirq.ms(PI / 4) ** 5):
+        model.noisy_operation(native.on(*q))
+    assert "typical_noise_used" not in model.report.events
+    with pytest.warns(NoiseApproximationWarning, match="rxx"):
+        model.noisy_operation(cirq.ms(0.2).on(*q))
+    assert model.report.events["typical_noise_used"] == {"rxx": 1}
+
+
 def test_unknown_gates_option_is_validated_up_front() -> None:
     with pytest.raises(ValueError, match="choose 'typical' or 'error'"):
         to_cirq(_distinct(), unknown_gates="ignore")
@@ -726,7 +744,7 @@ def test_parameterized_gates_must_be_resolved_when_their_name_depends_on_it() ->
     t = sympy.Symbol("t")
     q = cirq.LineQubit.range(2)
     model = to_cirq(migrated(MANILA_V01), unknown_gates="error")
-    for op in ((cirq.X**t)(q[0]), (cirq.CZ**t)(*q), cirq.wait(q[0], nanos=t)):
+    for op in ((cirq.X**t)(q[0]), (cirq.CZ**t)(*q), cirq.ms(t)(*q), cirq.wait(q[0], nanos=t)):
         with pytest.raises(ValueError, match="resolve its parameters before adding noise"):
             cirq.Circuit(op).with_noise(model)
     # the simulator resolves first, so X**t at t=1 is the calibrated x

@@ -84,6 +84,11 @@ What the report can list:
 
 `readout=False` leaves measurements noiseless.
 
+On a profile with disabled qubits or gates, transpile with
+`initial_layout=list(profile.suggest_layout(n).values())`. Qiskit's `optimization_level=0`
+places circuit qubit i on physical qubit i, and levels 1 to 3 do not check that a qubit has the
+single-qubit gates a circuit needs.
+
 ## Cirq
 
 `to_cirq()` returns a noise model that follows every gate with its channels as

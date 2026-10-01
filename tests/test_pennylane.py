@@ -527,6 +527,67 @@ def test_shot_vectors_with_readout_raise_instead_of_dropping_results(qml) -> Non
     assert [np.asarray(r).shape for r in out] == [(2,), (2,)]
 
 
+def _two_readouts() -> Profile:
+    data = toy(
+        gates={"x": {"avg_infidelity": 0.0}},
+        qubits=[
+            {"index": 0, "readout": {"p1_given_0": 0.1, "p0_given_1": 0.3}},
+            {"index": 1, "readout": {"p1_given_0": 0.2, "p0_given_1": 0.05}},
+        ],
+    )
+    return Profile.model_validate(data)
+
+
+def _composed(qml, model, how: str):
+    flip = {qml.noise.op_eq(qml.PauliX): qml.noise.partial_wires(qml.BitFlip, 0.05)}
+    if how == "dict":
+        return model + flip
+    other = qml.NoiseModel(flip)
+    return model + other if how == "model first" else other + model
+
+
+@pytest.mark.parametrize("how", ["model first", "model second", "dict"])
+def test_composed_models_keep_readout_on_every_tape(qml, how) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    composed = _composed(qml, to_pennylane(_two_readouts()), how)
+    # X then BitFlip(0.05) leaves P(1) = 0.95; readout gives P(0) = 0.05 P(0|0) + 0.95 P(0|1)
+    expected = {
+        0: [0.05 * 0.9 + 0.95 * 0.3, 0.05 * 0.1 + 0.95 * 0.7],
+        1: [0.05 * 0.8 + 0.95 * 0.05, 0.05 * 0.2 + 0.95 * 0.95],
+    }
+    for wire in (0, 1):
+
+        @qml.qnode(qml.device("default.mixed", wires=2))
+        def circuit(wire=wire):
+            qml.PauliX(wire)
+            return qml.probs(wires=[wire])
+
+        got = np.asarray(qml.add_noise(circuit, composed)())
+        assert got == pytest.approx(expected[wire], abs=1e-12)
+
+
+def test_composed_models_still_refuse_shot_vectors_with_readout(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    @qml.qnode(qml.device("default.mixed", wires=1, seed=3))
+    def circuit():
+        qml.PauliX(0)
+        return qml.probs(wires=[0])
+
+    composed = _composed(qml, to_pennylane(_two_readouts()), "model second")
+    with pytest.raises(ValueError, match="run each shot count separately"):
+        qml.set_shots(qml.add_noise(circuit, composed), [100, 200])()
+
+
+def test_noise_functions_outside_add_noise_refuse_to_guess_the_circuit(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    [readout] = to_pennylane(_two_readouts()).meas_map.values()
+    with pytest.raises(RuntimeError, match=r"^[^\n]*qml\.add_noise[^\n]*$"):
+        readout(qml.probs(wires=[0]))
+
+
 def test_device_wires_no_operation_touches_read_out_ideally(qml, manila) -> None:
     from noisevault.frameworks.pennylane import to_pennylane
 
@@ -828,6 +889,39 @@ def test_rot_and_ising_zz_at_native_angles_get_the_natives_noise(qml) -> None:
     got = np.asarray(qml.add_noise(circuit, model)())
     want = probabilities(profile, ops, 2, readout=True)
     assert _tvd(got, want) < 1e-12
+    assert not model.report.events.get("typical_noise_used")
+
+
+@pytest.mark.parametrize(("angle", "phi0"), [(np.pi / 2, 0.0), (-np.pi / 2 + 2 * np.pi, np.pi)])
+def test_ising_xx_at_plus_or_minus_pi_over_2_is_the_native_ms(qml, angle, phi0) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    profile = _trapped_ion(two_qubit="ms")
+    model = to_pennylane(profile)
+
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit():
+        qml.RX(0.3, wires=0)
+        qml.IsingXX(angle, wires=[0, 1])
+        return qml.probs(wires=[0, 1])
+
+    got = np.asarray(qml.add_noise(circuit, model)())
+    ops = [Op("rx", (0,), (0.3,)), Op("ms", (0, 1), (phi0, 0.0))]
+    assert _tvd(got, probabilities(profile, ops, 2)) < 1e-12
+    assert dict(model.report.events["typical_noise_used"]) == {"rx": 1}
+
+
+def test_ising_xx_at_pi_over_2_stays_rxx_on_a_profile_without_ms(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    model = to_pennylane(_trapped_ion(two_qubit="rxx"))
+
+    @qml.qnode(qml.device("default.mixed", wires=2))
+    def circuit():
+        qml.IsingXX(np.pi / 2, wires=[0, 1])
+        return qml.probs(wires=[0, 1])
+
+    qml.add_noise(circuit, model)()
     assert not model.report.events.get("typical_noise_used")
 
 

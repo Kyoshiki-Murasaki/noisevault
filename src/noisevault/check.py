@@ -45,9 +45,11 @@ NOTE = (
 )
 _EXTRAS = {"qiskit": "qiskit", "cirq": "cirq", "pennylane": "pennylane", "stim": "stim"}
 # Gate angles for check circuits: pi/2 unless listed. r keeps a phase off 0 so Cirq does not
-# turn it into an X rotation. rzz at pi/2 equals zz, which Cirq and PennyLane must still
-# charge rzz's noise unless the profile defines zz (see _two_qubit_ops).
+# turn it into an X rotation.
 _ANGLES: dict[str, tuple[float, ...]] = {"r": (pi / 2, pi / 4), "ms": (0.0, 0.0)}
+# Rotations that at pi/2 equal a fixed native, whose noise the exports then charge when the
+# profile defines it; the check runs them at pi/4 instead (see _two_qubit_ops).
+_FIXED_AT_HALF_PI = {"rzz": "zz", "rxx": "ms", "ryy": "ms"}
 _MAX_ORDER = 8
 
 
@@ -322,8 +324,8 @@ def _two_qubit_ops(profile: Profile, chain: Sequence[int], i: int) -> list[Op]:
             found = table.gate(name, (chain[a], chain[b]))
             if _calibrated(found):
                 op = _op(name, (a, b))
-                if name == "rzz" and "zz" in profile.gates:
-                    op = Op(name, op.qubits, (pi / 4,))  # pi/2 would be the zz gate
+                if _FIXED_AT_HALF_PI.get(name) in profile.gates:
+                    op = Op(name, op.qubits, (pi / 4,))
                 out.append(op)
                 break
     return out
@@ -396,7 +398,10 @@ def _twirled(profile: Profile, circuit: Circuit, layout: list[int]) -> np.ndarra
         if built.channels:
             rho = _apply(rho, pauli_kraus(pauli_twirl(built.channels, wires)), op.qubits, n)
     probs = np.real(np.diagonal(rho.reshape(2**n, 2**n)))
-    return _with_readout(probs, [readout_matrix(table.qubit(q)) for q in layout])
+    probs = _with_readout(probs, [readout_matrix(table.qubit(q)) for q in layout])
+    # Rounding can leave a certain outcome at 1 + 1e-16, whose sampling variance is negative.
+    probs = np.clip(probs, 0.0, None)
+    return probs / probs.sum()
 
 
 def _with_readout(probs: np.ndarray, matrices: Sequence[np.ndarray | None]) -> np.ndarray:
@@ -704,23 +709,49 @@ class _Stim(_Runner):
         super().__init__(profile, chain)
         import stim
 
-        from .frameworks.stim import sample_with_readout, to_stim
+        from .frameworks.stim import gate_name, sample_with_readout, to_stim
 
         self.version = stim.__version__
-        self._to_stim, self._sample = to_stim, sample_with_readout
+        self._to_stim, self._sample, self._gate_name = to_stim, sample_with_readout, gate_name
         self._reports: list[Report] = []
+        self._stim_gates = [
+            (name, _big_endian(data.unitary_matrix))
+            for name, data in stim.gate_data().items()
+            if data.is_unitary and data.unitary_matrix is not None  # SPP has no fixed size
+        ]
+
+    def _equal_gates(self, op: Op) -> list[str]:
+        """Stim gates equal to ``op`` up to global phase (Stim stores them in single precision)."""
+        u = _unitary(op)
+        return [
+            name
+            for name, v in self._stim_gates
+            if v.shape == u.shape and abs(abs(np.vdot(u, v)) - len(u)) < 1e-6
+        ]
+
+    def _instruction(self, op: Op) -> str | None:
+        """A Stim gate equal to ``op`` that the export charges ``op.name``'s noise."""
+        defined = self.profile.gates
+        return next(
+            (s for s in self._equal_gates(op) if self._gate_name(s, defined) == op.name), None
+        )
 
     def cannot_express(self, op: Op) -> str | None:
-        info = gates.GATES[op.name]
-        if info.params:
-            return f"{op.name} takes an angle; Stim circuits hold only fixed Clifford gates"
-        return None if info.stim else f"Stim has no {op.name} instruction"
+        if self._instruction(op) is not None:
+            return None
+        equal = self._equal_gates(op)
+        if equal:
+            charged = self._gate_name(equal[0], self.profile.gates)
+            return (
+                f"Stim's {equal[0]} equals {op.name} here but takes the profile's {charged} noise"
+            )
+        if gates.GATES[op.name].params:
+            return f"{op.name} at the check angles is no Clifford gate, and Stim holds only those"
+        return f"Stim has no {op.name} instruction"
 
     def run(self, circuit: Circuit, shots: int, seed: int | None) -> np.ndarray:
         n = circuit.num_qubits
-        lines = [
-            f"{gates.GATES[op.name].stim[0]} {' '.join(map(str, op.qubits))}" for op in circuit.ops
-        ]
+        lines = [f"{self._instruction(op)} {' '.join(map(str, op.qubits))}" for op in circuit.ops]
         lines.append("M " + " ".join(map(str, range(n))))
         noisy = self._to_stim(
             self.profile, "\n".join(lines), layout=dict(enumerate(self.chain)), readout="exact"
@@ -732,6 +763,13 @@ class _Stim(_Runner):
 
     def reports(self) -> list[Report]:
         return self._reports
+
+
+def _big_endian(u: np.ndarray) -> np.ndarray:
+    """A Stim unitary, which puts the first target in the lowest bit, in registry order."""
+    k = round(np.log2(len(u)))
+    axes = [*range(k - 1, -1, -1), *range(2 * k - 1, k - 1, -1)]
+    return u.reshape((2,) * (2 * k)).transpose(axes).reshape(len(u), len(u))
 
 
 _RUNNERS: dict[str, type[_Runner]] = {

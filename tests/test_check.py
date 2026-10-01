@@ -7,7 +7,7 @@ import sys
 
 import numpy as np
 import pytest
-from conftest import require
+from conftest import require, toy
 
 import noisevault as nv
 from noisevault import gates
@@ -101,11 +101,77 @@ def test_stim_without_its_readout_flips_fails(monkeypatch: pytest.MonkeyPatch) -
     assert not stim.passed
 
 
+def test_stim_checks_rzz_at_its_clifford_angle() -> None:
+    natives = {
+        "h": {"avg_infidelity": 1e-3},
+        "rz": {"virtual": True},
+        "cx": {"avg_infidelity": 0.2},
+        "rzz": {"avg_infidelity": 0.01},
+    }
+    profile = Profile.model_validate(toy(gates=natives, readout={"error": 0.01}))
+    (stim,) = check(profile, frameworks=["stim"], layout=[0, 1]).frameworks
+    assert stim.passed and not stim.not_run
+    assert "rzz" in next(c for c in stim.circuits if c.circuit == "two_qubit_natives").gates
+
+
+def test_rxx_and_ms_are_checked_as_different_natives() -> None:
+    natives = {
+        "h": {"avg_infidelity": 1e-3},
+        "rz": {"virtual": True},
+        "ms": {"avg_infidelity": 0.05},
+        "rxx": {"avg_infidelity": 0.01},
+    }
+    profile = Profile.model_validate(toy(gates=natives, readout={"error": 0.01}))
+    result = check(profile, layout=[0, 1])
+    assert result.passed, result
+    rxx = next(op for c in result.circuits for op in c.ops if op.name == "rxx")
+    assert rxx.params == (np.pi / 4,)  # pi/2 would be the MS gate
+    (stim,) = (f for f in result.frameworks if f.framework == "stim")
+    assert any("ms" in c.gates for c in stim.circuits)
+
+
+def _noiseless() -> Profile:
+    one_qubit = {
+        "name": "quiet",
+        "vendor": "test",
+        "technology": "superconducting",
+        "num_qubits": 1,
+    }
+    return Profile.model_validate(
+        toy(
+            device=one_qubit,
+            connectivity={"edges": []},
+            gates={"h": {"avg_infidelity": 0.0}},
+            readout={"error": 0.0},
+        )
+    )
+
+
+def test_a_noiseless_profile_passes_stim() -> None:
+    (stim,) = check(_noiseless(), frameworks=["stim"], shots=10_000).frameworks
+    assert stim.passed and stim.max_tvd < 1e-12
+    assert stim.worst.tolerance < 1e-2
+
+
+def test_stim_adding_noise_to_a_noiseless_profile_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noisevault.frameworks import stim as nv_stim
+
+    sample = nv_stim.sample_with_readout
+
+    def flipping(circuit, shots, *, seed=None):
+        bits = sample(circuit, shots, seed=seed)
+        return bits ^ (np.random.default_rng(seed).random(bits.shape) < 0.01)
+
+    monkeypatch.setattr(nv_stim, "sample_with_readout", flipping)
+    (stim,) = check(_noiseless(), frameworks=["stim"], shots=10_000).frameworks
+    assert not stim.passed
+
+
 def test_natives_a_framework_lacks_are_explained() -> None:
     result = nv.load("quantinuum_h1-1").check(frameworks=["stim"])
     assert dict(result.skipped) == {
-        "stim": "no check circuit can be expressed: r takes an angle; Stim circuits hold only"
-        " fixed Clifford gates",
+        "stim": "no check circuit can be expressed: r at the check angles is no Clifford gate,"
+        " and Stim holds only those",
     }
     (stim,) = nv.load("ibm_brisbane").check(frameworks=["stim"]).frameworks
     assert dict(stim.not_run) == {

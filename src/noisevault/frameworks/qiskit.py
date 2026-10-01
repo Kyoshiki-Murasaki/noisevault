@@ -251,6 +251,11 @@ def to_qiskit(
 ) -> NoiseVaultSimulator:
     """A noisy AerSimulator for ``profile``; transpile circuits for it before ``run``.
 
+    The Target leaves out disabled qubits and gates the way Qiskit models faulty ones. Qiskit's
+    ``optimization_level=0`` still puts circuit qubit i on physical qubit i, and levels 1-3 do
+    not check that a chosen qubit has the 1-qubit gates a circuit needs. On a profile with
+    disabled parts, transpile with ``initial_layout=list(profile.suggest_layout(n).values())``.
+
     ``unknown_gates`` applies to natives with no error metric on a locus: ``"typical"``
     (default) gives them the typical native's noise (reported and warned), ``"error"`` leaves
     those loci out of the Target so transpile never uses them. ``readout=False`` leaves

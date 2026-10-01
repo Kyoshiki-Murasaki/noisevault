@@ -67,7 +67,9 @@ class _PowFamily:
 
 
 # Up to a global phase these gates repeat with period 2 in the exponent (iSWAP with 4), so
-# inverses such as X**-1, S**-1 or CZ**-1 from cirq.inverse map to their gates.
+# inverses such as X**-1, S**-1 or CZ**-1 from cirq.inverse map to their gates. MS(pi, 0) is
+# XX**-0.5, so both signs are the native MS; MSGate is an XXPowGate and is named the same way.
+_XX = _PowFamily("rxx", 2, ((0.5, "ms"), (-0.5, "ms")), "rxx")
 _POW: dict[type, _PowFamily] = {
     cirq.XPowGate: _PowFamily("x", 2, ((1, "x"), (0.5, "sx"), (-0.5, "sxdg")), "rx"),
     cirq.YPowGate: _PowFamily("y", 2, ((1, "y"),), "ry"),
@@ -84,7 +86,8 @@ _POW: dict[type, _PowFamily] = {
         "iswap", 4, ((1, "iswap"), (0.5, "sqrt_iswap"), (-0.5, "sqrt_iswap")), None
     ),
     cirq.ZZPowGate: _PowFamily("rzz", 2, ((0.5, "zz"),), "rzz"),
-    cirq.XXPowGate: _PowFamily("rxx", 2, (), "rxx"),
+    cirq.XXPowGate: _XX,
+    cirq.MSGate: _XX,
     cirq.YYPowGate: _PowFamily("ryy", 2, (), "ryy"),
     cirq.CCXPowGate: _PowFamily("ccx", 2, ((1, "ccx"),), None),
 }
@@ -114,7 +117,7 @@ class ECRGate(cirq.Gate):
 
 
 def _registry_by_class() -> dict[str, str]:
-    """Registry gates whose Cirq class alone names them (e.g. MSGate -> ms, Rx -> rx)."""
+    """Registry gates whose Cirq class alone names them (e.g. Rx -> rx)."""
     names: dict[str, list[str]] = defaultdict(list)
     for info in gates.GATES.values():
         if info.cirq and info.unitary is not None:

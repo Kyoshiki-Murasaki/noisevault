@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import functools
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
@@ -48,15 +48,19 @@ EventCounts = tuple[tuple[str, str, int], ...]  # (event, key, count) that one g
 _ANNOTATIONS = frozenset({"DETECTOR", "OBSERVABLE_INCLUDE", "QUBIT_COORDS", "SHIFT_COORDS"})
 _HERALDED = frozenset({"HERALDED_ERASE", "HERALDED_PAULI_CHANNEL_1"})
 _COMBINED = frozenset({"MPP", "SPP", "SPP_DAG"})  # a target group is joined by combiners
-_REGISTRY = {name: row.name for row in gates.GATES.values() for name in row.stim}
-# Stim gates that are an inverse or a fixed angle of a registry gate take that gate's noise.
-_SAME_NOISE_AS = {
-    "ISWAP_DAG": "iswap",
-    "SQRT_ZZ_DAG": "zz",
-    "SQRT_XX": "rxx",
-    "SQRT_XX_DAG": "rxx",
-    "SQRT_YY": "ryy",
-    "SQRT_YY_DAG": "ryy",
+# The registry gates each Stim gate equals, preferred first, and its name when the profile
+# defines none of them. A fixed angle of a rotation prefers its fixed native, as the other
+# exports name ZZ**0.5 or IsingZZ(pi/2); SQRT_XX and SQRT_YY are MS gates at fixed phases.
+# Without rzz, SQRT_ZZ_DAG takes zz's noise: it is zz followed by virtual Z gates.
+_NAMES: dict[str, tuple[tuple[str, ...], str]] = {
+    **{name: ((row.name,), row.name) for row in gates.GATES.values() for name in row.stim},
+    "SQRT_ZZ": (("zz", "rzz"), "zz"),
+    "SQRT_ZZ_DAG": (("rzz", "zz"), "rzz"),
+    "ISWAP_DAG": (("iswap",), "iswap"),
+    "SQRT_XX": (("ms", "rxx"), "rxx"),
+    "SQRT_XX_DAG": (("ms", "rxx"), "rxx"),
+    "SQRT_YY": (("ms", "ryy"), "ryy"),
+    "SQRT_YY_DAG": (("ms", "ryy"), "ryy"),
 }
 _NOISELESS = frozenset({"II"})  # a 2-qubit identity is no entangling gate
 _MULTI_ENTANGLER = frozenset({"CXSWAP", "SWAPCX", "CZSWAP"})  # two native entanglers each
@@ -319,6 +323,7 @@ class _Exporter:
         unknown_gates: UnknownGates,
     ) -> None:
         self.table = profile.table
+        self.defined = profile.gates
         self.physical = physical
         self.qubits = frozenset(physical)
         self.report = report
@@ -483,7 +488,7 @@ class _Exporter:
                     f"{stim_name} needs two native entangling gates, so no single calibration"
                     " describes it; decompose it into the profile's native gates first"
                 )
-            name = _canonical(stim_name)
+            name = gate_name(stim_name, self.defined)
             built = resolve_op(
                 self.table, name, wires, unknown_gates=self.unknown_gates, report=self.report
             )
@@ -644,9 +649,18 @@ def _kind(name: str) -> Kind:
     raise ValueError(f"the Stim export does not handle {name} instructions")
 
 
-def _canonical(stim_name: str) -> str:
-    """Registry name; unknown gates keep their Stim name and get the typical native's noise."""
-    return _REGISTRY.get(stim_name) or _SAME_NOISE_AS.get(stim_name) or stim_name.lower()
+def gate_name(stim_name: str, defined: Container[str] = ()) -> str:
+    """The canonical NoiseVault name a Stim gate takes its noise from.
+
+    A gate equal to several registry gates takes the first that ``defined``, a profile's gate
+    names, has: ``SQRT_ZZ`` is ``zz``, or ``rzz`` when the profile has ``rzz`` but not ``zz``;
+    ``SQRT_XX`` is ``ms`` when the profile has ``ms``, else ``rxx``. Gates outside the registry
+    keep their lowercased Stim name and get the typical-noise rule.
+    """
+    if stim_name not in _NAMES:
+        return stim_name.lower()
+    natives, default = _NAMES[stim_name]
+    return next((name for name in natives if name in defined), default)
 
 
 def _pauli_channel(probs: Sequence[float]) -> str:

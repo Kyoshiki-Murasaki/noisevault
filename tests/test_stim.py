@@ -205,6 +205,52 @@ def test_stim_reads_pauli_channel_2_first_letter_on_the_first_target():
     assert bits.compile_sampler().sample(4).tolist() == [[True, False]] * 4
 
 
+_RZZ = {"avg_infidelity": 0.01}
+_ZZ = {"avg_infidelity": 0.05}
+_MS = {"avg_infidelity": 0.03}
+_RXX = {"avg_infidelity": 0.02}
+_HALF = (np.pi / 2,)
+
+
+@pytest.mark.parametrize(
+    ("defined", "stim_gate", "canonical", "params"),
+    [
+        ({"rzz": _RZZ}, "SQRT_ZZ", "rzz", _HALF),
+        ({"rzz": _RZZ}, "SQRT_ZZ_DAG", "rzz", (-np.pi / 2,)),
+        ({"rzz": _RZZ, "zz": _ZZ}, "SQRT_ZZ", "zz", ()),
+        ({"rzz": _RZZ, "zz": _ZZ}, "SQRT_ZZ_DAG", "rzz", (-np.pi / 2,)),
+        ({"zz": _ZZ}, "SQRT_ZZ", "zz", ()),
+        ({"zz": _ZZ}, "SQRT_ZZ_DAG", "zz", None),  # zz followed by virtual Z gates
+        ({"ms": _MS}, "SQRT_XX", "ms", (0.0, 0.0)),
+        ({"ms": _MS, "rxx": _RXX}, "SQRT_XX", "ms", (0.0, 0.0)),
+        ({"ms": _MS, "rxx": _RXX}, "SQRT_XX_DAG", "ms", (np.pi, 0.0)),
+        ({"rxx": _RXX}, "SQRT_XX", "rxx", _HALF),
+        ({"ms": _MS}, "SQRT_YY", "ms", (np.pi / 2, np.pi / 2)),
+        ({"ms": _MS}, "SQRT_YY_DAG", "ms", (3 * np.pi / 2, np.pi / 2)),
+        ({"ryy": _RXX}, "SQRT_YY", "ryy", _HALF),
+    ],
+)
+def test_fixed_angle_gates_take_the_calibrated_native_they_equal(
+    defined, stim_gate, canonical, params
+):
+    if params is not None:
+        u, v = gates.GATES[canonical].unitary(*params), stim.gate_data(stim_gate).unitary_matrix
+        assert abs(np.vdot(u, v)) == pytest.approx(4, abs=1e-6)
+    # cx is far worse than every native under test, so the typical-noise rule would show.
+    natives = {"rz": {"virtual": True}, "cx": {"avg_infidelity": 0.2}, **defined}
+    profile = Profile.model_validate(toy(gates=natives))
+    out = to_stim(profile, f"{stim_gate} 0 1", unknown_gates="error")
+    report = Report.start(profile, "test", None)
+    built = resolve_op(profile.table, canonical, (0, 1), unknown_gates="error", report=report)
+    assert _noise_after(out, stim_gate) == pytest.approx(pauli_twirl(built.channels, (0, 1)))
+    assert not out.report.events.get("typical_noise_used")
+
+
+def test_fixed_angle_gates_without_their_natives_are_named_after_the_rotation():
+    out = to_stim(_manila(), "SQRT_XX 0 1\nSQRT_YY 0 1\nSQRT_ZZ_DAG 0 1")
+    assert set(out.report.events["typical_noise_used"]) == {"rxx", "ryy", "rzz"}
+
+
 def test_z_family_gates_are_free_when_rz_is_virtual():
     out = to_stim(_manila(), "S 0\nZ 1\nS_DAG 2\nM 0 1 2", readout="none")
     assert str(out) == "S 0\nZ 1\nS_DAG 2\nM 0 1 2"

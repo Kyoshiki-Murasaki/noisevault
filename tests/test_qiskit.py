@@ -383,6 +383,58 @@ def test_transpile_routes_around_a_disabled_pair() -> None:
     assert sim.run(compiled, shots=10).result().success
 
 
+_LINE_GATES = {
+    "rz": {"virtual": True},
+    "sx": {"avg_infidelity": 1e-3, "duration_ns": 35},
+    "x": {"avg_infidelity": 1e-3, "duration_ns": 35},
+    "cz": {"avg_infidelity": 1e-2, "duration_ns": 70},
+}
+_QUBIT_0_UNUSABLE = {
+    "qubit off": {"qubits": [{"index": 0, "disabled": True}]},
+    "1q gates off": {
+        "calibrations": [
+            {"gate": "sx", "qubits": [0], "disabled": True},
+            {"gate": "x", "qubits": [0], "disabled": True},
+        ]
+    },
+    "only pair off": {"calibrations": [{"gate": "cz", "qubits": [0, 1], "disabled": True}]},
+}
+
+
+@pytest.mark.parametrize("level", [0, 1, 2, 3])
+@pytest.mark.parametrize("case", list(_QUBIT_0_UNUSABLE))
+def test_suggested_layout_transpiles_around_disabled_parts_at_every_level(
+    case: str, level: int
+) -> None:
+    # Level 0 places circuit qubit i on physical qubit i whatever the Target allows (Qiskit's
+    # own Targets fail the same way), so the supported route there is an explicit layout.
+    profile = Profile.model_validate(
+        toy(
+            device={
+                "name": "line",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 4,
+            },
+            connectivity={"edges": [[0, 1], [1, 2], [2, 3]]},
+            gates=_LINE_GATES,
+            **_QUBIT_0_UNUSABLE[case],
+        )
+    )
+    sim = quiet_export(profile)
+    circuit = QuantumCircuit(2)
+    circuit.h([0, 1])
+    circuit.cx(0, 1)
+    circuit.measure_all()
+    layout = list(profile.suggest_layout(2).values())
+    compiled = transpile(
+        circuit, sim, initial_layout=layout, optimization_level=level, seed_transpiler=3
+    )
+    used = {compiled.find_bit(q).index for i in compiled.data for q in i.qubits}
+    assert used and 0 not in used
+    assert sim.run(compiled, shots=10).result().success
+
+
 def test_target_carries_errors_and_durations_per_locus(manila: Profile) -> None:
     sim = quiet_export(manila)
     target = sim.target
