@@ -450,6 +450,35 @@ def test_repeated_pauli_terms_read_out_like_the_scaled_word(qml) -> None:
     assert float(yy) == pytest.approx(y1, abs=1e-12)
 
 
+@pytest.mark.parametrize(
+    "measure",
+    [
+        lambda qml: qml.classical_shadow(wires=[0], seed=10),
+        lambda qml: qml.shadow_expval(qml.Z(0), seed=10),
+    ],
+    ids=["classical_shadow", "shadow_expval"],
+)
+def test_shadow_measurements_are_reported_and_warned_without_readout(qml, measure) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    profile = Profile.uniform(
+        "readout", technology="other", num_qubits=1, one_qubit_error=0.0, readout_error=0.25
+    )
+
+    def run(model):
+        @qml.qnode(qml.device("default.mixed", wires=1, seed=10))
+        def circuit():
+            return measure(qml)
+
+        return qml.set_shots(qml.add_noise(circuit, model), shots=3000)()
+
+    model = to_pennylane(profile)
+    with pytest.warns(NoiseApproximationWarning, match="random measurement basis"):
+        got = run(model)
+        assert "readout on classical shadow measurements" in model.report.omitted
+    np.testing.assert_array_equal(got, run(to_pennylane(profile, readout=False)))
+
+
 def test_computational_basis_measurements_share_one_simulation(qml, manila) -> None:
     from noisevault.frameworks.pennylane import to_pennylane
 

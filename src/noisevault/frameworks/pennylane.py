@@ -28,11 +28,13 @@ except ImportError as exc:
     raise ImportError(f"the PennyLane export needs PennyLane: {install_hint('pennylane')}") from exc
 
 from pennylane.measurements import (
+    ClassicalShadowMP,
     CountsMP,
     ExpectationMP,
     MidMeasureMP,
     ProbabilityMP,
     SampleMP,
+    ShadowExpvalMP,
     VarianceMP,
 )
 from pennylane.operation import Channel, Operation, Operator, StatePrepBase
@@ -73,7 +75,15 @@ _BUILDERS: dict[str, Callable[..., Operator]] = {
 }
 _ANGLE_TOL = 1e-9
 _NOT_GATES = frozenset({"Barrier", "Snapshot", "GlobalPhase", "WireCut"})
-_READOUT_MEASUREMENTS = (ExpectationMP, VarianceMP, ProbabilityMP, SampleMP, CountsMP)
+_SHADOW_MEASUREMENTS = (ClassicalShadowMP, ShadowExpvalMP)
+_READOUT_MEASUREMENTS = (
+    ExpectationMP,
+    VarianceMP,
+    ProbabilityMP,
+    SampleMP,
+    CountsMP,
+    *_SHADOW_MEASUREMENTS,
+)
 _ROTATED_PAULIS = {"X": qml.PauliX, "Y": qml.PauliY}
 _ADD_NOISE = ("pennylane.noise.add_noise", "add_noise")  # module and name of its tape transform
 _NO_BASIS_FIX = (
@@ -235,6 +245,16 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         return channels
 
     def _readout_noise(self, mp: Any, **_: Any) -> None:
+        if isinstance(mp, _SHADOW_MEASUREMENTS):
+            self.report.omit("readout on classical shadow measurements")
+            self.report.warn_once(
+                "readout_skipped:shadow",
+                f"no readout noise applied to {mp}. A classical shadow picks a random measurement"
+                " basis for each shot, and a noise model acts before the measurement, so it cannot"
+                " flip the bit read in that basis. To fix: measure the Pauli words you need with"
+                " qml.expval or qml.sample, which get readout noise",
+            )
+            return
         if not mp.wires:
             self.report.approximate(
                 "readout of measurements without wires",

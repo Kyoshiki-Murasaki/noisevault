@@ -198,7 +198,9 @@ What the report can list:
   noise whether or not the condition holds. A measurement without wires gets readout error on
   the wires that the circuit's operations and measurements use.
 - **Omitted.** Idle time, because PennyLane circuits have no timing. Readout on mid-circuit
-  measurements. Readout on observables not measured in one product basis. Effects.
+  measurements. Readout on observables not measured in one product basis. Readout on
+  `qml.classical_shadow` and `qml.shadow_expval`, which pick a random measurement basis for each
+  shot after the noise model acts. Effects.
 
 Operator arithmetic with no decomposition into gates, such as `qml.sum`, raises an error. It
 has no gate noise, and `default.mixed` cannot run it. Before PennyLane 0.45, a QNode leaves
