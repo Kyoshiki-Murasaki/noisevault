@@ -72,8 +72,9 @@ def normalize_layout(
             index = index_of(label)
             if index is None:
                 raise LayoutError(
-                    f"qubit {label!r} has no integer index; pass layout={{{label!r}: <physical"
-                    " qubit>, ...} covering every circuit qubit"
+                    f"qubit {label!r} has no integer index",
+                    hint=f"pass layout={{{label!r}: <physical qubit>, ...}} covering every"
+                    " circuit qubit",
                 )
             mapping[label] = index
     elif isinstance(layout, Mapping):
@@ -83,7 +84,9 @@ def normalize_layout(
 
     missing = [label for label in labels if label not in mapping]
     if missing:
-        raise LayoutError(f"layout has no physical qubit for {missing!r}; map every circuit qubit")
+        raise LayoutError(
+            f"layout has no physical qubit for {missing!r}", hint="map every circuit qubit"
+        )
     result: dict[Hashable, int] = {}
     owner: dict[int, Hashable] = {}
     for label in labels:
@@ -97,8 +100,8 @@ def normalize_layout(
             )
         if table.qubit(physical).disabled:
             raise LayoutError(
-                f"layout maps {label!r} to qubit {physical}, which {profile.id} marks disabled;"
-                " choose another qubit (profile.suggest_layout(n) proposes a usable chain)"
+                f"layout maps {label!r} to qubit {physical}, which {profile.id} marks disabled",
+                hint="choose another qubit (profile.suggest_layout(n) proposes a usable chain)",
             )
         if physical in owner:
             raise LayoutError(

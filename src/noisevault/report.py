@@ -149,8 +149,8 @@ class Report:
             if effect.allow != "omit":
                 raise UnsupportedEffect(
                     f"effect {effect.type} on {target} asks for allow={effect.allow!r}, but"
-                    f" {self.framework} export does not model effects yet; set allow to 'omit'"
-                    " to convert without it"
+                    f" {self.framework} export does not model effects yet",
+                    hint="set allow to 'omit' to convert without it",
                 )
             self.omit(f"effect {effect.type} on {target}")
 

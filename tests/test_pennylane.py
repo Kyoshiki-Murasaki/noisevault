@@ -232,10 +232,12 @@ def test_wires_the_layout_cannot_place_are_layout_errors(qml, manila) -> None:
 
     with pytest.raises(LayoutError, match="layout="):
         _noisy_probs(qml, to_pennylane(manila), GHZ, ["a", "b", "c"])
-    with pytest.raises(LayoutError, match=r"'c' is not in the layout.*<physical qubit>}$"):
+    with pytest.raises(LayoutError, match="'c' is not in the layout") as caught:
         _noisy_probs(qml, to_pennylane(manila, layout={"a": 0, "b": 1}), GHZ, ["a", "b", "c"])
-    with pytest.raises(LayoutError, match="wires 0 to 1; extend the list"):
+    assert caught.value.hint == "add it: layout={..., 'c': <physical qubit>}"
+    with pytest.raises(LayoutError, match="wires 0 to 1; extend the list") as caught:
         _noisy_probs(qml, to_pennylane(manila, layout=[3, 4]), GHZ, [0, 1, 2])
+    assert caught.value.hint == "extend the list"
     with pytest.raises(LayoutError, match="both"):
         to_pennylane(manila, layout={"a": 0, "b": 0})
 

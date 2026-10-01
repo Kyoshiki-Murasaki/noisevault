@@ -510,8 +510,13 @@ def test_grid_qubits_map_through_profile_coords() -> None:
     ideal = ChannelSpec("unitary", (2,), (gates.GATES["sx"].unitary(),))
     assert np.abs(got - superoperator([ideal, *core.channels], [2])).max() < 1e-12
 
-    with pytest.raises(LayoutError, match=r"no qubit at coords \(5, 5\)"):
+    with pytest.raises(LayoutError, match=r"no qubit at coords \(5, 5\)") as caught:
         model.noisy_operation(cirq.X(cirq.GridQubit(5, 5)))
+    assert caught.value.hint == (
+        "use the device's coords (e.g. GridQubit(0.0, 0.0), GridQubit(0.0, 1.0),"
+        " GridQubit(1.0, 0.0)) or pass layout={cirq.GridQubit(5, 5): <device qubit>, ...}"
+        " covering every circuit qubit"
+    )
 
 
 def test_default_placement_must_be_injective_within_a_circuit_only() -> None:
@@ -520,30 +525,54 @@ def test_default_placement_must_be_injective_within_a_circuit_only() -> None:
     for q in (line, grid):
         noisy = cirq.Circuit((cirq.X**0.5)(q)).with_noise(model)
         assert noisy.all_qubits() == {q}
-    with pytest.raises(LayoutError, match="both map to device qubit 0"):
+    with pytest.raises(LayoutError, match="both map to device qubit 0") as caught:
         cirq.Circuit((cirq.X**0.5)(line), (cirq.X**0.5)(grid)).with_noise(model)
+    assert caught.value.hint == "pass layout= to place them explicitly"
+
+
+_COVERING = ": <device qubit>, ...} covering every circuit qubit"
 
 
 @pytest.mark.parametrize(
-    ("profile", "qubit", "layout", "match"),
+    ("profile", "qubit", "layout", "match", "hint"),
     [
-        (lambda: Profile.model_validate(toy()), cirq.GridQubit(0, 1), None, "records no qubit"),
-        (lambda: Profile.model_validate(toy()), cirq.NamedQubit("a"), None, "needs a layout"),
-        (lambda: Profile.model_validate(toy()), cirq.LineQubit(7), None, "has qubits 0..2"),
-        (lambda: Profile.model_validate(toy()), cirq.LineQubit(1), {0: 2}, "no device qubit"),
+        (
+            lambda: Profile.model_validate(toy()),
+            cirq.GridQubit(0, 1),
+            None,
+            "records no qubit",
+            "pass layout={cirq.GridQubit(0, 1)" + _COVERING,
+        ),
+        (
+            lambda: Profile.model_validate(toy()),
+            cirq.NamedQubit("a"),
+            None,
+            "needs a layout",
+            "pass layout={cirq.NamedQubit('a')" + _COVERING,
+        ),
+        (lambda: Profile.model_validate(toy()), cirq.LineQubit(7), None, "has qubits 0..2", None),
+        (
+            lambda: Profile.model_validate(toy()),
+            cirq.LineQubit(1),
+            {0: 2},
+            "no device qubit",
+            "map every circuit qubit in layout=",
+        ),
         (
             lambda: Profile.model_validate(toy(qubits=[{"index": 1, "disabled": True}])),
             cirq.LineQubit(1),
             None,
             "disabled",
+            "choose another qubit (profile.suggest_layout(n) proposes a usable chain)",
         ),
     ],
     ids=["grid-no-coords", "named", "out-of-range", "missing-from-layout", "disabled-qubit"],
 )
-def test_unmappable_qubits_raise_layout_error(profile, qubit, layout, match) -> None:
+def test_unmappable_qubits_raise_layout_error(profile, qubit, layout, match, hint) -> None:
     model = to_cirq(profile(), layout=layout)
-    with pytest.raises(LayoutError, match=match):
+    with pytest.raises(LayoutError, match=match) as caught:
         model.noisy_operation(cirq.X(qubit))
+    assert caught.value.hint == hint
 
 
 def test_explicit_layout_places_named_qubits() -> None:

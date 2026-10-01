@@ -304,9 +304,10 @@ def test_report_events_count_every_gate_application(tick_ns):
 @pytest.mark.parametrize("unknown_gates", ["typical", "error"])
 @pytest.mark.parametrize("gate", ["CXSWAP", "SWAPCX", "CZSWAP", "SWAP"])
 def test_gates_needing_two_or_more_entanglers_must_be_decomposed(gate, unknown_gates):
-    with pytest.raises(MissingCalibrationError, match=f"`{gate} 0 1`.*decompose") as caught:
+    with pytest.raises(MissingCalibrationError, match=f"^{gate} 0 1 .*decompose") as caught:
         to_stim(_manila(), f"{gate} 0 1", unknown_gates=unknown_gates)
     assert "unknown_gates" not in str(caught.value)
+    assert caught.value.hint == "decompose it into the profile's native gates first"
 
 
 @pytest.mark.parametrize("gate", ["CXSWAP", "SWAPCX", "CZSWAP"])
@@ -319,10 +320,10 @@ def test_a_two_entangler_gate_takes_the_profiles_own_calibration_of_it(gate):
     assert _noise_after(calibrated, gate) == pytest.approx(metrics.uniform_pauli(0.02, 2))
     assert "typical_noise_used" not in calibrated.report.events
     assert str(export({"virtual": True})) == f"{gate} 0 1"
-    with pytest.raises(DisabledGateError, match=f"`{gate} 0 1`.*disabled"):
+    with pytest.raises(DisabledGateError, match=f"^{gate} 0 1 .*disabled"):
         export({"disabled": True})
     for unknown_gates in ("typical", "error"):
-        with pytest.raises(MissingCalibrationError, match=f"`{gate} 0 1`.*decompose"):
+        with pytest.raises(MissingCalibrationError, match=f"^{gate} 0 1 .*decompose"):
             export({}, unknown_gates)
 
 
@@ -330,15 +331,29 @@ def test_two_qubit_identity_gets_no_noise():
     assert str(to_stim(_manila(), "II 0 1")) == "II 0 1"
 
 
+_CONNECTED_PAIRS = (
+    "pass layout= so 2-qubit gates land on connected pairs (profile.suggest_layout(n) proposes"
+    " one, noisevault.stim.layout_from_coords matches the circuit's QUBIT_COORDS)"
+)
+_NATIVE_OR_TYPICAL = (
+    "compile to the profile's native gates, or pass unknown_gates='typical' to use the typical"
+    " native gate's noise"
+)
+
+
 def test_unusable_gate_errors_name_the_stim_instruction_and_the_fix():
     circuit = "H 0\nCX 0 1\nCX 1 2\nM 0 1 2"
-    with pytest.raises(
-        MissingCalibrationError, match=r"`CX 1 2` \(physical qubits \[1, 4\]\).*pass layout="
-    ):
+    cx_1_2 = r"^CX 1 2 \(physical qubits \[1, 4\]\)"
+    with pytest.raises(MissingCalibrationError, match=cx_1_2) as caught:
         to_stim(_manila(), circuit, layout={0: 0, 1: 1, 2: 4})
-    with pytest.raises(MissingCalibrationError, match="`SQRT_Y 0` .*unknown_gates") as caught:
+    assert caught.value.hint == _CONNECTED_PAIRS
+    with pytest.raises(MissingCalibrationError, match=cx_1_2) as caught:
+        to_stim(_manila(), "CX 1 2", layout={1: 1, 2: 4}, unknown_gates="error")
+    assert caught.value.hint == f"{_NATIVE_OR_TYPICAL}; {_CONNECTED_PAIRS}"
+    with pytest.raises(MissingCalibrationError, match="^SQRT_Y 0 .*unknown_gates") as caught:
         to_stim(_manila(), "SQRT_Y 0", unknown_gates="error")
     assert "layout=" not in str(caught.value)
+    assert caught.value.hint == _NATIVE_OR_TYPICAL
 
 
 def test_repeated_targets_in_one_instruction_keep_gate_then_noise_order():
@@ -453,8 +468,12 @@ def test_measured_and_reset_qubits_are_busy_in_their_tick_layer():
     "noisy", ["DEPOLARIZE1(0.01) 0\nM 0", "H 0\nM(0.01) 0", "MPAD(0.3) 0\nM 0"]
 )
 def test_existing_noise_raises_with_the_fix(noisy):
-    with pytest.raises(ExistingNoiseError, match="existing_noise='strip'.*existing_noise='keep'"):
+    with pytest.raises(ExistingNoiseError, match="^the circuit already has noise") as caught:
         to_stim(_readout_profile(), noisy)
+    assert caught.value.hint == (
+        "pass existing_noise='strip' to replace it with the profile's noise, or"
+        " existing_noise='keep' to add to it"
+    )
 
 
 def test_existing_noise_keep_and_strip():
@@ -494,8 +513,9 @@ def test_noisy_padding_is_kept_or_stripped_like_other_noise():
 
 def test_heralded_noise_cannot_be_stripped_but_can_be_kept():
     circuit = "HERALDED_ERASE(0.1) 0\nM 0"
-    with pytest.raises(ExistingNoiseError, match="measurement records"):
+    with pytest.raises(ExistingNoiseError, match="measurement records") as caught:
         to_stim(_readout_profile(), circuit, existing_noise="strip")
+    assert caught.value.hint == "remove it from the circuit or pass existing_noise='keep'"
     out = to_stim(_readout_profile(), circuit, existing_noise="keep", readout="exact")
     assert out.readout_flips.tolist() == [[0.0, 0.0], [0.02, 0.1]]
 
@@ -814,10 +834,15 @@ def test_layout_from_coords_places_a_surface_code_on_the_best_grid_patch():
 
 def test_layout_from_coords_says_what_to_do_without_coords():
     circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=3, rounds=1)
-    with pytest.raises(LayoutError, match="layout="):
+    with pytest.raises(LayoutError, match="records no qubit coords") as caught:
         layout_from_coords(circuit, _manila())
-    with pytest.raises(LayoutError, match="no rotation or shift"):
+    assert caught.value.hint == "pass layout={stim qubit: physical qubit}"
+    with pytest.raises(LayoutError, match="no rotation or shift") as caught:
         layout_from_coords(circuit, _grid(4))
+    assert caught.value.hint == "pass layout= explicitly"
+    with pytest.raises(LayoutError, match=r"qubits \[0, 1\] have no 2D QUBIT_COORDS") as caught:
+        layout_from_coords("H 0 1", _grid(4))
+    assert caught.value.hint == "add them or pass layout="
 
 
 @pytest.mark.parametrize(

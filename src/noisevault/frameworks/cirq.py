@@ -191,8 +191,8 @@ class _QubitMap:
             first = owner.setdefault(index, qid)
             if first != qid:
                 raise LayoutError(
-                    f"{first!r} and {qid!r} both map to device qubit {index}; pass layout= to"
-                    " place them explicitly"
+                    f"{first!r} and {qid!r} both map to device qubit {index}",
+                    hint="pass layout= to place them explicitly",
                 )
         return indices
 
@@ -201,7 +201,7 @@ class _QubitMap:
             return self._known[qid]
         if self._explicit:
             raise LayoutError(
-                f"layout has no device qubit for {qid!r}; map every circuit qubit in layout="
+                f"layout has no device qubit for {qid!r}", hint="map every circuit qubit in layout="
             )
         if qid.dimension != 2:
             raise LayoutError(f"{qid!r} has dimension {qid.dimension}; profiles describe qubits")
@@ -218,14 +218,15 @@ class _QubitMap:
             if index is None:
                 some = ", ".join(f"GridQubit{c}" for c in list(self._coords)[:3])
                 raise LayoutError(
-                    f"{self._profile.id} has no qubit at coords ({qid.row}, {qid.col}); use the"
-                    f" device's coords (e.g. {some}) or {fix}"
+                    f"{self._profile.id} has no qubit at coords ({qid.row}, {qid.col})",
+                    hint=f"use the device's coords (e.g. {some}) or {fix}",
                 )
             return index
         why = "records no qubit coords" if isinstance(qid, cirq.GridQubit) else "cannot place it"
         raise LayoutError(
             f"{qid!r} needs a layout: {self._profile.id} {why} and only LineQubit(i) maps to"
-            f" device qubit i by default; {fix}"
+            " device qubit i by default",
+            hint=fix,
         )
 
 

@@ -75,8 +75,12 @@ def test_typical_noise_is_used_reported_and_warned_once(name, qubits, typical) -
 def test_unknown_gates_error_raises_instead() -> None:
     profile, report = _setup()
     for name, qubits in (("h", (0,)), ("x", (1,)), ("cz", (0, 2))):
-        with pytest.raises(MissingCalibrationError, match="unknown_gates='typical'"):
+        with pytest.raises(MissingCalibrationError, match="unknown_gates='typical'") as caught:
             _resolve(profile, report, name, qubits, "error")
+        assert caught.value.hint == (
+            "compile to the profile's native gates, or pass unknown_gates='typical' to use the"
+            " typical native gate's noise"
+        )
     assert report.events == {}
 
 
@@ -89,6 +93,7 @@ def test_multi_entanglers_must_be_decomposed(name, qubits, unknown_gates) -> Non
     with pytest.raises(MissingCalibrationError, match="decompose") as caught:
         _resolve(profile, report, name, qubits, unknown_gates)
     assert "unknown_gates" not in str(caught.value)
+    assert caught.value.hint == "decompose it into the profile's native gates first"
     assert report.events == {}
 
 
@@ -115,13 +120,22 @@ def test_typical_may_use_a_reversed_directed_record_and_reports_it() -> None:
 
 
 @pytest.mark.parametrize(
-    ("qubits", "match"),
-    [((0, 5), "qubits 0..2"), ((1, 1), "distinct"), ((1, 2), "disabled")],
+    ("qubits", "match", "hint"),
+    [
+        ((0, 5), "qubits 0..2", "fix the layout"),
+        ((1, 1), "distinct", None),
+        (
+            (1, 2),
+            "disabled",
+            "map the circuit elsewhere (profile.suggest_layout(n) proposes a usable chain)",
+        ),
+    ],
 )
-def test_bad_physical_qubits_are_layout_errors(qubits, match) -> None:
+def test_bad_physical_qubits_are_layout_errors(qubits, match, hint) -> None:
     profile, report = _setup(qubits=[{"index": 2, "disabled": True}])
-    with pytest.raises(LayoutError, match=match):
+    with pytest.raises(LayoutError, match=match) as caught:
         _resolve(profile, report, "cz", qubits)
+    assert caught.value.hint == hint
 
 
 def test_misuse_by_an_adapter_is_a_plain_error() -> None:

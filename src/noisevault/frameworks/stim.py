@@ -210,7 +210,8 @@ def layout_from_coords(circuit: stim.Circuit | str, profile: Profile) -> dict[in
     missing = sorted(q for q in found.qubits if len(coords.get(q, ())) < 2)
     if missing:
         raise LayoutError(
-            f"qubits {missing} have no 2D QUBIT_COORDS in the circuit; add them or pass layout="
+            f"qubits {missing} have no 2D QUBIT_COORDS in the circuit",
+            hint="add them or pass layout=",
         )
     device = _Device(profile)
     labels = sorted(found.qubits)
@@ -232,7 +233,8 @@ def layout_from_coords(circuit: stim.Circuit | str, profile: Profile) -> dict[in
     if best is None:
         raise LayoutError(
             f"no rotation or shift of the circuit's QUBIT_COORDS fits {profile.id}'s qubit coords"
-            " with every 2-qubit gate on a connected pair; pass layout= explicitly"
+            " with every 2-qubit gate on a connected pair",
+            hint="pass layout= explicitly",
         )
     return dict(zip(labels, map(int, best[1]), strict=True))
 
@@ -285,13 +287,15 @@ def _scan(circuit: stim.Circuit, found: _Scan | None = None) -> _Scan:
 def _check_existing_noise(found: _Scan, policy: ExistingNoise) -> None:
     if found.noise is not None and policy == "error":
         raise ExistingNoiseError(
-            f"the circuit already has noise ({found.noise}); pass existing_noise='strip' to"
-            " replace it with the profile's noise, or existing_noise='keep' to add to it"
+            f"the circuit already has noise ({found.noise})",
+            hint="pass existing_noise='strip' to replace it with the profile's noise, or"
+            " existing_noise='keep' to add to it",
         )
     if found.herald is not None and policy == "strip":
         raise ExistingNoiseError(
             f"{found.herald} adds measurement records that later rec[] targets count, so it"
-            " cannot be stripped; remove it from the circuit or pass existing_noise='keep'"
+            " cannot be stripped",
+            hint="remove it from the circuit or pass existing_noise='keep'",
         )
 
 
@@ -500,7 +504,7 @@ class _Exporter:
                 self.table, name, wires, unknown_gates=self.unknown_gates, report=self.report
             )
         except (MissingCalibrationError, DisabledGateError, LayoutError) as exc:
-            raise type(exc)(self._explain(stim_name, qubits, wires, exc)) from exc
+            raise self._explain(stim_name, qubits, wires, exc) from exc
         events = _added_events(before, self.report.events)
         if len(qubits) > 2:
             probs = pauli_twirl(built.channels, wires)
@@ -508,16 +512,24 @@ class _Exporter:
         return _Resolved(events, prefix=self._twirl(built.channels, wires))
 
     def _explain(
-        self, stim_name: str, qubits: tuple[int, ...], wires: tuple[int, ...], exc: Exception
-    ) -> str:
-        where = f"`{stim_name} {' '.join(map(str, qubits))}` (physical qubits {list(wires)}): {exc}"
+        self,
+        stim_name: str,
+        qubits: tuple[int, ...],
+        wires: tuple[int, ...],
+        exc: NoiseVaultError,
+    ) -> NoiseVaultError:
+        steps = [exc.hint] if exc.hint else []
         if len(wires) == 2 and isinstance(self.table.typical(2, wires), Unavailable):
-            where += (
-                "; pass layout= so 2-qubit gates land on connected pairs"
+            steps.append(
+                "pass layout= so 2-qubit gates land on connected pairs"
                 " (profile.suggest_layout(n) proposes one, noisevault.stim.layout_from_coords"
                 " matches the circuit's QUBIT_COORDS)"
             )
-        return where
+        instruction = f"{stim_name} {' '.join(map(str, qubits))}"
+        return type(exc)(
+            f"{instruction} (physical qubits {list(wires)}): {exc.message}",
+            hint="; ".join(steps) or None,
+        )
 
     def _twirl(self, channels: Sequence[ChannelSpec], wires: tuple[int, ...]) -> str:
         # Devices with shared defaults repeat the same channel on every pair: twirl it once.
@@ -830,7 +842,8 @@ class _Device:
         ]
         if not usable:
             raise LayoutError(
-                f"{profile.id} records no qubit coords; pass layout={{stim qubit: physical qubit}}"
+                f"{profile.id} records no qubit coords",
+                hint="pass layout={stim qubit: physical qubit}",
             )
         self.index = np.array([i for _, i in usable], dtype=int)
         self.grid = _grid_units(np.array([c for c, _ in usable], dtype=float))

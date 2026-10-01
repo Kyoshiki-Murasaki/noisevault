@@ -33,23 +33,32 @@ def test_mapping_and_sequence_layouts() -> None:
     assert normalize_layout([0, 1], [3, 2], profile) == {0: 3, 1: 2}
 
 
+_EVERY_QUBIT = "<physical qubit>, ...} covering every circuit qubit"
+
+
 @pytest.mark.parametrize(
-    ("labels", "layout", "match"),
+    ("labels", "layout", "match", "hint"),
     [
-        (["a"], None, "no integer index"),
-        ([True], None, "no integer index"),
-        ([0, 1], {0: 1}, r"no physical qubit for \[1\]"),
-        ([0, 1], {0: 2, 1: 2}, "both 0 and 1 to qubit 2"),
-        ([0], {0: 9}, "qubits 0..4"),
-        ([0], {0: -1}, "qubits 0..4"),
-        ([0], {0: "q3"}, "not a qubit index"),
-        ([0], {0: 3}, "disabled"),
+        (["a"], None, "no integer index", "pass layout={'a': " + _EVERY_QUBIT),
+        ([True], None, "no integer index", "pass layout={True: " + _EVERY_QUBIT),
+        ([0, 1], {0: 1}, r"no physical qubit for \[1\]", "map every circuit qubit"),
+        ([0, 1], {0: 2, 1: 2}, "both 0 and 1 to qubit 2", None),
+        ([0], {0: 9}, "qubits 0..4", None),
+        ([0], {0: -1}, "qubits 0..4", None),
+        ([0], {0: "q3"}, "not a qubit index", None),
+        (
+            [0],
+            {0: 3},
+            "disabled",
+            "choose another qubit (profile.suggest_layout(n) proposes a usable chain)",
+        ),
     ],
 )
-def test_layout_errors(labels, layout, match) -> None:
+def test_layout_errors(labels, layout, match, hint) -> None:
     profile = _line(5, qubits=[{"index": 3, "disabled": True}])
-    with pytest.raises(LayoutError, match=match):
+    with pytest.raises(LayoutError, match=match) as caught:
         normalize_layout(labels, layout, profile)
+    assert caught.value.hint == hint
 
 
 def test_adapters_can_supply_their_own_integer_rule() -> None:

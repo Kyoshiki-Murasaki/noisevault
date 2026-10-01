@@ -174,15 +174,19 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
     def physical_qubit(self, wire: Hashable) -> int:
         """The device qubit a circuit wire maps to; integer wire ``i`` is qubit ``i`` by default."""
         if wire not in self._layout:
+            if self._list_layout:
+                last = len(self._layout) - 1
+                raise LayoutError(
+                    f"wire {wire!r} is not in the layout; a list layout covers wires 0 to {last}",
+                    hint="extend the list",
+                )
             if self._explicit_layout:
-                raise LayoutError(f"wire {wire!r} is not in the layout; {self._layout_fix(wire)}")
+                raise LayoutError(
+                    f"wire {wire!r} is not in the layout",
+                    hint=f"add it: layout={{..., {wire!r}: <physical qubit>}}",
+                )
             self._layout.update(normalize_layout([wire], None, self.profile))
         return self._layout[wire]
-
-    def _layout_fix(self, wire: Hashable) -> str:
-        if self._list_layout:
-            return f"a list layout covers wires 0 to {len(self._layout) - 1}; extend the list"
-        return f"add it: layout={{..., {wire!r}: <physical qubit>}}"
 
     def _gate_noise(self, op: Operator, **_: Any) -> None:
         gate = _unconditional(op)

@@ -28,8 +28,9 @@ def test_effects_that_must_be_modeled_refuse_conversion(allow: str) -> None:
     profile, report = _report(
         effects=[{"type": "atom_loss", "on": "readout", "prob": 1e-3, "allow": allow}]
     )
-    with pytest.raises(UnsupportedEffect, match="atom_loss"):
+    with pytest.raises(UnsupportedEffect, match="atom_loss") as caught:
         report.record_effects(profile.effects)
+    assert caught.value.hint == "set allow to 'omit' to convert without it"
 
 
 def test_warn_once_per_key() -> None:

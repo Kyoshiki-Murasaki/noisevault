@@ -92,12 +92,14 @@ def resolve_op(
     if (info is not None and info.multi_entangler) or len(qubits) > 2:
         raise MissingCalibrationError(
             f"{where}: {name} needs more than one native entangling gate, so no single"
-            " calibration describes it; decompose it into the profile's native gates first"
+            " calibration describes it",
+            hint="decompose it into the profile's native gates first",
         )
     if unknown_gates == "error":
         raise MissingCalibrationError(
-            f"{where}: {why}; compile to the profile's native gates, or pass"
-            " unknown_gates='typical' to use the typical native gate's noise"
+            f"{where}: {why}",
+            hint="compile to the profile's native gates, or pass unknown_gates='typical' to use"
+            " the typical native gate's noise",
         )
     typical = table.typical(len(qubits), qubits)
     if isinstance(typical, Unavailable):
@@ -120,12 +122,14 @@ def _check_qubits(table: NoiseTable, name: str, qubits: tuple[int, ...]) -> None
         if not 0 <= q < table.num_qubits:
             raise LayoutError(
                 f"{name} acts on physical qubit {q}, but the device has qubits"
-                f" 0..{table.num_qubits - 1}; fix the layout"
+                f" 0..{table.num_qubits - 1}",
+                hint="fix the layout",
             )
         if table.qubit(q).disabled:
             raise LayoutError(
-                f"{name} acts on physical qubit {q}, which the profile marks disabled; map the"
-                " circuit elsewhere (profile.suggest_layout(n) proposes a usable chain)"
+                f"{name} acts on physical qubit {q}, which the profile marks disabled",
+                hint="map the circuit elsewhere (profile.suggest_layout(n) proposes a usable"
+                " chain)",
             )
 
 
