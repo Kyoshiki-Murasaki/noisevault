@@ -10,9 +10,53 @@ NoiseVault ships device calibration profiles under src/noisevault/data/profiles/
 profile records its source, license and attribution in its "provenance" block. The numbers
 are the source's; NoiseVault only converts them to its profile format.
 
-ibm_manila@2024-05-27.json.gz
-  Source: the FakeManilaV2 calibration snapshot packaged in qiskit-ibm-runtime
-          (https://github.com/Qiskit/qiskit-ibm-runtime), recorded from the IBM Quantum
-          device ibmq_manila.
-  License: Apache License, Version 2.0. Copyright IBM and its contributors.
-  Attribution: IBM Quantum (via qiskit-ibm-runtime).
+From https://github.com/quantumlib/Cirq
+  License: Apache-2.0.
+  Copyright 2018 The Cirq Developers.
+  Attribution: Google Quantum AI (via cirq-google).
+  Files:
+    google_rainbow@2021-11-16.json.gz  (cirq-google 1.6.1 rainbow_2021_11_16_calibration.json)
+    google_weber@2021-11-03.json.gz  (cirq-google 1.6.1 weber_2021_11_03_calibration.json)
+
+From https://github.com/Qiskit/qiskit-ibm-runtime
+  License: Apache-2.0.
+  Copyright 2021 IBM and its contributors.
+  Attribution: IBM Quantum, via qiskit-ibm-runtime.
+  Files:
+    ibm_aachen@2026-04-17.json.gz  (qiskit-ibm-runtime 0.49.0 FakeAachen)
+    ibm_berlin@2026-04-17.json.gz  (qiskit-ibm-runtime 0.49.0 FakeBerlin)
+    ibm_boston@2026-04-17.json.gz  (qiskit-ibm-runtime 0.49.0 FakeBoston)
+    ibm_brisbane@2025-02-26.json.gz  (qiskit-ibm-runtime 0.49.0 FakeBrisbane)
+    ibm_brussels@2026-04-17.json.gz  (qiskit-ibm-runtime 0.49.0 FakeBrussels)
+    ibm_cusco@2025-02-26.json.gz  (qiskit-ibm-runtime 0.49.0 FakeCusco)
+    ibm_fez@2025-02-26.json.gz  (qiskit-ibm-runtime 0.49.0 FakeFez)
+    ibm_kawasaki@2025-02-26.json.gz  (qiskit-ibm-runtime 0.49.0 FakeKawasaki)
+    ibm_kingston@2026-04-15.json.gz  (qiskit-ibm-runtime 0.49.0 FakeKingston)
+    ibm_kyiv@2025-02-26.json.gz  (qiskit-ibm-runtime 0.49.0 FakeKyiv)
+    ibm_manila@2024-05-27.json.gz  (qiskit-ibm-runtime 0.49.0 FakeManilaV2)
+    ibm_marrakesh@2025-02-26.json.gz  (qiskit-ibm-runtime 0.49.0 FakeMarrakesh)
+    ibm_miami@2026-04-17.json.gz  (qiskit-ibm-runtime 0.49.0 FakeMiami)
+    ibm_pittsburgh@2026-04-17.json.gz  (qiskit-ibm-runtime 0.49.0 FakePittsburgh)
+    ibm_quebec@2025-02-26.json.gz  (qiskit-ibm-runtime 0.49.0 FakeQuebec)
+    ibm_sherbrooke@2025-02-26.json.gz  (qiskit-ibm-runtime 0.49.0 FakeSherbrooke)
+    ibm_strasbourg@2026-04-17.json.gz  (qiskit-ibm-runtime 0.49.0 FakeStrasbourg)
+    ibm_torino@2025-02-26.json.gz  (qiskit-ibm-runtime 0.49.0 FakeTorino)
+
+From https://github.com/Quantinuum/quantinuum-hardware-specifications
+  License: Apache-2.0.
+  Copyright 2025 Quantinuum (www.quantinuum.com).
+  Attribution: Quantinuum.
+  Files:
+    quantinuum_h1-1@2025-05-02.json.gz  (Quantinuum hardware specifications, data/H1-1/2025_05_02 at 59e68bb55bd6)
+    quantinuum_h1-2@2023-08-21.json.gz  (Quantinuum hardware specifications, data/H1-2/2023_08_21 at 59e68bb55bd6)
+    quantinuum_h2-1@2025-04-30.json.gz  (Quantinuum hardware specifications, data/H2-1/2025_04_30 at 59e68bb55bd6)
+    quantinuum_h2-2@2025-08-28.json.gz  (Quantinuum hardware specifications, data/H2-2/2025_08_28 at 59e68bb55bd6)
+    quantinuum_reimei@2025-06-18.json.gz  (Quantinuum hardware specifications, data/REIMEI/2025_06_18 at 59e68bb55bd6)
+
+Test fixtures
+=============
+
+tests/fixtures/ibm/manila_properties.json and manila_configuration.json are taken from the
+FakeManilaV2 snapshot in qiskit-ibm-runtime (https://github.com/Qiskit/qiskit-ibm-runtime).
+  License: Apache-2.0.
+  Copyright 2021 IBM and its contributors.

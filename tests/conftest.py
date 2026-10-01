@@ -63,3 +63,7 @@ def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "nv_home"
     monkeypatch.setenv("NOISEVAULT_HOME", str(home))
     return home / "profiles"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "slow: a timing or scale test that still runs by default")

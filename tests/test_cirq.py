@@ -1,0 +1,642 @@
+from __future__ import annotations
+
+import warnings
+
+import numpy as np
+import pytest
+from conftest import MANILA_V01, migrated, require, toy
+
+cirq = require("cirq")
+
+import noisevault as nv  # noqa: E402
+from noisevault import gates  # noqa: E402
+from noisevault.channels import ChannelSpec, superoperator  # noqa: E402
+from noisevault.conversion import resolve_op  # noqa: E402
+from noisevault.errors import (  # noqa: E402
+    DisabledGateError,
+    LayoutError,
+    MissingCalibrationError,
+    NoiseApproximationWarning,
+    UnsupportedEffect,
+)
+from noisevault.frameworks.cirq import NoiseVaultNoiseModel, to_cirq  # noqa: E402
+from noisevault.profile import Profile  # noqa: E402
+from noisevault.reference import Op  # noqa: E402
+from noisevault.reference import probabilities as reference  # noqa: E402
+from noisevault.report import Report  # noqa: E402
+
+PI = np.pi
+ONE_Q = ("id", "x", "y", "h", "sx", "sxdg", "rx", "ry", "r")
+TWO_Q = ("cx", "cz", "iswap", "sqrt_iswap", "rzz", "rxx", "ryy", "zz", "ms")
+# Asymmetric Pauli channel (IX much larger than XI) so an operand swap is visible.
+CZ_PAULI = [0.01, 0, 0, 0.002, *[0] * 11]
+NONCONTIGUOUS = {0: 3, 1: 4, 2: 1}
+
+
+def _distinct(**sections) -> Profile:
+    """Five qubits where every gate name, pair and qubit has its own noise."""
+    defs: dict = {"rz": {"virtual": True}}
+    defs |= {n: {"avg_infidelity": 1e-4 * (i + 2), "duration_ns": 35} for i, n in enumerate(ONE_Q)}
+    defs |= {n: {"avg_infidelity": 2e-3 * (i + 2), "duration_ns": 300} for i, n in enumerate(TWO_Q)}
+    qubits = [
+        {
+            "index": i,
+            "t1_us": 50 + 10 * i,
+            "t2_us": 40 + 7 * i,
+            "readout": {"p1_given_0": 0.01 * (i + 1), "p0_given_1": 0.02 + 0.005 * i},
+        }
+        for i in range(5)
+    ]
+    records = [
+        {"gate": "cx", "qubits": q, "avg_infidelity": e}
+        for q, e in (([0, 1], 0.011), ([1, 0], 0.013), ([3, 4], 0.017), ([4, 3], 0.019))
+    ]
+    records += [{"gate": "cz", "qubits": q, "pauli": CZ_PAULI} for q in ([1, 2], [4, 1])]
+    data = toy(
+        device={
+            "name": "distinct",
+            "vendor": "test",
+            "technology": "superconducting",
+            "num_qubits": 5,
+        },
+        connectivity="all_to_all",
+        gates=defs,
+        qubits=qubits,
+        calibrations=records,
+    )
+    data.update(sections)
+    return Profile.model_validate(data)
+
+
+def _ion() -> Profile:
+    return Profile.uniform(
+        "ion",
+        technology="trapped_ion",
+        num_qubits=4,
+        one_qubit_error=2e-3,
+        two_qubit_error=1.5e-2,
+        readout_error=0.03,
+        t1_us=5e4,
+        t2_us=400,
+        one_qubit_ns=10_000,
+        two_qubit_ns=200_000,
+    )
+
+
+def _ops(tree) -> list:
+    return list(cirq.flatten_to_ops(tree))
+
+
+def _superop(ops, physical_of) -> tuple[np.ndarray, list[int]]:
+    wires = sorted({physical_of[q] for op in ops for q in op.qubits})
+    specs = [
+        ChannelSpec("cirq", tuple(physical_of[q] for q in op.qubits), tuple(cirq.kraus(op)))
+        for op in ops
+    ]
+    return superoperator(specs, wires), wires
+
+
+def probabilities(circuit, model, qubits, *, readout: bool = True) -> np.ndarray:
+    """Exact outcome probabilities of ``circuit`` under ``model``, big-endian over ``qubits``.
+
+    The quantum part comes from Cirq's density-matrix simulator; the readout part applies the
+    confusion matrices the model attaches to a final measurement of every qubit.
+    """
+    simulator = cirq.DensityMatrixSimulator(noise=model, dtype=np.complex128)
+    rho = simulator.simulate(circuit, qubit_order=qubits).final_density_matrix
+    probs = np.real(np.diag(rho)).reshape((2,) * len(qubits))
+    if readout:
+        (measure,) = _ops(model.noisy_operation(cirq.measure(*qubits, key="m")))
+        for (i,), confusion in measure.gate.confusion_map.items():
+            probs = np.moveaxis(np.tensordot(confusion.T, probs, axes=([1], [i])), 0, i)
+    return probs.reshape(-1)
+
+
+def _tvd(a, b) -> float:
+    return 0.5 * float(np.abs(np.asarray(a) - np.asarray(b)).sum())
+
+
+# per-gate channels ---------------------------------------------------------------------------
+
+GATE_CASES = [
+    (cirq.X, (0,), "x", ()),
+    (cirq.X**-1, (1,), "x", ()),
+    (cirq.X**0.5, (2,), "sx", ()),
+    (cirq.X**-0.5, (0,), "sxdg", ()),
+    (cirq.X**0.3, (1,), "rx", (0.3 * PI,)),
+    (cirq.rx(0.3), (2,), "rx", (0.3,)),
+    (cirq.Y, (1,), "y", ()),
+    (cirq.Y**0.25, (2,), "ry", (0.25 * PI,)),
+    (cirq.H, (0,), "h", ()),
+    (cirq.H**-1, (2,), "h", ()),
+    (cirq.PhasedXPowGate(phase_exponent=0.25, exponent=0.5), (1,), "r", (0.5 * PI, 0.25 * PI)),
+    (cirq.I, (2,), "id", ()),
+    (cirq.Z**0.3, (0,), "rz", (0.3 * PI,)),
+    (cirq.S, (1,), "s", ()),
+    (cirq.CNOT, (0, 1), "cx", ()),
+    (cirq.CNOT, (1, 0), "cx", ()),
+    (cirq.CZ, (1, 2), "cz", ()),
+    (cirq.CZ**-1, (2, 1), "cz", ()),
+    (cirq.ISWAP, (0, 2), "iswap", ()),
+    (cirq.ISWAP**0.5, (2, 0), "sqrt_iswap", ()),
+    (cirq.ZZ**0.3, (0, 1), "rzz", (0.3 * PI,)),
+    (cirq.ZZ**0.5, (1, 0), "zz", ()),
+    (cirq.XX**0.3, (0, 2), "rxx", (0.3 * PI,)),
+    (cirq.YY**0.2, (2, 1), "ryy", (0.2 * PI,)),
+    (cirq.ms(PI / 4), (0, 1), "ms", (0.0, 0.0)),
+]
+
+
+@pytest.mark.parametrize("layout", [None, NONCONTIGUOUS], ids=["identity", "noncontiguous"])
+@pytest.mark.parametrize(("gate", "targets", "name", "params"), GATE_CASES, ids=repr)
+def test_gate_superoperator_equals_core_channels(gate, targets, name, params, layout) -> None:
+    profile = _distinct()
+    model = to_cirq(profile, layout=layout, unknown_gates="error")
+    qids = [cirq.LineQubit(t) for t in targets]
+    physical_of = {cirq.LineQubit(c): p for c, p in (layout or {0: 0, 1: 1, 2: 2}).items()}
+    physical = tuple(physical_of[q] for q in qids)
+
+    ops = _ops(model.noisy_operation(gate.on(*qids)))
+    got, wires = _superop(ops, physical_of)
+
+    report = Report.start(profile, "test", None)
+    core = resolve_op(profile.table, name, physical, unknown_gates="error", report=report)
+    ideal = ChannelSpec("unitary", physical, (gates.GATES[name].unitary(*params),))
+    expected = superoperator([ideal, *core.channels], wires)
+    assert ops[0] == gate.on(*qids)
+    assert np.abs(got - expected).max() < 1e-10
+
+
+def test_every_registry_cirq_class_exists() -> None:
+    modules = [cirq]
+    try:
+        import cirq_google
+
+        modules.append(cirq_google)
+    except ImportError:
+        pass
+    named = {i.name: i.cirq for i in gates.GATES.values() if i.cirq}
+    missing = {n: c for n, c in named.items() if not any(hasattr(m, c) for m in modules)}
+    assert missing == {}
+
+
+# circuits against the reference simulator ------------------------------------------------------
+
+
+def _ghz_native(n: int) -> tuple[list, list[Op]]:
+    """GHZ from rz, sx and cx only: H = rz(pi/2) sx rz(pi/2) up to a phase."""
+    q = cirq.LineQubit.range(n)
+    circuit = [cirq.rz(PI / 2)(q[0]), (cirq.X**0.5)(q[0]), cirq.rz(PI / 2)(q[0])]
+    ops = [Op("rz", (0,), (PI / 2,)), Op("sx", (0,)), Op("rz", (0,), (PI / 2,))]
+    for i in range(n - 1):
+        circuit.append(cirq.CNOT(q[i], q[i + 1]))
+        ops.append(Op("cx", (i, i + 1)))
+    return circuit, ops
+
+
+def _mirror_native(n: int, pairs: list[tuple[int, int]], seed: int) -> tuple[list, list[Op]]:
+    """A random rz/sx/x/cx layer followed by its inverse written in the same gates."""
+    rng = np.random.default_rng(seed)
+    q = cirq.LineQubit.range(n)
+    layer: list[tuple[str, tuple[int, ...], float]] = []
+    for i in range(n):
+        layer += [("rz", (i,), float(rng.uniform(-PI, PI))), ("sx", (i,), 0.0)]
+        if rng.random() < 0.5:
+            layer.append(("x", (i,), 0.0))
+    layer += [("cx", pair, 0.0) for pair in pairs]
+
+    def emit(name: str, t: tuple[int, ...], angle: float) -> tuple[list, list[Op]]:
+        if name == "rz":
+            return [cirq.rz(angle)(q[t[0]])], [Op("rz", t, (angle,))]
+        gate = {"sx": cirq.X**0.5, "x": cirq.X, "cx": cirq.CNOT}[name]
+        return [gate(*(q[i] for i in t))], [Op(name, t)]
+
+    circuit: list = []
+    ops: list[Op] = []
+    for step in layer:
+        c, o = emit(*step)
+        circuit += c
+        ops += o
+    for name, t, angle in reversed(layer):
+        undo = (
+            [("rz", t, PI), ("sx", t, 0.0), ("rz", t, PI)]
+            if name == "sx"
+            else [(name, t, -angle if name == "rz" else 0.0)]
+        )
+        for step in undo:
+            c, o = emit(*step)
+            circuit += c
+            ops += o
+    return circuit, ops
+
+
+def _conformance_cases():
+    manila = migrated(MANILA_V01)
+    yield "manila-ghz5", manila, *_ghz_native(5), None
+    yield "manila-mirror5", manila, *_mirror_native(5, [(1, 0), (2, 3), (1, 2), (4, 3)], 7), None
+    yield "manila-ghz3-layout", manila, *_ghz_native(3), {0: 4, 1: 3, 2: 2}
+    ion = _ion()
+    yield "ion-ghz4", ion, *_ghz_native(4), [3, 0, 2, 1]
+    yield "ion-mirror4", ion, *_mirror_native(4, [(0, 3), (2, 1), (1, 3)], 11), None
+
+
+@pytest.mark.parametrize(
+    ("profile", "circuit", "ops", "layout"),
+    [case[1:] for case in _conformance_cases()],
+    ids=[case[0] for case in _conformance_cases()],
+)
+def test_exported_model_matches_reference(profile, circuit, ops, layout) -> None:
+    n = 1 + max(max(op.qubits) for op in ops)
+    qubits = cirq.LineQubit.range(n)
+    model = to_cirq(profile, layout=layout, unknown_gates="error")
+    kwargs = {"layout": layout, "unknown_gates": "error"}
+    for readout in (False, True):
+        got = probabilities(cirq.Circuit(circuit), model, qubits, readout=readout)
+        want = reference(profile, ops, n, readout=readout, **kwargs)
+        assert _tvd(got, want) <= 1e-9
+    # terminal measurements carry readout as a channel: the state just before them is the
+    # distribution of reported outcomes
+    measured = cirq.Circuit(circuit, cirq.measure(*qubits, key="m")).with_noise(model)
+    unmeasured = cirq.Circuit(op for op in measured.all_operations() if not cirq.is_measurement(op))
+    rho = (
+        cirq.DensityMatrixSimulator(dtype=np.complex128)
+        .simulate(unmeasured, qubit_order=qubits)
+        .final_density_matrix
+    )
+    assert _tvd(np.real(np.diag(rho)), reference(profile, ops, n, **kwargs)) <= 1e-9
+
+
+def test_sampled_terminal_measurements_include_readout() -> None:
+    """Sampled counts agree with the exact readout within 5 sigma per outcome."""
+    profile = _distinct()
+    q = cirq.LineQubit.range(2)
+    body = [cirq.X(q[0]), cirq.X(q[1]) ** 0.5]
+    model = to_cirq(profile, layout={0: 3, 1: 1})
+    exact = probabilities(cirq.Circuit(body), model, q)
+    without_readout = probabilities(cirq.Circuit(body), model, q, readout=False)
+    circuit = cirq.Circuit([*body, cirq.measure(*q, key="m")])
+    # the state-vector simulator samples trajectories, one full run per shot
+    for simulator, shots in ((cirq.DensityMatrixSimulator, 200_000), (cirq.Simulator, 5_000)):
+        result = simulator(noise=model, seed=5).run(circuit, repetitions=shots)
+        counts = np.bincount(result.measurements["m"] @ [2, 1], minlength=4) / shots
+        sigma = np.sqrt(exact * (1 - exact) / shots)
+        assert np.all(np.abs(counts - exact) <= 5 * sigma), simulator.__name__
+        assert np.any(np.abs(counts - without_readout) > 5 * sigma)  # the check can fail
+
+
+def test_mid_circuit_readout_error_leaves_the_true_state() -> None:
+    """A misread bit does not flip the qubit: after X the second readout sees |1>."""
+    model = to_cirq(_distinct(), layout={0: 4})  # P(1|0) = 0.05, P(0|1) = 0.04
+    q = cirq.LineQubit(0)
+    circuit = cirq.Circuit(cirq.measure(q, key="a"), cirq.X(q), cirq.measure(q, key="b"))
+    shots = 2000
+    result = cirq.DensityMatrixSimulator(noise=model, seed=3).run(circuit, repetitions=shots)
+    a, b = result.measurements["a"][:, 0], result.measurements["b"][:, 0]
+    assert abs(a.mean() - 0.05) <= 5 * np.sqrt(0.05 * 0.95 / shots)
+    # a state-flipping readout would give P(b=1 | a=1) = P(1|0) = 0.05 instead
+    assert b[a == 1].mean() > 0.8 and b[a == 0].mean() > 0.8
+
+
+def test_trajectory_runs_convert_the_circuit_once() -> None:
+    model = to_cirq(migrated(MANILA_V01))
+    q = cirq.LineQubit.range(2)
+    circuit = cirq.Circuit(cirq.H(q[0]), cirq.CNOT(*q), cirq.measure(*q, key="m"))
+    with pytest.warns(NoiseApproximationWarning):
+        cirq.Simulator(noise=model, seed=2).run(circuit, repetitions=200)
+    assert model.report.events["typical_noise_used"] == {"h": 1}
+
+
+def test_measurement_gets_cirq_confusion_matrix_per_qubit() -> None:
+    profile = _distinct()
+    model = to_cirq(profile, layout=NONCONTIGUOUS)
+    q = cirq.LineQubit.range(3)
+    original = cirq.measure(q[0], q[2], key="out", invert_mask=(True,))
+    (noisy,) = _ops(model.noisy_operation(original))
+    # device qubit 3 then device qubit 1; rows are the true outcome, columns the reported one
+    assert set(noisy.gate.confusion_map) == {(0,), (1,)}
+    assert np.allclose(noisy.gate.confusion_map[(0,)], [[0.96, 0.04], [0.035, 0.965]])
+    assert np.allclose(noisy.gate.confusion_map[(1,)], [[0.98, 0.02], [0.025, 0.975]])
+    assert noisy.gate.key == "out" and noisy.gate.invert_mask == (True,)
+    assert noisy.qubits == original.qubits
+
+    plain = to_cirq(profile, layout=NONCONTIGUOUS, readout=False)
+    assert _ops(plain.noisy_operation(original)) == [original]
+    assert "readout error (readout=False)" in plain.report.omitted
+
+
+def test_existing_confusion_map_is_refused() -> None:
+    model = to_cirq(_distinct())
+    q = cirq.LineQubit(0)
+    op = cirq.MeasurementGate(1, key="m", confusion_map={(0,): np.eye(2)}).on(q)
+    with pytest.raises(ValueError, match="readout=False"):
+        model.noisy_operation(op)
+
+
+def test_unknown_readout_is_reported_and_left_noiseless() -> None:
+    profile = Profile.model_validate(toy())
+    model = to_cirq(profile)
+    op = cirq.measure(cirq.LineQubit(1), key="m")
+    assert _ops(model.noisy_operation(op)) == [op]
+    assert model.report.unknown == ["readout of qubit 1"]
+
+
+# reset, wait ---------------------------------------------------------------------------------
+
+
+def _final_rho(model, circuit, initial: np.ndarray) -> np.ndarray:
+    simulator = cirq.DensityMatrixSimulator(noise=model, dtype=np.complex128)
+    return simulator.simulate(cirq.Circuit(circuit), initial_state=initial).final_density_matrix
+
+
+def test_reset_gets_the_preparation_error() -> None:
+    q = cirq.LineQubit(0)
+    excited = np.diag([0.0, 1.0]).astype(complex)
+    model = to_cirq(Profile.model_validate(toy(prep={"error": 0.03})))
+    assert _final_rho(model, [cirq.reset(q)], excited)[1, 1].real == pytest.approx(0.03, abs=1e-12)
+
+    manila = to_cirq(migrated(MANILA_V01))
+    assert _ops(manila.noisy_operation(cirq.reset(q))) == [cirq.reset(q)]
+    assert "preparation error of qubit 0" in manila.report.unknown
+
+
+def test_wait_gate_relaxes_with_t1_and_t2() -> None:
+    q = cirq.LineQubit(0)
+    model = to_cirq(_distinct())  # qubit 0: T1 = 50 us, T2 = 40 us
+    wait = cirq.wait(q, nanos=10_000)
+    excited = np.diag([0.0, 1.0]).astype(complex)
+    plus = np.full((2, 2), 0.5, dtype=complex)
+    assert _final_rho(model, [wait], excited)[1, 1].real == pytest.approx(np.exp(-10 / 50), 1e-12)
+    assert abs(_final_rho(model, [wait], plus)[0, 1]) == pytest.approx(
+        0.5 * np.exp(-10 / 40), 1e-12
+    )
+
+
+def test_wait_without_coherence_times_is_reported() -> None:
+    model = to_cirq(Profile.model_validate(toy()))
+    wait = cirq.wait(cirq.LineQubit(2), nanos=500)
+    assert _ops(model.noisy_operation(wait)) == [wait]
+    assert model.report.unknown == ["T1 and T2 of qubit 2 (no WaitGate relaxation)"]
+
+
+# qubit mapping -------------------------------------------------------------------------------
+
+
+def _with_coords() -> Profile:
+    qubits = [{"index": i, "t1_us": 30 + 20 * i, "coords": [i // 2, i % 2]} for i in range(4)]
+    return Profile.model_validate(
+        toy(
+            device={
+                "name": "grid",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 4,
+            },
+            connectivity="all_to_all",
+            qubits=qubits,
+        )
+    )
+
+
+def test_grid_qubits_map_through_profile_coords() -> None:
+    profile = _with_coords()
+    model = to_cirq(profile)
+    op = (cirq.X**0.5).on(cirq.GridQubit(1, 0))
+    ops = _ops(model.noisy_operation(op))
+    got, _ = _superop(ops, {cirq.GridQubit(1, 0): 2})
+    core = resolve_op(
+        profile.table, "sx", (2,), unknown_gates="error", report=Report.start(profile, "t", None)
+    )
+    ideal = ChannelSpec("unitary", (2,), (gates.GATES["sx"].unitary(),))
+    assert np.abs(got - superoperator([ideal, *core.channels], [2])).max() < 1e-12
+
+    with pytest.raises(LayoutError, match=r"no qubit at coords \(5, 5\)"):
+        model.noisy_operation(cirq.X(cirq.GridQubit(5, 5)))
+
+
+@pytest.mark.parametrize(
+    ("profile", "qubit", "layout", "match"),
+    [
+        (lambda: Profile.model_validate(toy()), cirq.GridQubit(0, 1), None, "records no qubit"),
+        (lambda: Profile.model_validate(toy()), cirq.NamedQubit("a"), None, "needs a layout"),
+        (lambda: Profile.model_validate(toy()), cirq.LineQubit(7), None, "has qubits 0..2"),
+        (lambda: Profile.model_validate(toy()), cirq.LineQubit(1), {0: 2}, "no device qubit"),
+        (
+            lambda: Profile.model_validate(toy(qubits=[{"index": 1, "disabled": True}])),
+            cirq.LineQubit(1),
+            None,
+            "disabled",
+        ),
+    ],
+    ids=["grid-no-coords", "named", "out-of-range", "missing-from-layout", "disabled-qubit"],
+)
+def test_unmappable_qubits_raise_layout_error(profile, qubit, layout, match) -> None:
+    model = to_cirq(profile(), layout=layout)
+    with pytest.raises(LayoutError, match=match):
+        model.noisy_operation(cirq.X(qubit))
+
+
+def test_explicit_layout_places_named_qubits() -> None:
+    profile = _distinct()
+    a, b = cirq.NamedQubit("a"), cirq.NamedQubit("b")
+    model = to_cirq(profile, layout={a: 4, b: 3})
+    ops = _ops(model.noisy_operation(cirq.CNOT(a, b)))
+    got, wires = _superop(ops, {a: 4, b: 3})
+    core = resolve_op(
+        profile.table, "cx", (4, 3), unknown_gates="error", report=Report.start(profile, "t", None)
+    )
+    assert core.requested == 0.019
+    ideal = ChannelSpec("unitary", (4, 3), (gates.GATES["cx"].unitary(),))
+    assert np.abs(got - superoperator([ideal, *core.channels], wires)).max() < 1e-12
+    with pytest.raises(LayoutError, match="both"):
+        to_cirq(profile, layout={a: 4, b: 4})
+
+
+# unknown and disabled gates, report ----------------------------------------------------------
+
+
+def test_unknown_gate_gets_typical_noise_with_one_warning() -> None:
+    model = to_cirq(_distinct())
+    q = cirq.LineQubit.range(2)
+    fsim = cirq.FSimGate(0.3, 0.1)
+    with pytest.warns(NoiseApproximationWarning, match="fsim") as caught:
+        first = _ops(model.noisy_operation(fsim(q[0], q[1])))
+        model.noisy_operation(fsim(q[0], q[1]))
+    assert len(caught) == 1
+    assert len(first) > 1  # typical noise was added
+    assert model.report.events["typical_noise_used"] == {"fsim": 2}
+    assert [a.what for a in model.report.approximated] == ["gate fsim"]
+
+
+@pytest.mark.parametrize(
+    ("gate", "name"),
+    [
+        (cirq.CZ**0.5, "cz**0.5"),
+        (cirq.FSimGate(0.3, 0.1), "fsim"),
+        (cirq.MatrixGate(cirq.unitary(cirq.H)), "matrix"),
+    ],
+)
+def test_non_native_cirq_gates_are_unknown(gate, name) -> None:
+    model = to_cirq(_distinct(), unknown_gates="error")
+    qids = cirq.LineQubit.range(cirq.num_qubits(gate))
+    with pytest.raises(MissingCalibrationError, match=rf"^{name.replace('*', '[*]')} on qubits"):
+        model.noisy_operation(gate.on(*qids))
+
+
+def test_unknown_gates_option_is_validated_up_front() -> None:
+    with pytest.raises(ValueError, match="choose 'typical' or 'error'"):
+        to_cirq(_distinct(), unknown_gates="ignore")
+
+
+def test_swap_must_be_decomposed() -> None:
+    model = to_cirq(_distinct())
+    with pytest.raises(MissingCalibrationError, match="decompose"):
+        model.noisy_operation(cirq.SWAP(*cirq.LineQubit.range(2)))
+
+
+def test_disabled_gate_raises() -> None:
+    profile = _distinct(calibrations=[{"gate": "cx", "qubits": [0, 1], "disabled": True}])
+    model = to_cirq(profile)
+    with pytest.raises(DisabledGateError):
+        model.noisy_operation(cirq.CNOT(*cirq.LineQubit.range(2)))
+
+
+def test_circuit_channels_are_kept_and_counted() -> None:
+    model = to_cirq(_distinct())
+    op = cirq.depolarize(0.1).on(cirq.LineQubit(0))
+    assert _ops(model.noisy_operation(op)) == [op]
+    assert model.report.events["circuit_channel_kept"] == {"DepolarizingChannel": 1}
+
+
+def test_report_describes_the_conversion() -> None:
+    profile = _distinct(effects=[{"type": "leakage", "gate": "cz", "prob": 1e-4}])
+    model = to_cirq(profile, layout=NONCONTIGUOUS)
+    assert isinstance(model, NoiseVaultNoiseModel) and isinstance(model, cirq.NoiseModel)
+    report = model.report
+    assert model.profile is profile
+    assert (report.framework, report.framework_version) == ("cirq", cirq.__version__)
+    assert (report.profile_id, report.fingerprint) == (profile.id, profile.fingerprint)
+    assert report.options == {"layout": NONCONTIGUOUS, "unknown_gates": "typical", "readout": True}
+    assert any(e.startswith("readout assignment error") for e in report.exact)
+    assert "effect leakage on cz" in report.omitted
+    assert report.to_dict()["framework"] == "cirq"
+
+    strict = _distinct(effects=[{"type": "leakage", "gate": "cz", "prob": 1e-4, "allow": "exact"}])
+    with pytest.raises(UnsupportedEffect):
+        to_cirq(strict)
+
+
+def test_first_call_just_works_on_a_bundled_profile() -> None:
+    profile = nv.load("ibm_manila")
+    model = profile.to_cirq()
+    q = cirq.LineQubit.range(3)
+    circuit = cirq.Circuit(cirq.H(q[0]), cirq.CNOT(q[0], q[1]), cirq.CNOT(q[1], q[2]))
+    circuit.append(cirq.measure(*q, key="m"))
+    shots = 20_000
+    with pytest.warns(NoiseApproximationWarning, match="h on qubits"):
+        result = cirq.DensityMatrixSimulator(noise=model, seed=1).run(circuit, repetitions=shots)
+    counts = np.bincount(result.measurements["m"] @ [4, 2, 1], minlength=8) / shots
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NoiseApproximationWarning)
+        exact = reference(profile, [Op("h", (0,)), Op("cx", (0, 1)), Op("cx", (1, 2))], 3)
+    assert np.all(np.abs(counts - exact) <= 5 * np.sqrt(exact * (1 - exact) / shots))
+    assert model.report.events["typical_noise_used"] == {"h": 1}
+
+
+# Cirq's own gates and edge operations -------------------------------------------------------
+
+
+def test_phased_xz_is_r_then_a_z_rotation_with_their_noise() -> None:
+    """PhasedXZ gets r's noise between its X and Z parts, which an asymmetric channel shows."""
+    profile = _distinct(calibrations=[{"gate": "r", "qubits": [0], "pauli": [0.05, 0, 0.01]}])
+    model = to_cirq(profile, unknown_gates="error")
+    x, z, a = 0.3, 0.4, 0.2
+    q = cirq.LineQubit(0)
+    gate = cirq.PhasedXZGate(x_exponent=x, z_exponent=z, axis_phase_exponent=a)
+    got = probabilities(cirq.Circuit(gate(q), cirq.H(q)), model, [q], readout=False)
+    ops = [Op("r", (0,), (PI * x, PI * a)), Op("rz", (0,), (PI * z,)), Op("h", (0,))]
+    assert _tvd(got, reference(profile, ops, 1, readout=False)) <= 1e-9
+    assert "typical_noise_used" not in model.report.events
+
+
+def test_google_gatesets_are_native_on_rainbow() -> None:
+    cirq_google = require("cirq_google")
+    from noisevault.sources.google import from_cirq_google
+
+    profile = from_cirq_google("rainbow")
+    a, b = cirq.GridQubit(5, 3), cirq.GridQubit(5, 4)
+    circuit = cirq.Circuit(cirq.H(a), cirq.CNOT(a, b), cirq.SQRT_ISWAP_INV(a, b))
+    circuit.append(cirq.measure(a, b, key="m"))
+    for gateset in (cirq.SqrtIswapTargetGateset(), cirq_google.SycamoreTargetGateset()):
+        compiled = cirq.optimize_for_target_gateset(circuit, gateset=gateset)
+        model = to_cirq(profile)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NoiseApproximationWarning)
+            noisy = compiled.with_noise(model)
+        assert "typical_noise_used" not in model.report.events, type(gateset).__name__
+        added = [op for op in noisy.all_operations() if isinstance(op.gate, cirq.KrausChannel)]
+        assert len(added) > len(list(compiled.all_operations()))
+    model = to_cirq(profile, unknown_gates="error")
+    inverse = _ops(model.noisy_operation(cirq.SQRT_ISWAP_INV(a, b)))
+    assert inverse[1:] == _ops(model.noisy_operation(cirq.SQRT_ISWAP(a, b)))[1:]
+
+
+@pytest.mark.parametrize("value", ["none", "exact", 1, None])
+def test_readout_option_is_validated_up_front(value) -> None:
+    with pytest.raises(TypeError, match="True to add readout error or False"):
+        to_cirq(_distinct(), readout=value)
+
+
+def test_terminal_readout_flips_are_reported_as_part_of_the_state() -> None:
+    model = to_cirq(_distinct())
+    q = cirq.LineQubit(0)
+    cirq.Circuit(cirq.measure(q, key="a"), cirq.X(q)).with_noise(model)
+    assert not model.report.approximated
+    cirq.Circuit(cirq.X(q), cirq.measure(q, key="b")).with_noise(model)
+    assert [a.what for a in model.report.approximated] == ["state after a terminal measurement"]
+
+
+def test_pauli_measurement_needs_z_basis_or_no_readout() -> None:
+    op = cirq.measure_single_paulistring(cirq.X(cirq.LineQubit(0)), key="p")
+    with pytest.raises(ValueError, match="rotate into the Z basis"):
+        to_cirq(_distinct()).noisy_operation(op)
+    model = to_cirq(_distinct(), readout=False)
+    assert _ops(model.noisy_operation(op)) == [op]
+    assert not model.report.events
+
+
+def test_classically_controlled_operations_are_refused_with_a_way_out() -> None:
+    q = cirq.LineQubit.range(2)
+    circuit = cirq.Circuit(
+        cirq.measure(q[0], key="a"),
+        cirq.X(q[1]).with_classical_controls("a"),
+        cirq.measure(q[1], key="b"),
+    )
+    simulator = cirq.DensityMatrixSimulator(noise=to_cirq(_distinct()))
+    with pytest.raises(ValueError, match="classically controlled.*quantum-controlled gate"):
+        simulator.run(circuit, repetitions=2)
+
+
+def test_multi_qubit_identity_is_one_id_per_qubit() -> None:
+    model = to_cirq(_distinct(), layout=NONCONTIGUOUS)
+    q = cirq.LineQubit.range(3)
+    ops = _ops(model.noisy_operation(cirq.IdentityGate(2).on(q[0], q[2])))
+    each = [op for qubit in (q[0], q[2]) for op in _ops(model.noisy_operation(cirq.I(qubit)))[1:]]
+    assert ops[1:] == each
+    assert {op.qubits for op in each} == {(q[0],), (q[2],)}
+
+
+def test_parameterized_gates_must_be_resolved_when_their_name_depends_on_it() -> None:
+    import sympy
+
+    t = sympy.Symbol("t")
+    q = cirq.LineQubit.range(2)
+    model = to_cirq(migrated(MANILA_V01), unknown_gates="error")
+    for op in ((cirq.X**t)(q[0]), (cirq.CZ**t)(*q), cirq.wait(q[0], nanos=t)):
+        with pytest.raises(ValueError, match="resolve its parameters before adding noise"):
+            cirq.Circuit(op).with_noise(model)
+    # the simulator resolves first, so X**t at t=1 is the calibrated x
+    circuit = cirq.Circuit((cirq.X**t)(q[0]), cirq.measure(q[0], key="m"))
+    result = cirq.DensityMatrixSimulator(noise=model, seed=1).run(circuit, {"t": 1}, 200)
+    assert result.measurements["m"].mean() > 0.9
+    # a name that does not depend on the angle converts before resolution
+    assert len(_ops(model.noisy_operation(cirq.rz(t).on(q[0])))) == 1

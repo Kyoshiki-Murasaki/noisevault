@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -42,7 +44,12 @@ def test_bundled_manila_loads_by_id_and_date() -> None:
     assert by_id.id == "ibm_manila"
     assert nv.load("ibm_manila@2024-05-27").fingerprint == by_id.fingerprint
     assert nv.load("ibm_manila@2024-05-27T18:27:23Z").fingerprint == by_id.fingerprint
-    assert by_id.fingerprint == migrated(MANILA_V01).fingerprint
+    old = migrated(MANILA_V01)  # the 0.1 snapshot of the same calibration keeps its numbers
+    for record in old.calibrations:
+        now = by_id.table.gate(record.gate, record.qubits)
+        assert now.avg_infidelity == record.avg_infidelity
+        assert now.duration_ns == pytest.approx(record.duration_ns, rel=1e-11)
+    assert [q.readout.pair for q in by_id.qubits] == [q.readout.pair for q in old.qubits]
     [info] = [i for i in bundled_profiles() if i.id == "ibm_manila"]
     assert info.fingerprint == by_id.fingerprint and info.location == "bundled"
 
@@ -103,7 +110,9 @@ def test_profiles_filters(vault: Path) -> None:
     _dated("2025-01-01T00:00:00Z").save(vault / "toy.json")
     assert {i.id for i in nv.profiles()} >= {"ibm_manila", "test_toy"}
     assert {i.id for i in nv.profiles(vendor="test")} == {"test_toy"}
-    assert nv.profiles(technology="trapped_ion") == []
+    ions = nv.profiles(technology="trapped_ion")
+    assert {i.technology for i in ions} <= {"trapped_ion"}
+    assert not {"ibm_manila", "test_toy"} & {i.id for i in ions}
 
 
 def test_unreadable_vault_file_is_skipped_with_a_warning(vault: Path) -> None:
@@ -155,3 +164,51 @@ def test_same_time_profiles_in_the_vault_are_told_apart_by_expect(vault: Path) -
         nv.load("ibm_manila@2024-05-27T18:27:23Z")
     assert "first.json.gz" in str(info.value) and "second.json.gz" in str(info.value)
     assert nv.load("ibm_manila", expect=second.fingerprint) == second
+
+
+def test_profiles_are_sorted_by_id_then_date(vault: Path) -> None:
+    for stamp in ("2025-02-01T08:00:00Z", "2025-01-01T08:00:00Z"):
+        _dated(stamp).save(vault_path(_dated(stamp)))
+    infos = nv.profiles()
+    assert [i.id for i in infos] == sorted(i.id for i in infos)
+    toys = [i.ref for i in infos if i.id == "test_toy"]
+    assert toys == ["test_toy@2025-01-01T08:00:00Z", "test_toy@2025-02-01T08:00:00Z"]
+
+
+def test_vault_listing_parses_each_file_once(vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import noisevault.catalog as catalog
+
+    first = _dated("2025-01-01T00:00:00Z")
+    path = first.save(vault_path(first))
+    parsed: list[Path] = []
+    real = catalog.load_file
+    monkeypatch.setattr(catalog, "load_file", lambda p: parsed.append(p) or real(p))
+    assert [i.fingerprint for i in catalog.vault_profiles()] == [first.fingerprint]
+    assert [i.fingerprint for i in catalog.vault_profiles()] == [first.fingerprint]
+    assert parsed == [path]  # the second listing came from the index
+    changed = _dated("2025-01-01T00:00:00Z", error=4.25e-3)  # another size, too
+    changed.save(path)
+    assert [i.fingerprint for i in catalog.vault_profiles()] == [changed.fingerprint]
+    assert parsed == [path, path]
+
+
+def test_listing_carries_data_kind_and_license() -> None:
+    [info] = [i for i in nv.profiles() if i.id == "ibm_manila"]
+    assert (info.data_kind, info.license) == ("measured", "Apache-2.0")
+
+
+def test_readme_fingerprint_pin_loads() -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    pins = re.findall(r'nv\.load\("([^"]+)", expect="(nv:[0-9a-f]{12})"\)', readme)
+    assert pins, "README no longer shows a pinned load"
+    for ref, expect in pins:
+        assert nv.load(ref, expect=expect).short_fingerprint == expect
+
+
+def test_dot_files_in_the_vault_are_not_profiles(vault: Path) -> None:
+    vault.mkdir(parents=True)
+    (vault / ".index.json.4242.tmp").write_text("{\x01")  # a cache write cut short
+    (vault / ".ibm_x@2025.json.gz.4242.tmp.json.gz").write_bytes(b"\x1f\x8b")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert "ibm_manila" in {i.id for i in nv.profiles()}

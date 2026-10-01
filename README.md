@@ -45,7 +45,7 @@ print(ions.id, ions.short_fingerprint)
 ```
 
 A profile's fingerprint depends only on its physics. Pin it when you load a profile, and a later
-change to that profile fails loudly: `nv.load("ibm_manila", expect="nv:61b81b3c4239")`.
+change to that profile fails loudly: `nv.load("ibm_manila", expect="nv:fc7183858c84")`.
 
 From the command line (`nv` is a short alias of `noisevault`):
 

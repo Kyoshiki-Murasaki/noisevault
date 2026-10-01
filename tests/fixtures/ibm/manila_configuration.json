@@ -1,0 +1,52 @@
+{
+ "backend_name": "ibmq_manila",
+ "backend_version": "1.2.6",
+ "basis_gates": [
+  "cx",
+  "id",
+  "rz",
+  "sx",
+  "x"
+ ],
+ "coupling_map": [
+  [
+   0,
+   1
+  ],
+  [
+   1,
+   0
+  ],
+  [
+   1,
+   2
+  ],
+  [
+   2,
+   1
+  ],
+  [
+   2,
+   3
+  ],
+  [
+   3,
+   2
+  ],
+  [
+   3,
+   4
+  ],
+  [
+   4,
+   3
+  ]
+ ],
+ "dt": 0.2222222222222222,
+ "n_qubits": 5,
+ "processor_type": {
+  "family": "Falcon",
+  "revision": "5.11",
+  "segment": "L"
+ }
+}

@@ -13,13 +13,19 @@ import os
 import re
 import warnings
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from .errors import AmbiguousRef, FingerprintMismatch, NoiseVaultWarning, ProfileNotFound
+from .errors import (
+    AmbiguousRef,
+    FingerprintMismatch,
+    NoiseVaultWarning,
+    ProfileNotFound,
+    SourceUnavailable,
+)
 from .profile import Profile, Ref, load_bytes, load_file, parse_ref
 
 _PULL_SOURCES = {
@@ -39,6 +45,8 @@ class ProfileInfo:
     fingerprint: str
     location: Literal["vault", "bundled"]
     path: Path | Traversable
+    data_kind: str = "unknown"
+    license: str | None = None
 
     @property
     def ref(self) -> str:
@@ -49,17 +57,43 @@ class ProfileInfo:
 
     @classmethod
     def of(cls, profile: Profile, location: Literal["vault", "bundled"], path: Path) -> ProfileInfo:
-        dev = profile.device
+        return cls.from_entry(index_entry(profile), location, path)
+
+    @classmethod
+    def from_entry(
+        cls, entry: dict[str, Any], location: Literal["vault", "bundled"], path: Path | Traversable
+    ) -> ProfileInfo:
+        """From a line of a catalog index (see :func:`index_entry`)."""
+        stamp = entry.get("calibrated_at")
         return cls(
-            profile.id,
-            dev.calibrated_at,
-            dev.technology,
-            dev.vendor,
-            dev.num_qubits,
-            profile.fingerprint,
-            location,
-            path,
+            id=entry["id"],
+            calibrated_at=datetime.fromisoformat(stamp) if stamp else None,
+            technology=entry["technology"],
+            vendor=entry.get("vendor"),
+            num_qubits=entry["num_qubits"],
+            fingerprint=entry["fingerprint"],
+            location=location,
+            path=path,
+            data_kind=entry.get("data_kind", "unknown"),
+            license=entry.get("license"),
         )
+
+
+def index_entry(profile: Profile) -> dict[str, Any]:
+    """What a catalog index records about a profile, so listing never parses the file."""
+    dev, prov = profile.device, profile.provenance
+    return {
+        "id": profile.id,
+        "date": dev.calibrated_at.date().isoformat() if dev.calibrated_at else None,
+        "calibrated_at": _stamp(dev.calibrated_at) if dev.calibrated_at else None,
+        "vendor": dev.vendor,
+        "technology": dev.technology,
+        "num_qubits": dev.num_qubits,
+        "processor": dev.processor,
+        "data_kind": prov.data_kind,
+        "license": prov.license,
+        "fingerprint": profile.fingerprint,
+    }
 
 
 def vault_dir() -> Path:
@@ -81,36 +115,64 @@ def vault_path(profile: Profile) -> Path:
 def bundled_profiles() -> list[ProfileInfo]:
     index = json.loads((bundled_dir() / "index.json").read_text(encoding="utf-8"))
     return [
-        ProfileInfo(
-            id=entry["id"],
-            calibrated_at=datetime.fromisoformat(entry["calibrated_at"])
-            if entry.get("calibrated_at")
-            else None,
-            technology=entry["technology"],
-            vendor=entry.get("vendor"),
-            num_qubits=entry["num_qubits"],
-            fingerprint=entry["fingerprint"],
-            location="bundled",
-            path=bundled_dir() / entry["file"],
-        )
+        ProfileInfo.from_entry(entry, "bundled", bundled_dir() / entry["file"])
         for entry in index["profiles"]
     ]
 
 
+_VAULT_INDEX = ".index.json"
+
+
 def vault_profiles() -> list[ProfileInfo]:
+    """Profiles in the vault, indexed by file name so unchanged files are not parsed again.
+
+    The index (``.index.json`` in the vault) is only a cache: it is rebuilt from the files
+    whenever a file's size or modification time changes, and losing it costs one re-read.
+    """
+    folder = vault_dir()
+    cached = _read_vault_index(folder)
+    index: dict[str, dict[str, Any]] = {}
     out = []
-    for path in sorted(vault_dir().glob("*.json*")):
-        try:
-            profile = load_file(path)
-        except Exception as exc:  # one unreadable file must not hide the rest
-            warnings.warn(f"skipping {path}: {exc}", NoiseVaultWarning, stacklevel=2)
+    for path in sorted(folder.glob("*.json*")):
+        if path.name.startswith("."):  # the index cache and in-flight temporary files
             continue
-        out.append(ProfileInfo.of(profile, "vault", path))
+        stat = path.stat()
+        signature = [stat.st_size, stat.st_mtime_ns]
+        entry = cached.get(path.name)
+        if entry is None or entry.get("signature") != signature:
+            try:
+                profile = load_file(path)
+            except Exception as exc:  # one unreadable file must not hide the rest
+                warnings.warn(f"skipping {path}: {exc}", NoiseVaultWarning, stacklevel=2)
+                continue
+            entry = {"signature": signature, **index_entry(profile)}
+        index[path.name] = entry
+        out.append(ProfileInfo.from_entry(entry, "vault", path))
+    if index != cached:
+        _write_vault_index(folder, index)
     return out
 
 
+def _read_vault_index(folder: Path) -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads((folder / _VAULT_INDEX).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_vault_index(folder: Path, index: dict[str, dict[str, Any]]) -> None:
+    """Best effort and atomic: a read-only vault or a concurrent writer only loses the cache."""
+    try:
+        tmp = folder / f"{_VAULT_INDEX}.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps(index, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, folder / _VAULT_INDEX)
+    except OSError:
+        pass
+
+
 def profiles(*, technology: str | None = None, vendor: str | None = None) -> list[ProfileInfo]:
-    """Every known profile, vault first, then bundled; newest first within an id."""
+    """Every known profile (a vault copy hides an identical bundled one), by id then date."""
     found = _dedupe(vault_profiles() + bundled_profiles())
     found = [
         info
@@ -118,7 +180,7 @@ def profiles(*, technology: str | None = None, vendor: str | None = None) -> lis
         if (technology is None or info.technology == technology)
         and (vendor is None or info.vendor == vendor)
     ]
-    return sorted(found, key=lambda i: (i.id, -_epoch(i.calibrated_at)))
+    return sorted(found, key=lambda i: (i.id, _epoch(i.calibrated_at), i.location))
 
 
 def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
@@ -193,18 +255,61 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
 def pull(
     device: str,
     *,
-    at: str | datetime | None = None,
+    at: str | date | datetime | None = None,
     source: str | None = None,
     output: str | Path | None = None,
 ) -> Profile:
-    """Fetch a calibration from a live source and save it (to the vault unless ``output``)."""
-    source = source or ("ionq" if device.lower().startswith("ionq") else "ibm")
+    """Fetch a calibration from a live source and save it (to the vault unless ``output``).
+
+    Pulling a calibration the vault already holds (same id and fingerprint) writes nothing, so
+    repeated pulls leave one file per calibration. A pull that converts the same calibration
+    differently (say, after a NoiseVault upgrade) replaces the older file, with a warning.
+    """
+    source = source or _default_source(device)
     if source not in _PULL_SOURCES:
         raise ValueError(f"unknown source {source!r}; choose one of {', '.join(_PULL_SOURCES)}")
     module = importlib.import_module(_PULL_SOURCES[source])
     profile = module.pull(device, at=at)
-    profile.save(output if output is not None else vault_path(profile))
+    if output is not None:
+        profile.save(output)
+        return profile
+    held = [i for i in vault_profiles() if i.id == profile.id]
+    if any(i.fingerprint == profile.fingerprint for i in held):
+        return profile
+    path = vault_path(profile)
+    for old in held:
+        if old.path == path:
+            warnings.warn(
+                f"replaced {path.name} (nv:{old.fingerprint[:12]}) with this pull"
+                f" ({profile.short_fingerprint}): the same calibration, converted differently;"
+                " update any expect= pins",
+                NoiseVaultWarning,
+                stacklevel=2,
+            )
+    _save_atomically(profile, path)
     return profile
+
+
+_DEFAULT_SOURCES = {"ibm_": "ibm", "ionq": "ionq"}  # id prefix -> source that pulls it
+
+
+def _default_source(device: str) -> str:
+    for prefix, source in _DEFAULT_SOURCES.items():
+        if device.lower().startswith(prefix):
+            return source
+    bundled = any(i.id == device for i in bundled_profiles())
+    hint = f"; {device} is bundled, so nv.load({device!r}) loads it offline" if bundled else ""
+    raise SourceUnavailable(
+        f"no live source pulls {device!r}: pull reads IBM devices (ibm_..., source='ibm' or"
+        f" 'ibm-account') and IonQ devices (ionq..., source='ionq'){hint}"
+    )
+
+
+def _save_atomically(profile: Profile, path: Path) -> None:
+    """A crash mid-write leaves the old file whole; the dot name keeps listings from seeing it."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp.json.gz")
+    profile.save(tmp)
+    os.replace(tmp, path)
 
 
 def _expect_prefix(expect: str) -> str:

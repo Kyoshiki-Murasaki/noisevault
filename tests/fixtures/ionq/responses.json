@@ -1,0 +1,755 @@
+{
+ "https://api.ionq.co/v0.4/backends": [
+  {
+   "backend": "qpu.forte-1",
+   "status": "available",
+   "qubits": 4,
+   "supported_native_gates": [
+    "gpi",
+    "gpi2",
+    "zz"
+   ]
+  },
+  {
+   "backend": "qpu.aria-1",
+   "status": "retired",
+   "qubits": 3,
+   "supported_native_gates": [
+    "gpi",
+    "gpi2",
+    "ms"
+   ]
+  },
+  {
+   "backend": "qpu.harmony",
+   "status": "retired",
+   "qubits": 3,
+   "supported_native_gates": [
+    "gpi",
+    "gpi2",
+    "ms"
+   ]
+  },
+  {
+   "backend": "simulator",
+   "status": "available",
+   "qubits": 29,
+   "supported_native_gates": [
+    "gpi",
+    "gpi2",
+    "zz"
+   ]
+  }
+ ],
+ "https://api.ionq.co/v0.4/backends/qpu.forte-1/characterizations?limit=10": {
+  "characterizations": [
+   {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "date": "2026-09-29T00:00:00Z",
+    "backend": "qpu.forte-1",
+    "qubits": 4,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      3
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      1,
+      3
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.991
+     },
+     "1q": {
+      "median": null,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.995,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "date": "2026-09-28T00:00:00Z",
+    "backend": "qpu.forte-1",
+    "qubits": 4,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      3
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      1,
+      3
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.9905
+     },
+     "1q": {
+      "median": 0.9997,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.995,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "date": "2026-09-27T00:00:00Z",
+    "backend": "qpu.forte-1",
+    "qubits": 4,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      3
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      1,
+      3
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.9912
+     },
+     "1q": {
+      "median": 0.9998,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9951,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000004",
+    "date": "2026-09-01T00:00:00Z",
+    "backend": "qpu.forte-1",
+    "qubits": 4,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      3
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      1,
+      3
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.501
+     },
+     "1q": {
+      "median": 0.9996,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9949,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   }
+  ],
+  "pages": 1
+ },
+ "https://api.ionq.co/v0.4/backends/qpu.forte-1/characterizations?limit=10&end=2026-09-01T00%3A00%3A00Z": {
+  "characterizations": [
+   {
+    "id": "00000000-0000-4000-8000-000000000004",
+    "date": "2026-09-01T00:00:00Z",
+    "backend": "qpu.forte-1",
+    "qubits": 4,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      3
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      1,
+      3
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.501
+     },
+     "1q": {
+      "median": 0.9996,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9949,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   }
+  ],
+  "pages": 1
+ },
+ "https://api.ionq.co/v0.4/backends/qpu.forte-1/characterizations?limit=10&end=2025-01-01T00%3A00%3A00Z": {
+  "characterizations": null,
+  "pages": 1
+ },
+ "https://api.ionq.co/v0.4/backends/qpu.forte-1/characterizations?limit=1&end=2026-09-29T00%3A00%3A00Z": {
+  "characterizations": [
+   {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "date": "2026-09-29T00:00:00Z",
+    "backend": "qpu.forte-1",
+    "qubits": 4,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      3
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      1,
+      3
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.991
+     },
+     "1q": {
+      "median": null,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.995,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   }
+  ],
+  "pages": 4
+ },
+ "https://api.ionq.co/v0.4/backends/qpu.forte-1/characterizations?limit=1&end=2026-09-28T00%3A00%3A00Z": {
+  "characterizations": [
+   {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "date": "2026-09-28T00:00:00Z",
+    "backend": "qpu.forte-1",
+    "qubits": 4,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      3
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      1,
+      3
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.9905
+     },
+     "1q": {
+      "median": 0.9997,
+      "stderr": 0
+     },
+     "2q": {
+      "median": null,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   }
+  ],
+  "pages": 4
+ },
+ "https://api.ionq.co/v0.4/backends/qpu.forte-1/characterizations?limit=1&end=2026-09-27T00%3A00%3A00Z": {
+  "characterizations": [
+   {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "date": "2026-09-27T00:00:00Z",
+    "backend": "qpu.forte-1",
+    "qubits": 4,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      3
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      1,
+      3
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.9912
+     },
+     "1q": {
+      "median": 0.9998,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9951,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   }
+  ],
+  "pages": 4
+ },
+ "https://api.ionq.co/v0.4/backends/qpu.forte-1/characterizations?limit=1&end=2026-09-01T00%3A00%3A00Z": {
+  "characterizations": [
+   {
+    "id": "00000000-0000-4000-8000-000000000004",
+    "date": "2026-09-01T00:00:00Z",
+    "backend": "qpu.forte-1",
+    "qubits": 4,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      3
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      1,
+      3
+     ],
+     [
+      2,
+      3
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.501
+     },
+     "1q": {
+      "median": 0.9996,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9949,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   }
+  ],
+  "pages": 4
+ },
+ "https://api.ionq.co/v0.4/backends/qpu.aria-1/characterizations?limit=10": {
+  "characterizations": [
+   {
+    "id": "00000000-0000-4000-8000-000000000010",
+    "date": "2026-03-01T00:00:00Z",
+    "backend": "qpu.aria-1",
+    "qubits": 3,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.9928
+     },
+     "1q": {
+      "median": 0.79,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9861,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000009",
+    "date": "2026-02-18T00:00:00Z",
+    "backend": "qpu.aria-1",
+    "qubits": 3,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.9928
+     },
+     "1q": {
+      "median": 0.9932,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9861,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   }
+  ],
+  "pages": 1
+ },
+ "https://api.ionq.co/v0.4/backends/qpu.aria-1/characterizations?limit=1&end=2026-02-18T00%3A00%3A00Z": {
+  "characterizations": [
+   {
+    "id": "00000000-0000-4000-8000-000000000009",
+    "date": "2026-02-18T00:00:00Z",
+    "backend": "qpu.aria-1",
+    "qubits": 3,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.9928
+     },
+     "1q": {
+      "median": 0.9932,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9861,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   }
+  ],
+  "pages": 1
+ },
+ "https://api.ionq.co/v0.4/backends/qpu.harmony/characterizations?limit=10": {
+  "characterizations": [
+   {
+    "id": "00000000-0000-4000-8000-000000000020",
+    "date": "2023-09-01T00:00:00Z",
+    "backend": "qpu.harmony",
+    "qubits": 3,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.9928
+     },
+     "1q": {
+      "median": null,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9861,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000021",
+    "date": "2023-08-01T00:00:00Z",
+    "backend": "qpu.harmony",
+    "qubits": 3,
+    "connectivity": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ]
+    ],
+    "fidelity": {
+     "spam": {
+      "median": 0.9928
+     },
+     "1q": {
+      "median": null,
+      "stderr": 0
+     },
+     "2q": {
+      "median": 0.9861,
+      "stderr": 0
+     }
+    },
+    "timing": {
+     "readout": 0.00015,
+     "reset": 5e-05,
+     "1q": 0.00013,
+     "2q": 0.00097,
+     "t1": 100,
+     "t2": 1
+    }
+   }
+  ],
+  "pages": 1
+ }
+}

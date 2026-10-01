@@ -46,11 +46,22 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: Any) -> Profil
     return convert(path, device=device, calibrated_at=calibrated_at)
 
 
-def from_braket(path_or_dict: str | Path | dict[str, Any]) -> Profile:
-    """A profile from saved Amazon Braket standardized device properties."""
+def from_braket(path_or_dict: str | Path | dict[str, Any], *, device: str | None = None) -> Profile:
+    """A profile from saved Amazon Braket standardized device properties.
+
+    Braket properties do not name the device, so pass ``device`` (e.g. ``"garnet"``) to name the
+    profile; by default it is the file name without its suffix.
+    """
     from .sources.braket import from_braket as convert
 
-    return convert(path_or_dict)
+    return convert(path_or_dict, device=device)
+
+
+def from_cirq_google(processor_id: str) -> Profile:
+    """A profile from a calibration cirq_google ships (rainbow, weber, willow_pink)."""
+    from .sources.google import from_cirq_google as convert
+
+    return convert(processor_id)
 
 
 def __getattr__(name: str) -> Any:
@@ -77,6 +88,7 @@ __all__ = [
     "UnsupportedEffect",
     "__version__",
     "from_braket",
+    "from_cirq_google",
     "from_ibm_csv",
     "from_qiskit_backend",
     "json_schema",

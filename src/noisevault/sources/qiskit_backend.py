@@ -1,18 +1,568 @@
-"""Profiles from any Qiskit BackendV2 (its Target) and the bundled IBM fake backends."""
+"""Profiles from Qiskit backends and from IBM calibration data.
+
+Every IBM source (a BackendV2 Target, BackendProperties JSON from the public endpoint or an
+account, a calibration CSV) is first read into a :class:`Calibration`, and :func:`to_profile`
+turns that into a Profile. The IBM conventions (dead-gate sentinel, virtual ``rz``, medians as
+device defaults, RB qualifiers) therefore live in one place. Qiskit is imported only by the
+functions that read a backend, so the other IBM sources work on a core install.
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import hashlib
+import importlib
+import re
+import statistics
+import warnings
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Any
 
-if TYPE_CHECKING:
-    from ..profile import Profile
+from .. import __version__, gates, metrics, units
+from ..profile import FORMAT_VERSION, Profile
 
-_PENDING = "implemented in wave 2, IBM sources (L1a)"
+RUNTIME_REPO = "https://github.com/Qiskit/qiskit-ibm-runtime"
+IBM_ATTRIBUTION = "IBM Quantum, via qiskit-ibm-runtime"
+
+# Not gates of a noise model: scheduling, control flow, and IBM's mid-circuit variants of
+# measure and reset, which a circuit reaches only through dynamic-circuit instructions.
+_NOT_GATES = frozenset(
+    {
+        "delay",
+        "barrier",
+        "if_else",
+        "while_loop",
+        "for_loop",
+        "switch_case",
+        "box",
+        "measure_2",
+        "reset_2",
+        "measure_reset",
+        "measure_reset_2",
+    }
+)
+# IBM documents its error numbers this way: RB throughout, 2-qubit errors measured on isolated
+# pairs and including the single-qubit Clifford layers, 1-qubit errors measured simultaneously.
+_IBM_QUALIFIERS: Mapping[int, Mapping[str, Any]] = {
+    1: {"method": "rb", "measured": "simultaneous"},
+    2: {"method": "rb", "measured": "isolated", "includes": ["1q_dressing"]},
+}
+_QISKIT_TO_CANONICAL = {info.qiskit: info.name for info in gates.GATES.values() if info.qiskit}
+
+# The curated bundle: modern Heron and Eagle r3 snapshots, the two real Nighthawk snapshots, and
+# FakeManilaV2 for 5-qubit demos. FakeNighthawk is left out: its package says its values are not
+# typical of the device. FakeFractionalBackend and other test backends are left out too.
+BUNDLED_FAKES = (
+    "FakeAachen",
+    "FakeBerlin",
+    "FakeBoston",
+    "FakeBrisbane",
+    "FakeBrussels",
+    "FakeCusco",
+    "FakeFez",
+    "FakeKawasaki",
+    "FakeKingston",
+    "FakeKyiv",
+    "FakeManilaV2",
+    "FakeMarrakesh",
+    "FakeMiami",
+    "FakePittsburgh",
+    "FakeQuebec",
+    "FakeSherbrooke",
+    "FakeStrasbourg",
+    "FakeTorino",
+)
+
+
+@dataclass(frozen=True)
+class Instruction:
+    """One calibrated instruction on specific qubits, in the source's own gate name."""
+
+    name: str
+    qubits: tuple[int, ...]
+    error: float | None = None
+    duration_ns: float | None = None
+    operational: bool = True
+
+
+@dataclass(frozen=True)
+class QubitCalibration:
+    t1_us: float | None = None
+    t2_us: float | None = None
+    p1_given_0: float | None = None
+    p0_given_1: float | None = None
+    prep_error: float | None = None
+    operational: bool = True
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """A device calibration in IBM's shape: per-instruction errors and per-qubit properties.
+
+    ``measure`` entries carry the readout duration and the symmetric readout error used when a
+    qubit has no asymmetric pair.
+    """
+
+    name: str
+    num_qubits: int
+    instructions: tuple[Instruction, ...]
+    qubits: Mapping[int, QubitCalibration] = field(default_factory=dict)
+    vendor: str | None = "ibm"
+    processor: str | None = None
+    calibrated_at: datetime | None = None
+    skipped: tuple[str, ...] = ()  # source instruction names deliberately not converted
+
+
+# Qiskit backends -------------------------------------------------------------------------------
 
 
 def from_qiskit_backend(backend: Any) -> Profile:
-    raise NotImplementedError(f"from_qiskit_backend is not available yet: {_PENDING}")
+    """A profile from any Qiskit BackendV2, e.g. a qiskit-ibm-runtime fake or a live backend.
+
+    Gate errors, durations and T1/T2 come from ``backend.target``; the asymmetric readout pair,
+    preparation error and calibration time come from ``backend.properties()`` when it exists.
+    """
+    target = getattr(backend, "target", None)
+    if target is None:
+        raise TypeError(f"{backend!r} is not a Qiskit BackendV2: it has no target")
+    if target.num_qubits is None:
+        raise TypeError(
+            f"{backend.name} has no fixed qubit count, so it has no device calibration; pass a"
+            " device backend, e.g. a qiskit-ibm-runtime fake or a live IBM backend"
+        )
+    props = _properties_dict(backend)
+    cal = calibration_from_target(target, name=_device_name(backend))
+    if props is not None:
+        from_props = calibration_from_properties(props)
+        cal = replace(
+            cal,
+            calibrated_at=from_props.calibrated_at,
+            qubits={i: _overlay(q, from_props.qubits.get(i)) for i, q in cal.qubits.items()},
+        )
+    cal = replace(cal, vendor=_vendor(backend), processor=_processor(backend))
+    return to_profile(cal, _backend_provenance(backend))
+
+
+def calibration_from_target(target: Any, *, name: str) -> Calibration:
+    """Read a Qiskit Target: per-qargs error and duration, and per-qubit T1/T2."""
+    from qiskit.circuit import Gate
+
+    instructions, skipped = [], set()
+    for op_name in target.operation_names:
+        operation = target.operation_from_name(op_name)
+        keep = isinstance(operation, Gate) or op_name in ("measure", "reset")
+        if op_name in _NOT_GATES or not keep:
+            skipped.add(op_name)
+            continue
+        for qargs, props in target[op_name].items():
+            if qargs is None:  # an ideal global instruction: nothing per qubit to record
+                continue
+            instructions.append(
+                Instruction(
+                    _QISKIT_TO_CANONICAL.get(op_name, op_name),
+                    tuple(qargs),
+                    error=None if props is None else props.error,
+                    duration_ns=_seconds_to(props and props.duration, "ns"),
+                )
+            )
+    qubit_props = target.qubit_properties or []
+    qubits = {
+        i: QubitCalibration(t1_us=_seconds_to(p.t1, "us"), t2_us=_seconds_to(p.t2, "us"))
+        for i, p in enumerate(qubit_props)
+        if p is not None
+    }
+    control_flow = {"if_else", "while_loop", "for_loop", "switch_case", "box", "barrier"}
+    return Calibration(
+        name=name,
+        num_qubits=target.num_qubits,
+        instructions=tuple(instructions),
+        qubits=qubits,
+        skipped=tuple(sorted(skipped - control_flow - {"delay"})),
+    )
 
 
 def bundled_profiles() -> list[Profile]:
-    raise NotImplementedError(f"bundled_profiles is not available yet: {_PENDING}")
+    """The curated IBM set from qiskit-ibm-runtime's packaged snapshots."""
+    from qiskit_ibm_runtime import fake_provider
+
+    out = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # fake backends warn about deprecations on creation
+        for class_name in BUNDLED_FAKES:
+            out.append(from_qiskit_backend(getattr(fake_provider, class_name)()))
+    return out
+
+
+def _properties_dict(backend: Any) -> dict[str, Any] | None:
+    method = getattr(backend, "properties", None)
+    if method is None:
+        return None
+    props = method()
+    return None if props is None else props.to_dict()
+
+
+def _overlay(base: QubitCalibration, extra: QubitCalibration | None) -> QubitCalibration:
+    """Target values plus what only BackendProperties has: readout pair, prep, operational."""
+    if extra is None:
+        return base
+    return replace(
+        base,
+        p1_given_0=extra.p1_given_0,
+        p0_given_1=extra.p0_given_1,
+        prep_error=extra.prep_error,
+        operational=extra.operational,
+    )
+
+
+def _is_fake(backend: Any) -> bool:
+    return type(backend).__module__.startswith("qiskit_ibm_runtime.fake_provider")
+
+
+def _vendor(backend: Any) -> str | None:
+    module = type(backend).__module__
+    return (
+        "ibm"
+        if module.startswith("qiskit_ibm_runtime") or _device_name(backend).startswith("ibm_")
+        else None
+    )
+
+
+_AER_WRAPPED = re.compile(r"aer_simulator_from\((?P<inner>.+)\)")
+
+
+def _device_name(backend: Any) -> str:
+    """The device name: ``fake_fez`` and ``aer_simulator_from(fake_fez)`` both give ibm_fez."""
+    name = backend.name
+    wrapped = _AER_WRAPPED.fullmatch(name)
+    if wrapped:
+        name = wrapped["inner"]
+    if _is_fake(backend) or (wrapped and name.startswith("fake_")):
+        name = "ibm_" + name.removeprefix("fake_")
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+
+
+def _processor(backend: Any) -> str | None:
+    return processor_name(getattr(backend, "processor_type", None))
+
+
+def processor_name(processor_type: Mapping[str, Any] | None) -> str | None:
+    """IBM's ``{"family": "Heron", "revision": "2"}`` as ``"Heron r2"``."""
+    if not processor_type or not processor_type.get("family"):
+        return None
+    family, revision = processor_type["family"], processor_type.get("revision")
+    return f"{family} r{revision}" if revision not in (None, "") else str(family)
+
+
+def _backend_provenance(backend: Any) -> dict[str, Any]:
+    class_name = type(backend).__name__
+    if _is_fake(backend):
+        version = importlib.import_module("qiskit_ibm_runtime").__version__
+        props_file = Path(backend.dirname) / backend.props_filename
+        return {
+            "data_kind": "measured",
+            "source_kind": "package_snapshot",
+            "source": f"qiskit-ibm-runtime {version} {class_name}",
+            "source_url": RUNTIME_REPO,
+            "license": "Apache-2.0",
+            "attribution": IBM_ATTRIBUTION,
+            "redistributable": "yes",
+            "source_hash": sha256_bytes(props_file.read_bytes()) if props_file.exists() else None,
+        }
+    live = type(backend).__module__.startswith("qiskit_ibm_runtime")
+    if live or backend.name.startswith("ibm_"):  # not a simulator wrapping a device's numbers
+        return {
+            "data_kind": "measured",
+            "source_kind": "account_api",
+            "source": f"IBM Quantum backend {backend.name} ({class_name})",
+            "attribution": "IBM Quantum",
+            "redistributable": "unknown",
+            "retrieved_at": now_utc(),
+        }
+    return {"source_kind": "other", "source": f"Qiskit backend {backend.name} ({class_name})"}
+
+
+# BackendProperties JSON ------------------------------------------------------------------------
+
+
+def calibration_from_properties(props: Mapping[str, Any]) -> Calibration:
+    """Read IBM BackendProperties as a dict (``properties().to_dict()`` or the REST JSON).
+
+    The readout error and length on each qubit become its ``measure`` instruction; the gate
+    list's own ``measure`` entries repeat those numbers and are skipped.
+    """
+    qubits: dict[int, QubitCalibration] = {}
+    instructions: list[Instruction] = []
+    for index, params in enumerate(props.get("qubits") or []):
+        values = {p["name"]: p for p in params}
+        qubits[index] = QubitCalibration(
+            t1_us=_in_unit(values.get("T1"), "us"),
+            t2_us=_in_unit(values.get("T2"), "us"),
+            p1_given_0=_value(values.get("prob_meas1_prep0")),
+            p0_given_1=_value(values.get("prob_meas0_prep1")),
+            prep_error=_value(values.get("init_error")),
+            operational=_value(values.get("operational")) != 0,
+        )
+        error, length = values.get("readout_error"), values.get("readout_length")
+        if error is not None or length is not None:
+            instructions.append(
+                Instruction("measure", (index,), _value(error), _in_unit(length, "ns"))
+            )
+    skipped = set()
+    for entry in props.get("gates") or []:
+        name = entry["gate"]
+        if name == "measure":
+            continue
+        if name in _NOT_GATES:
+            skipped.add(name)
+            continue
+        values = {p["name"]: p for p in entry.get("parameters") or []}
+        instructions.append(
+            Instruction(
+                _QISKIT_TO_CANONICAL.get(name, name),
+                tuple(entry["qubits"]),
+                error=_value(values.get("gate_error")),
+                duration_ns=_in_unit(values.get("gate_length"), "ns"),
+                operational=_value(values.get("operational")) != 0,
+            )
+        )
+    stamp = props.get("last_update_date")
+    return Calibration(
+        name=props.get("backend_name") or "unknown",
+        num_qubits=len(qubits),
+        instructions=tuple(instructions),
+        qubits=qubits,
+        calibrated_at=None if stamp is None else as_utc(stamp),
+        skipped=tuple(sorted(skipped)),
+    )
+
+
+def _value(param: Mapping[str, Any] | None) -> float | None:
+    return None if param is None else param.get("value")
+
+
+_UNIT_ALIASES = {"µs": "us", "μs": "us", "sec": "s"}
+
+
+def _in_unit(param: Mapping[str, Any] | None, unit: str) -> float | None:
+    value = _value(param)
+    if value is None:
+        return None
+    given = param.get("unit") or unit  # type: ignore[union-attr]
+    given = _UNIT_ALIASES.get(given, given)
+    return units.convert(float(value), given, unit)
+
+
+# Calibration -> Profile ------------------------------------------------------------------------
+
+
+def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
+    """The profile of an IBM-shaped calibration.
+
+    Device-wide defaults are medians over the working loci (``statistic: median``); every locus
+    keeps its own record (``statistic: individual``). IBM's dead-gate sentinel (an error at or
+    above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and ``operational = 0`` become
+    ``disabled: true``. A gate with zero error and zero duration everywhere (IBM's ``rz``) is
+    virtual. Records of a symmetric gate that agree in both directions are stored once.
+    """
+    ibm = cal.vendor == "ibm"
+    by_name: dict[str, list[Instruction]] = {}
+    for inst in cal.instructions:
+        by_name.setdefault(inst.name, []).append(inst)
+    measure = {inst.qubits[0]: inst for inst in by_name.pop("measure", [])}
+
+    definitions: dict[str, dict[str, Any]] = {}
+    records: list[dict[str, Any]] = []
+    for name, entries in by_name.items():
+        arity = len(entries[0].qubits)
+        definition, gate_records = _gate(name, arity, entries, ibm)
+        definitions[name] = definition
+        records += gate_records
+
+    qubit_records = [
+        _qubit_record(i, cal.qubits.get(i, QubitCalibration()), measure.get(i))
+        for i in range(cal.num_qubits)
+    ]
+    qubit_records = [q for q in qubit_records if len(q) > 1]
+    notes = list(provenance.get("notes", ()))
+    if cal.skipped:
+        notes.append(f"Not converted: {', '.join(cal.skipped)}.")
+    data = {
+        "noisevault": FORMAT_VERSION,
+        "device": {
+            "name": cal.name,
+            "vendor": cal.vendor,
+            "technology": "superconducting",
+            "num_qubits": cal.num_qubits,
+            "processor": cal.processor,
+            "calibrated_at": cal.calibrated_at,
+        },
+        "connectivity": _connectivity(cal.instructions),
+        "gates": definitions,
+        "readout": _median_readout(qubit_records),
+        "prep": _median_prep(qubit_records),
+        "idle": _median_idle(qubit_records, ibm),
+        "qubits": qubit_records,
+        "calibrations": records,
+        "provenance": {"tool": f"noisevault {__version__}", **provenance, "notes": notes},
+    }
+    return Profile.model_validate(data)
+
+
+def _gate(
+    name: str, arity: int, entries: Sequence[Instruction], ibm: bool
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if all(e.error == 0 and not e.duration_ns for e in entries):
+        return {"virtual": True}, []
+    dead = [not e.operational or _is_sentinel(e.error, arity) for e in entries]
+    working = [e for e, is_dead in zip(entries, dead, strict=True) if not is_dead]
+    definition: dict[str, Any] = {} if gates.lookup(name) else {"qubits": arity}
+    errors = [e.error for e in working if e.error is not None]
+    if errors:
+        definition |= {"avg_infidelity": statistics.median(errors), "statistic": "median"}
+        if ibm:
+            definition |= _IBM_QUALIFIERS.get(arity, {})
+    durations = [e.duration_ns for e in working if e.duration_ns is not None]
+    if durations:
+        definition["duration_ns"] = _clean(statistics.median(durations))
+
+    records = []
+    for entry, is_dead in zip(entries, dead, strict=True):
+        record: dict[str, Any] = {"gate": name, "qubits": list(entry.qubits)}
+        if is_dead:
+            record["disabled"] = True
+        else:
+            if entry.error is not None:
+                record |= {"avg_infidelity": entry.error, "statistic": "individual"}
+            if entry.duration_ns is not None and _clean(entry.duration_ns) != definition.get(
+                "duration_ns"
+            ):
+                record["duration_ns"] = _clean(entry.duration_ns)
+        records.append(record)
+    if arity == 2 and gates.is_symmetric(name):
+        records = _one_per_pair(records)
+    return definition, records
+
+
+def _is_sentinel(error: float | None, arity: int) -> bool:
+    return error is not None and error >= metrics.max_avg_infidelity(arity)
+
+
+def _one_per_pair(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop the (b, a) record of a symmetric gate when it only repeats (a, b)."""
+    by_locus = {tuple(r["qubits"]): r for r in records}
+    out = []
+    for r in records:
+        a, b = r["qubits"]
+        twin = by_locus.get((b, a))
+        same = twin is not None and {**twin, "qubits": r["qubits"]} == r
+        if not (same and a > b):
+            out.append(r)
+    return out
+
+
+def _qubit_record(
+    index: int, qubit: QubitCalibration, measure: Instruction | None
+) -> dict[str, Any]:
+    record: dict[str, Any] = {"index": index}
+    if qubit.t1_us is not None and qubit.t1_us > 0:
+        record["t1_us"] = _clean(qubit.t1_us)
+    if qubit.t2_us is not None and qubit.t2_us > 0:
+        record["t2_us"] = _clean(qubit.t2_us)
+    readout: dict[str, Any] = {}
+    if qubit.p1_given_0 is not None and qubit.p0_given_1 is not None:
+        readout = {"p1_given_0": qubit.p1_given_0, "p0_given_1": qubit.p0_given_1}
+    elif measure is not None and measure.error is not None:
+        readout = {"error": measure.error}
+    if readout and measure is not None and measure.duration_ns is not None:
+        readout["duration_ns"] = _clean(measure.duration_ns)
+    if readout:
+        record["readout"] = readout
+    if qubit.prep_error is not None:
+        record["prep"] = {"error": qubit.prep_error}
+    if not qubit.operational:
+        record["disabled"] = True
+    return record
+
+
+def _connectivity(instructions: Iterable[Instruction]) -> dict[str, Any]:
+    """Pairs of every 2-qubit instruction; directed when any 2-qubit gate is directional."""
+    pairs = {inst.qubits for inst in instructions if len(inst.qubits) == 2}
+    names = {inst.name for inst in instructions if len(inst.qubits) == 2}
+    directed = any(not gates.is_symmetric(name) for name in names)
+    if directed:
+        return {"edges": sorted(pairs), "directed": True}
+    return {"edges": sorted({(min(a, b), max(a, b)) for a, b in pairs}), "directed": False}
+
+
+def _median_prep(records: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    errors = [r["prep"]["error"] for r in records if "prep" in r]
+    return {"error": statistics.median(errors)} if errors else None
+
+
+def _median_readout(records: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    readouts = [r["readout"] for r in records if "readout" in r]
+    pairs = [r for r in readouts if "p1_given_0" in r]
+    if pairs:
+        out = {
+            "p1_given_0": statistics.median(r["p1_given_0"] for r in pairs),
+            "p0_given_1": statistics.median(r["p0_given_1"] for r in pairs),
+        }
+    elif readouts:
+        out = {"error": statistics.median(r["error"] for r in readouts)}
+    else:
+        return None
+    durations = [r["duration_ns"] for r in readouts if "duration_ns" in r]
+    if durations:
+        out["duration_ns"] = _clean(statistics.median(durations))
+    return out
+
+
+def _median_idle(records: Sequence[Mapping[str, Any]], ibm: bool) -> dict[str, Any] | None:
+    idle: dict[str, Any] = {}
+    for key in ("t1_us", "t2_us"):
+        values = [r[key] for r in records if key in r]
+        if values:
+            idle[key] = _clean(statistics.median(values))
+    if ibm:
+        idle["t2_kind"] = "echo"  # IBM reports T2 from a Hahn echo
+    return idle or None
+
+
+# small shared helpers --------------------------------------------------------------------------
+
+
+def _clean(value: float) -> float:
+    """Twelve significant digits: drops the float residue of s -> ns/us conversions, so the same
+    calibration read from a Target or from BackendProperties gets the same fingerprint."""
+    return float(f"{value:.12g}")
+
+
+def _seconds_to(value: float | None, unit: str) -> float | None:
+    return None if value is None else units.convert(float(value), "s", unit)
+
+
+def as_utc(value: str | date | datetime, *, name: str = "at") -> datetime:
+    """A timezone-aware UTC datetime from a datetime, a date (midnight) or an ISO 8601 string.
+
+    Naive means UTC. ``name`` is the parameter the value came from, for the error message.
+    """
+    try:  # a date's str() is its ISO form, so it parses as midnight
+        stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).strip())
+    except ValueError:
+        raise ValueError(
+            f"{name}={value!r} is not an ISO 8601 date or time,"
+            " e.g. '2025-06-01' or '2025-06-01T12:00:00Z'"
+        ) from None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp.astimezone(UTC)
+
+
+def now_utc() -> datetime:
+    return datetime.now(UTC).replace(microsecond=0)
+
+
+def sha256_bytes(raw: bytes) -> str:
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
