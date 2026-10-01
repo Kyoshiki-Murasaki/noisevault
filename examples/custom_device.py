@@ -2,7 +2,7 @@
 
 The numbers below are illustrative, not measurements of any machine.
 
-Needs: pip install "noisevault[qiskit,stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"
+Needs: pip install "noisevault[qiskit,stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
 """
 
 import tempfile

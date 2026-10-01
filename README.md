@@ -17,7 +17,7 @@ Load a device by name and simulate your circuits under the noise it had on a giv
 [![license](https://img.shields.io/badge/license-Apache%202.0-1f1f1f.svg)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.11%2B-1f1f1f.svg)](pyproject.toml)
 
-[Quickstart](#quickstart) · [Docs](#documentation) · [Profiles](#what-ships) · [Recipes](docs/recipes.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+[Install](#install) · [Quickstart](#quickstart) · [Profiles](#what-ships) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
 
 <br/>
 
@@ -29,33 +29,30 @@ Load a device by name and simulate your circuits under the noise it had on a giv
 
 ## Install
 
-NoiseVault is not on PyPI yet. Install it from GitHub with the extra for your framework:
+Install NoiseVault with the extra for your framework:
 
 ```bash
-pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"
+pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
 ```
 
-With uv, add it to a project, or try the command line without installing:
+To try the command line without installing NoiseVault, run it with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv add "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"
-uvx --from "git+https://github.com/Kyoshiki-Murasaki/noisevault@main" nv list
+uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault nv list
 ```
 
-The core package needs only numpy, pydantic, typer and rich, and runs on Python 3.11 to 3.14.
-Importing `noisevault` loads no framework. Each framework is an extra:
+Replace `qiskit` with the extra you need, or name several, as in `noisevault[qiskit,stim]`. In a
+uv project, run `uv add` with the same quoted argument. NoiseVault runs on Python 3.11 to 3.14.
 
-| Extra | Adds | For |
-| --- | --- | --- |
-| `qiskit` | qiskit, qiskit-aer | `to_qiskit()` |
-| `ibm` | `qiskit` and qiskit-ibm-runtime | `nv pull --source ibm-account`, IBM fake backends |
-| `cirq` | cirq-core | `to_cirq()` |
-| `pennylane` | pennylane | `to_pennylane()` |
-| `stim` | stim | `to_stim()` |
-| `google` | `cirq` and cirq-google | `nv.from_cirq_google` |
-| `all` | every extra above | Everything |
-
-The command line is `nv`, with `noisevault` as a longer alias.
+| Extra | For |
+| --- | --- |
+| `qiskit` | `to_qiskit()` |
+| `cirq` | `to_cirq()` |
+| `pennylane` | `to_pennylane()` |
+| `stim` | `to_stim()` |
+| `ibm` | `nv pull --source ibm-account` and IBM fake backends. Includes `qiskit`. |
+| `google` | `nv.from_cirq_google`. Includes `cirq`. |
+| `all` | Every extra above |
 
 ## Quickstart
 
@@ -91,31 +88,9 @@ print(sim.report.summary())
 `transpile` compiles to Fez's native gates and places the circuit by noise, because the
 simulator carries the device's gates, connectivity and errors.
 
-The same profile gives a noise model for the other three frameworks, as the framework's own type.
-Each report lists what that framework leaves out. This block needs the `cirq`, `pennylane` and
-`stim` extras, or `all`:
-
-```python
-import stim
-
-import noisevault as nv
-
-fez = nv.load("ibm_fez")
-cirq_model = fez.to_cirq()  # for cirq.DensityMatrixSimulator(noise=cirq_model)
-pl_model = fez.to_pennylane()  # for qml.add_noise(qnode, pl_model)
-noisy = fez.to_stim(stim.Circuit("CZ 0 1\nM 0 1"))  # a stim.Circuit with the noise written in
-print(cirq_model.report.omitted)
-print(pl_model.report.omitted)
-print(noisy)
-# ['preparation error of the initial state (only resets get it)', 'idle noise outside WaitGate ...
-# ['idle time between gates (PennyLane circuits are not scheduled)', 'readout on mid-circuit ...
-# CZ 0 1
-# PAULI_CHANNEL_2(0.000819345, 0.000819345, 0.000794148, 0.00116305, ...) 0 1
-# M(0.0114746) 0
-# M(0.0117188) 1
-```
-
-[Frameworks](docs/frameworks.md) has a full example for each, and what each report can list.
+`to_cirq()`, `to_pennylane()` and `to_stim(circuit)` give the same noise to the other three
+frameworks, each as the framework's own type with its own report.
+[Frameworks](docs/frameworks.md) has an example for each.
 
 ## Pin a calibration
 
@@ -129,19 +104,8 @@ nv cite ibm_fez@2025-05-31        # a citation with the full fingerprint
 nv diff ibm_fez@2025-02-26 ibm_fez@2025-05-31
 ```
 
-```text
-ibm_fez@2025-02-26 -> ibm_fez@2025-05-31  (94 days 1 hour later)
-device median    before     after  change
-T1 (us)           144.9       145   +0.1%
-T2 (us)           87.95     100.6  +14.4%
-1q error       2.29e-04  2.81e-04  +22.8%
-2q error       3.82e-03  3.10e-03  -18.7%
-readout error  7.57e-03  7.81e-03   +3.2%
-...
-```
-
-`nv diff` goes on to list the qubits and pairs that changed most, and the gates that were
-disabled or re-enabled.
+`nv diff` compares the device medians, lists the qubits and pairs that changed most, and names
+the gates that were disabled or re-enabled.
 
 The fingerprint is a SHA-256 hash of a profile's physics. Pass it when you load a profile, and
 the load fails if the numbers ever differ:
@@ -170,52 +134,16 @@ them with their qubit counts and processors.
 | Quantinuum (5) | trapped ion | `quantinuum_h1-1`, `quantinuum_h1-2`, `quantinuum_h2-1`, `quantinuum_h2-2`, `quantinuum_reimei` | 2023-08-21 to 2025-08-28 | [hardware-specifications](https://github.com/Quantinuum/quantinuum-hardware-specifications) repository, Apache-2.0 |
 | Google (2) | superconducting | `google_rainbow`, `google_weber` | 2021-11-03 to 2021-11-16 | [cirq-google](https://github.com/quantumlib/Cirq/tree/main/cirq-google) calibrations, Apache-2.0 |
 
-Other sources give you more devices and dates. A pull saves to your vault. An import returns a
-profile that you save with `profile.save(path)`.
+For more devices and dates, pull from an IBM Quantum account, or import a Qiskit backend, an IBM
+calibration CSV, saved Amazon Braket device properties, a cirq-google calibration or a dataset from
+Quantinuum's repository. [Data sources](docs/data-sources.md) gives each source's fields and
+license. To describe a device that does not exist, use `nv.Profile.uniform(...)`, as in
+[Describe a hypothetical device](docs/recipes.md#describe-a-hypothetical-device).
 
-| Source | How | Account | History |
-| --- | --- | --- | --- |
-| IBM public endpoint | `nv pull ibm_fez` | No | Yes, `--at` |
-| IBM Quantum account | `nv pull ibm_fez --source ibm-account` | Yes | Yes, `--at` |
-| IonQ characterizations | `nv pull ionq_forte-1` | No | Yes, `--at` |
-| Qiskit backend | `nv.from_qiskit_backend(backend)` | For account backends | No |
-| IBM calibration CSV | `nv.from_ibm_csv(path, device=..., calibrated_at=...)` | To download it | One file per calibration |
-| Amazon Braket device properties | `nv.from_braket(path)` | To save them | One file per snapshot |
-| cirq-google calibrations | `nv.from_cirq_google("willow_pink")` | No | No |
-| Quantinuum repository | `noisevault.sources.quantinuum.from_repository("H1-1", date)` | No | One dataset per date |
+## Check a conversion
 
-To describe a device that does not exist, use `nv.Profile.uniform(...)` or write a profile by
-hand. [Data sources](docs/data-sources.md) gives each source's fields and license.
-
-## Compare devices
-
-<img src="assets/compare_devices.svg" alt="Line chart of GHZ success probability against GHZ size from 2 to 10 qubits for quantinuum_h2-1, quantinuum_h1-1, ibm_fez, a hypothetical neutral-atom device and ibm_brisbane." width="720">
-
-GHZ success probability against circuit size for four bundled devices and one hypothetical
-neutral-atom profile, simulated in Qiskit by [`examples/compare_devices.py`](examples/compare_devices.py). The
-simulation includes gate and readout noise but not idle time between gates.
-
-## How it works
-
-```text
-profile (JSON)  ->  resolver: one error, duration and readout for each gate and qubit
-                      -> to_qiskit()     AerSimulator with the device's Target
-                      -> to_cirq()       cirq.NoiseModel
-                      -> to_pennylane()  qml.NoiseModel
-                      -> to_stim(c)      stim.Circuit with Pauli channels
-                    each export carries a .report: exact, approximated, omitted, unknown
-```
-
-A profile states each number with its metric and units, such as `avg_infidelity` from
-randomized benchmarking. The resolver applies per-qubit and per-gate records over device-wide
-defaults. Each export builds its channels from the result, and its report lists every
-difference from the full model. [Conventions](docs/conventions.md) defines the channels.
-
-Calibration-derived models approximate the hardware. They are not a digital twin.
-[Limitations](docs/limitations.md) lists what no export models.
-
-`nv check` checks a conversion. It runs small circuits through each installed export and
-compares the results with NoiseVault's own density-matrix reference:
+`nv check` runs small circuits through each installed export and compares the results with
+NoiseVault's own density-matrix reference:
 
 ```text
 $ nv check ibm_fez
@@ -229,20 +157,8 @@ stim       pass    6.9e-03    1.1e-02  3 of 3    20000 shots, 5 sigma
 ```
 
 A pass means the export matches the reference on these circuits. It says nothing about how
-well the model matches the hardware.
-
-## Use cases
-
-- **Reproducible noisy simulation.** Pin a profile by fingerprint in a paper or a test suite.
-  The same file gives every framework the same calibration, and each report lists what that
-  framework leaves out.
-- **Error mitigation studies.** Test zero-noise extrapolation against the noise of a real
-  device. See the [Mitiq recipe](docs/recipes.md#mitigate-errors-with-mitiq).
-- **QEC at scale with Stim.** Put a device's noise on a surface-code memory experiment and
-  decode it with PyMatching. See the
-  [QEC recipe](docs/recipes.md#run-a-qec-memory-experiment-with-stim-and-pymatching).
-- **Comparing devices and dates.** Run one circuit on several devices, or diff two calibrations
-  of one device. See [drift between two dates](docs/recipes.md#compare-drift-between-two-dates).
+well the model matches the hardware. Calibration-derived models approximate the hardware. They
+are not a digital twin. [Limitations](docs/limitations.md) lists what no export models.
 
 ## Documentation
 
@@ -260,8 +176,7 @@ well the model matches the hardware.
 ## Contributing
 
 Bug reports, new data sources and fixes are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers
-the development setup, the test commands and how to add a source. The tests run every Python
-block in this README and in `docs/`.
+the development setup, the tests and how to add a source.
 
 ## Citing
 

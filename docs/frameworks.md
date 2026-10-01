@@ -12,9 +12,12 @@ what it approximates, what it leaves out, and what the profile does not know. Pr
 | PennyLane | `profile.to_pennylane()` | `NoiseVaultPennyLaneModel`, a `qml.NoiseModel` | `qml.add_noise(qnode, model)` on `default.mixed` |
 | Stim | `profile.to_stim(circuit)` | `NoiseVaultStimCircuit`, a `stim.Circuit` | its own samplers, or `detector_error_model()` |
 
-Install the framework with its extra, for example
-`pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"`. The extras are `[qiskit]`, `[cirq]`,
-`[pennylane]`, `[stim]` and `[all]`. Importing `noisevault` imports no framework.
+Each framework installs with the extra of the same name: `qiskit`, `cirq`, `pennylane` or
+`stim`. The `all` extra installs every one. Importing `noisevault` imports no framework.
+
+```bash
+pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
+```
 
 Every export takes `unknown_gates`. With `"typical"` (the default), a gate the profile does not
 calibrate gets the noise of the typical native gate of its arity, with a warning. With

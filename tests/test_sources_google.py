@@ -11,6 +11,7 @@ from conftest import require
 
 import noisevault as nv
 from noisevault import gates, metrics
+from noisevault.errors import install_hint
 from noisevault.reference import Op, probabilities
 
 cirq_google = require("cirq_google")
@@ -181,7 +182,6 @@ def test_cirq_google_before_1_6_says_to_upgrade(monkeypatch: pytest.MonkeyPatch)
 
 def test_missing_cirq_google_gives_an_install_command_that_works(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "cirq_google", None)
-    command = 'pip install "noisevault[google] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
     with pytest.raises(nv.errors.SourceUnavailable) as info:
         google.from_cirq_google("rainbow")
-    assert command in str(info.value)
+    assert install_hint("google") in str(info.value)

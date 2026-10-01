@@ -1,7 +1,7 @@
 """Surface-code memory on a calibrated grid device: Stim export, then decoding with PyMatching.
 
 Needs:
-    pip install "noisevault[stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"
+    pip install "noisevault[stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
     pip install pymatching
 """
 

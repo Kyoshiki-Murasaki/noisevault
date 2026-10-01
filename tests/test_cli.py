@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 import noisevault as nv
 from noisevault.cli import app
-from noisevault.errors import SourceUnavailable
+from noisevault.errors import SourceUnavailable, install_hint
 from noisevault.profile import Profile
 
 runner = CliRunner()
@@ -542,9 +542,7 @@ def test_doctor_lists_frameworks_and_the_vault(vault: Path) -> None:
     assert f"bundled profiles: {len(nv.catalog.bundled_profiles())}" in out
 
 
-_INSTALL_ALL = (
-    'pip install "noisevault[all] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
-)
+_INSTALL_ALL = install_hint("all")
 
 
 def test_doctor_gives_a_whole_install_command_for_missing_frameworks(monkeypatch) -> None:
@@ -559,8 +557,7 @@ def test_doctor_gives_a_whole_install_command_for_missing_frameworks(monkeypatch
 
     monkeypatch.setattr(cli, "version", without_stim)
     out = runner.invoke(app, ["doctor"], env={"COLUMNS": "80"}).stdout
-    stim = _INSTALL_ALL.replace("[all]", "[stim]")
-    assert f"To add the missing frameworks: {stim}" in out.splitlines()
+    assert f"To add the missing frameworks: {install_hint('stim')}" in out.splitlines()
 
 
 def test_check_with_no_framework_installed_gives_the_install_command(monkeypatch) -> None:
@@ -699,7 +696,7 @@ def test_doctor_installs_pymatching_by_name_not_through_an_extra(monkeypatch) ->
 
 def test_doctor_names_only_the_extras_that_install_what_is_missing(monkeypatch) -> None:
     out = _doctor_without(monkeypatch, "cirq-google", "stim", "pymatching")
-    hint = 'pip install "noisevault[google,stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
+    hint = install_hint("google,stim")
     assert hint in out and "pip install pymatching" in out
 
 

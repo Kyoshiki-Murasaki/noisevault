@@ -9,6 +9,7 @@ import pytest
 from conftest import require
 
 import noisevault as nv
+from noisevault.errors import install_hint
 from noisevault.sources import ibm_account
 
 
@@ -94,12 +95,9 @@ def test_device_the_account_cannot_see(calls: list[Any]) -> None:
 
 def test_missing_runtime_gives_an_install_command_that_works(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "qiskit_ibm_runtime", None)
-    command = (
-        'pip install "noisevault[ibm] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
-    )
     with pytest.raises(nv.SourceUnavailable) as info:
         nv.pull("ibm_manila", source="ibm-account")
-    assert command in str(info.value)
+    assert install_hint("ibm") in str(info.value)
 
 
 def test_a_calibration_request_ibm_rejects_is_a_one_line_cli_error(

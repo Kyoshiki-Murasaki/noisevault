@@ -5,7 +5,7 @@ Mitiq folds gates to amplify the noise, runs each folded circuit on the NoiseVau
 extrapolates back to zero noise.
 
 Needs (Mitiq supports Python up to 3.12; its Qiskit conversion imports ply):
-    pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"
+    pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
     pip install mitiq ply
 """
 

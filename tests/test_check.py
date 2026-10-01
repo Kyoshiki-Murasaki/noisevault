@@ -12,7 +12,7 @@ from conftest import require, toy
 import noisevault as nv
 from noisevault import gates
 from noisevault.check import EXACT_TOLERANCE, SIGMAS, CheckResult, _Stim, build_circuits, check
-from noisevault.errors import LayoutError
+from noisevault.errors import LayoutError, install_hint
 from noisevault.profile import Profile
 from noisevault.reference import _apply
 from noisevault.reference import probabilities as reference
@@ -249,10 +249,7 @@ def test_a_missing_framework_is_skipped_with_the_install_command(monkeypatch) ->
     monkeypatch.setitem(sys.modules, "stim", None)
     result = check(nv.load("ibm_manila"), frameworks=["stim"])
     assert result.frameworks == ()
-    command = (
-        'pip install "noisevault[stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault@main"'
-    )
-    assert result.skipped == (("stim", f"not installed: {command}"),)
+    assert result.skipped == (("stim", f"not installed: {install_hint('stim')}"),)
     assert not result.passed
 
 

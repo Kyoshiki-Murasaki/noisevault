@@ -112,7 +112,7 @@ def skip_if_optional_missing(result: subprocess.CompletedProcess) -> None:
 
 
 def test_readme_has_python_blocks() -> None:
-    assert len(BLOCKS) >= 3, BLOCKS
+    assert len(BLOCKS) >= 2, BLOCKS
 
 
 @pytest.mark.parametrize("block", BLOCKS, ids=lambda block: f"README.md:{block.line}")
