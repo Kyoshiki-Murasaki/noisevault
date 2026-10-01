@@ -364,13 +364,41 @@ def test_a_row_with_values_but_no_qubit_names_its_line(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "cells", ['"01:00.0","1:68"', '"01:00.0","0.102777778"'], ids=["error", "error-and-length"]
+    ("column", "item"),
+    [
+        pytest.param("CZ error", "01:00.0", id="1:0.0013 as mm:ss.0"),
+        pytest.param("CZ error", "01:00", id="1:0.0013 as mm:ss"),
+        pytest.param("CZ error", "01:00.001", id="1:0.0013 as mm:ss.000"),
+        pytest.param("CZ error", "0:01", id="1:0.0013 as h:mm"),
+        pytest.param("CZ error", "0:01:00", id="1:0.0013 as h:mm:ss"),
+        pytest.param("CZ error", "00:01:00.00", id="1:0.0013 as hh:mm:ss.00"),
+        pytest.param("CZ error", "12:01:00 AM", id="1:0.0013 as h:mm:ss AM/PM"),
+        pytest.param("CZ error", "12:01 am", id="1:0.0013 as h:mm am/pm"),
+        pytest.param("CZ error", "0.000694459", id="1:0.0013 as a fraction of a day"),
+        pytest.param("CZ error", "1.50463E-08", id="0:0.0013 as a fraction of a day"),
+        pytest.param("CZ error", "54:00.0", id="114:0.0013 as mm:ss.0"),
+        pytest.param("CZ error", "114:00.0", id="114:0.0013 as elapsed mm:ss.0"),
+        pytest.param("CZ error", "1:54:00", id="114:0.0013 as h:mm:ss"),
+        pytest.param("Gate length (ns)", "0.088888889", id="1:68 as a fraction of a day"),
+        pytest.param("Gate length (ns)", "2:08", id="1:68 as h:mm"),
+        pytest.param("Gate length (ns)", "02:28", id="1:88 as hh:mm"),
+    ],
 )
-def test_a_pair_a_spreadsheet_turned_into_a_time_is_refused(tmp_path: Path, cells: str) -> None:
-    path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', cells)
-    message = "line 2, 'CZ error': '01:00.0' looks like a time that a spreadsheet made"
+def test_a_pair_a_spreadsheet_turned_into_a_time_is_refused(
+    tmp_path: Path, column: str, item: str
+) -> None:
+    cells = {"CZ error": f'"{item}","1:68"', "Gate length (ns)": f'"1:0.0013","{item}"'}
+    path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', cells[column])
+    message = f"line 2, {column!r}: {item!r} looks like a time that a spreadsheet made"
     with pytest.raises(ValueError, match=re.escape(message)):
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+
+
+def test_a_gate_length_that_could_be_minutes_still_imports(tmp_path: Path) -> None:
+    row_0 = _edited(tmp_path, HERON, '"1:0.0013","1:68"', '"1:0.0013","1:56"')
+    path = _edited(tmp_path, row_0, '"2:68;0:68"', '"2:68;0:56"')
+    profile = nv.from_ibm_csv(path, device="ibm_example", calibrated_at="2026-01-06")
+    assert profile.table.gate("cz", (0, 1)).duration_ns == 56
 
 
 _SUPPORTED = "this reader imports only the 2023 to 2026 formats"
