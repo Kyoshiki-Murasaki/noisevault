@@ -273,14 +273,12 @@ def check(
 
 def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int] | None) -> list[int]:
     if layout is None:
-        chain = _suggested(profile)
-        n = len(chain)
-    else:
-        n = len(layout)
-        if not 1 <= n <= MAX_QUBITS:
-            raise LayoutError(f"a check layout has 1 to {MAX_QUBITS} qubits, got {n}")
-        mapping = normalize_layout(range(n), layout, profile)
-        chain = [mapping[i] for i in range(n)]
+        return _longest_suggested_chain(profile)
+    n = len(layout)
+    if not 1 <= n <= MAX_QUBITS:
+        raise LayoutError(f"a check layout has 1 to {MAX_QUBITS} qubits, got {n}")
+    mapping = normalize_layout(range(n), layout, profile)
+    chain = [mapping[i] for i in range(n)]
     if _unitary_natives(profile, 2):
         for i in range(n - 1):
             if not _two_qubit_ops(profile, chain, i):
@@ -292,11 +290,10 @@ def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int] | No
     return chain
 
 
-def _suggested(profile: Profile) -> list[int]:
-    """``profile.suggest_layout``'s chain of the most qubits it can connect, up to MAX_QUBITS."""
+def _longest_suggested_chain(profile: Profile) -> list[int]:
     for n in range(min(MAX_QUBITS, profile.device.num_qubits), 1, -1):
         try:
-            return list(profile.suggest_layout(n).values())
+            return _chain(profile, profile.suggest_layout(n))
         except LayoutError:
             continue
     return list(profile.suggest_layout(1).values())

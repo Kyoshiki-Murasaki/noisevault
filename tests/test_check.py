@@ -411,6 +411,25 @@ def test_the_default_chain_is_the_longest_the_enabled_qubits_connect(num_qubits,
     assert result.passed, result
 
 
+def test_the_default_chain_leaves_out_a_link_only_a_custom_gate_calibrates() -> None:
+    gates = {
+        "rz": {"virtual": True},
+        "sx": {"avg_infidelity": 1e-3},
+        "cz": {"avg_infidelity": 1e-2},
+        "custom": {"qubits": 2},
+    }
+    custom = [{"gate": "custom", "qubits": [1, 2], "avg_infidelity": 2e-2}]
+    data = toy(gates=gates, calibrations=custom, connectivity={"edges": [[0, 1]]})
+    profile = Profile.model_validate(data)
+    assert profile.suggest_layout(3) == {0: 0, 1: 1, 2: 2}
+    with pytest.raises(LayoutError, match="qubits 1 and 2 share no calibrated 2-qubit native"):
+        check(profile, layout=[0, 1, 2])
+    result = check(profile, frameworks=["cirq"])
+    assert result.layout == {0: 0, 1: 1}
+    assert result.passed, result
+    assert any("cz" in c.gates for c in result.frameworks[0].circuits)
+
+
 def test_a_device_with_every_qubit_disabled_has_no_default_chain() -> None:
     profile = _disabled(Profile.model_validate(toy()), 0, 1, 2)
     with pytest.raises(LayoutError, match=r"^test_toy has only 0 usable qubits, not 1$"):
