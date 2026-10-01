@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 
 import noisevault as nv
 from noisevault.cli import app
+from noisevault.diff import METRICS
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
@@ -203,6 +204,24 @@ def test_pin_and_cite_commands_cite_the_calibration_the_code_pins() -> None:
         result = CliRunner().invoke(app, args)
         assert result.exit_code == 0, result.output
         assert fingerprint in result.output
+
+
+def test_the_drift_recipe_shows_the_labels_nv_diff_prints() -> None:
+    text = (DOCS / "recipes.md").read_text(encoding="utf-8")
+    start = text.index("## Compare drift")
+    shown = next(
+        body for language, body in FENCE.findall(text[start:]) if body.startswith("ibm_fez")
+    )
+    title, *lines = shown.splitlines()
+    assert re.fullmatch(r"ibm_fez \d{4}-\d\d-\d\d -> \d{4}-\d\d-\d\d  \(\d+ days later\)", title), (
+        title
+    )
+    labels = {label for label, _ in METRICS.values()}
+    medians = lines[1 : lines.index("")]
+    qubits = lines[lines.index("largest changes by qubit") + 2 : -1]
+    assert {re.split(r"  +", row)[0] for row in medians} <= labels
+    assert {re.split(r"  +", row)[1] for row in qubits} <= labels
+    assert len(medians) == len(METRICS) and qubits
 
 
 def test_schema_file_is_current() -> None:

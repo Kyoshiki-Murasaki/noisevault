@@ -7,7 +7,22 @@ from collections.abc import Iterable
 
 
 class NoiseVaultError(Exception):
-    """Base class for every expected NoiseVault failure."""
+    """Base class for every expected NoiseVault failure.
+
+    ``hint`` is the next step, if there is one. ``str()`` gives the message and then the hint,
+    and ``message`` gives the message alone.
+    """
+
+    def __init__(self, *args: object, hint: str | None = None) -> None:
+        super().__init__(*args)
+        self.hint = hint
+
+    @property
+    def message(self) -> str:
+        return super().__str__()
+
+    def __str__(self) -> str:
+        return f"{self.message}; {self.hint}" if self.hint else self.message
 
 
 class LayoutError(NoiseVaultError, ValueError):

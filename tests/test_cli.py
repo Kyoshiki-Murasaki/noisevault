@@ -24,7 +24,7 @@ runner = CliRunner()
 def test_validate_accepts_a_0_1_file_and_reports_the_migration() -> None:
     result = runner.invoke(app, ["validate", str(MANILA_V01)])
     assert result.exit_code == 0, result.output
-    assert "ok: ibm_manila" in result.stdout
+    assert result.stdout.startswith("ok: ibm_manila calibrated 2024-05-27T18:27:23Z, 5 qubits,")
     assert "warning: upgraded a NoiseVault 0.1 file" in result.stderr
 
 
@@ -182,6 +182,45 @@ def test_a_profile_id_that_names_a_folder_here_still_loads(tmp_path: Path, monke
     assert result.exit_code == 0 and result.stdout.startswith("ibm_manila@2024-05-27")
 
 
+_OUTPUTS = [
+    ["list"],
+    ["show", "ibm_fez", "--qubits", "0,1,2"],
+    ["show", "google_weber"],
+    ["diff", "ibm_kyiv", "ibm_brisbane"],
+    ["doctor"],
+    ["validate", str(MANILA_V01)],
+]
+
+
+@pytest.mark.parametrize("color", [{}, {"NO_COLOR": "1"}, {"FORCE_COLOR": "1"}])
+@pytest.mark.parametrize("columns", [40, 60, 80, 120])
+def test_no_output_line_ends_in_spaces(columns: int, color: dict[str, str]) -> None:
+    for args in _OUTPUTS:
+        out = runner.invoke(app, args, env={"COLUMNS": str(columns), **color}).stdout
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+        padded = [line for line in plain.splitlines() if line != line.rstrip()]
+        assert not padded, (args, padded[:3])
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["list"],
+        ["list", "--vendor", "google", "--tech", "trapped_ion"],
+        ["show", "nosuch"],
+        ["show", "ibm_fez@2025-03-01"],
+        ["show", "ibm_fez", "--top"],
+        ["pull", "google_weber"],
+        ["pull", "ibm_fez", "--source", "google"],
+        ["diff", "ibm_fez"],
+    ],
+)
+def test_output_writes_commands_without_backticks(args: list[str]) -> None:
+    result = runner.invoke(app, args, env={"COLUMNS": "200"}, prog_name="nv")
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "nv " in output and "`" not in output, output
+
+
 def test_no_color_removes_color_codes() -> None:
     args = ["diff", "ibm_kyiv", "ibm_brisbane"]
     colored = runner.invoke(app, args, env={"FORCE_COLOR": "1"}).stdout
@@ -194,8 +233,23 @@ def test_no_color_removes_color_codes() -> None:
     ("args", "error", "hint"),
     [
         (["show", "ibm_fezz"], "did you mean ibm_fez?", None),
-        (["show", "ibm_fez@2020-01-01"], "you have ibm_fez@2025-02-26T20:16:25Z", None),
-        (["show", "missing.json"], "error: no file missing.json", "check the path"),
+        (
+            ["show", "ibm_fez@2020-01-01"],
+            "no ibm_fez profile calibrated on 2020-01-01 UTC;"
+            " you have ibm_fez@2025-02-26T20:16:25Z",
+            "to fetch the calibration in effect at 2020-01-01, run nv pull ibm_fez --at 2020-01-01",
+        ),
+        (["show", "quantinuum_h1-1@2020-01-01"], "you have quantinuum_h1-1@2025-05-02", None),
+        (
+            ["show", "nosuch"],
+            "no profile with id 'nosuch'",
+            "run nv list to see every profile you can load offline",
+        ),
+        (
+            ["show", "missing.json"],
+            "no file missing.json",
+            "check the path, or give a profile id such as ibm_fez",
+        ),
         (["cite", "ibm fez"], "is not a profile id", None),
         (
             ["check", "ibm_manila", "--framework", "qiskt"],
@@ -206,17 +260,24 @@ def test_no_color_removes_color_codes() -> None:
         (["show", "ibm_fez", "--qubits", "0,200"], "has qubits 0 to 155", None),
         (["check", "ibm_manila", "--framework", ""], "--framework '': give one or more", None),
         (["check", "ibm_manila", "--framework", ","], "--framework ',': give one or more", None),
-        (["show", "./"], "./ is a folder; give a profile file", None),
+        (
+            ["show", "./"],
+            "./ is a folder",
+            "give a profile file (.json or .json.gz) or a profile id such as ibm_fez",
+        ),
+        (
+            ["list", "--vendor", "google", "--tech", "trapped_ion"],
+            "no google trapped_ion profile yet",
+            "run nv list to see them all",
+        ),
     ],
 )
 def test_expected_failures_print_an_error_and_no_traceback(args, error, hint) -> None:
     result = runner.invoke(app, args)
     assert result.exit_code == 1
-    assert result.stderr.startswith("error: ") and error in result.stderr
-    if hint:
-        assert "hint: " in result.stderr and hint in result.stderr
-    else:
-        assert "hint: " not in result.stderr
+    first, *rest = result.stderr.splitlines()
+    assert first.startswith("error: ") and error in first
+    assert rest == ([f"hint: {hint}"] if hint else [])
     assert "Traceback" not in result.output and result.stdout == ""
 
 
@@ -231,7 +292,7 @@ def test_list_groups_profiles_by_technology() -> None:
     assert row.split() == ["ibm_fez", "2025-02-26", "156", "Heron", "r2", "package"]
     assert lines.index("superconducting") < lines.index(row) < lines.index("trapped_ion")
     assert lines[-2:] == [
-        f"{len(nv.profiles())} profiles, all Apache-2.0. See one with `nv show <id>`.",
+        f"{len(nv.profiles())} profiles, all Apache-2.0. See one with nv show <id>.",
         'Load one in Python with nv.load("<id>").',
     ]
 
@@ -266,12 +327,35 @@ def test_list_keeps_every_row_on_one_line(columns: int) -> None:
     assert lines[0].split() == header
 
 
-def test_list_shortens_processors_before_any_other_cell() -> None:
-    lines = runner.invoke(app, ["list"], env={"COLUMNS": "50"}).stdout.splitlines()
-    assert max(map(len, lines)) <= 50 and lines[0].split() == ["id", "date", "qubits", "processor"]
-    row = next(line for line in lines if "quantinuum_h1-1 " in line)
-    assert row.split()[:3] == ["quantinuum_h1-1", "2025-05-02", "20"]
-    assert row.rstrip().endswith("System M\u2026")
+@pytest.mark.parametrize(
+    ("columns", "header"),
+    [
+        (120, ["id", "date", "qubits", "processor", "source", "license"]),
+        (80, ["id", "date", "qubits", "processor", "license"]),
+        (60, ["id", "date", "qubits"]),
+        (30, ["id", "date", "qubits"]),
+    ],
+)
+def test_list_drops_columns_and_never_cuts_an_id_or_a_date(
+    vault: Path, columns: int, header: list[str]
+) -> None:
+    _manila_in_the_vault(
+        "2024-06-03T10:00:00Z", license="AWS Customer Agreement (not an open license)"
+    )
+    out = runner.invoke(app, ["list"], env={"COLUMNS": str(columns)}).stdout
+    lines = out.splitlines()
+    assert lines[0].split() == header and "\u2026" not in out
+    rows = {tuple(line.lstrip("* ").split()[:3]) for line in lines if line[:2] in ("  ", "* ")}
+    assert rows - {("in", "your", "vault")} == {
+        (i.id, i.calibrated_at.date().isoformat(), str(i.num_qubits)) for i in nv.profiles()
+    }
+    licenses = (
+        f"{len(nv.profiles())} profiles, Apache-2.0 except ibm_manila@2024-06-03"
+        " (AWS Customer Agreement)."
+    )
+    assert (licenses in " ".join(out.split())) == ("license" not in header)
+    if columns >= 60:
+        assert max(map(len, lines)) <= columns
 
 
 def test_show_prints_a_card() -> None:
@@ -312,6 +396,22 @@ def test_show_qubits_and_json() -> None:
     assert data["qubits"][1]["gate_1q"] == "sx"
 
 
+def test_show_qubits_fits_60_columns_and_shows_state_only_when_a_qubit_has_one(
+    tmp_path: Path,
+) -> None:
+    lines = runner.invoke(app, ["show", "ibm_fez", "--qubits", "0,1,87"], env={"COLUMNS": "60"})
+    table = lines.stdout.splitlines()[-5:]
+    assert [row.split()[0] for row in table[2:]] == ["0", "1", "87"]
+    assert table[1].split()[-1] == "infidelity" and "\u2026" not in lines.stdout
+    assert max(map(len, table)) <= 60
+    data = toy(qubits=[{"index": 1, "disabled": True}])
+    path = tmp_path / "toy.json"
+    path.write_text(json.dumps(data))
+    out = runner.invoke(app, ["show", str(path), "--qubits", "0,1"], env={"COLUMNS": "80"}).stdout
+    rows = out.splitlines()[-3:]
+    assert rows[0].split()[-1] == "state" and rows[2].split()[-1] == "disabled"
+
+
 @pytest.mark.parametrize("ref", ["ibm_fez", "ibm_kyiv", "ibm_manila"])
 def test_show_qubits_names_a_real_gate_not_the_identity(ref: str) -> None:
     text = runner.invoke(app, ["show", ref, "--qubits", "0,1,2,3,4"]).stdout
@@ -328,8 +428,11 @@ def test_show_all_to_all_and_notes() -> None:
 def test_show_and_diff_name_the_error_metric(tmp_path: Path) -> None:
     lines = runner.invoke(app, ["show", "ibm_fez"], env={"COLUMNS": "80"}).stdout.splitlines()
     assert max(map(len, lines)) <= 80
-    header = next(line for line in lines if line.startswith("natives"))
-    assert header.split()[1:] == ["gate", "median", "avg", "infidelity", "duration", "records"]
+    natives = next(i for i, line in enumerate(lines) if line.startswith("natives"))
+    assert [line.split() for line in lines[natives : natives + 2]] == [
+        ["natives", "median", "avg", "median"],
+        ["gate", "infidelity", "duration", "records"],
+    ]
     reset = next(line for line in lines if "reset (1q)" in line)
     assert reset.split() == ["reset", "(1q)", "-", "1.58", "us", "156"]
     gates = {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}, "cz": {"duration_ns": 70}}
@@ -350,6 +453,15 @@ def test_show_and_diff_name_the_error_metric(tmp_path: Path) -> None:
         "readout error",
     ]
     assert re.search(r"^\d+-\d+ +2q avg infidelity ", drift, re.M)
+
+
+@pytest.mark.parametrize("ref", [i.id for i in nv.catalog.bundled_profiles()])
+def test_show_keeps_each_native_on_one_line_down_to_66_columns(ref: str) -> None:
+    lines = runner.invoke(app, ["show", ref], env={"COLUMNS": "66"}).stdout.splitlines()
+    first = next(i for i, line in enumerate(lines) if line.startswith("natives"))
+    last = next(i for i, line in enumerate(lines) if line.startswith("coherence"))
+    assert last - first == 2 + len(nv.load(ref).gates)
+    assert max(len(line) for line in lines[first:last]) <= 66
 
 
 def test_show_says_where_the_data_came_from_in_plain_words(tmp_path: Path) -> None:
@@ -389,9 +501,10 @@ def test_show_lists_what_the_model_leaves_out_before_provenance_and_notes() -> N
     ]
 
 
-def _manila_in_the_vault(calibrated_at: str) -> Profile:
+def _manila_in_the_vault(calibrated_at: str, **provenance: str) -> Profile:
     data = nv.load("ibm_manila").model_dump(mode="json", exclude_none=True)
     data["device"]["calibrated_at"] = calibrated_at
+    data["provenance"].update(provenance)
     data["qubits"][0]["t1_us"] *= 1.1
     profile = Profile.model_validate(data)
     path = nv.catalog.vault_path(profile)
@@ -408,7 +521,7 @@ def test_show_says_which_calibration_a_bare_id_picked(vault: Path) -> None:
     assert lines[0] == f"ibm_manila@2024-06-03T10:00:00Z  {newer.short_fingerprint}"
     assert [line.rstrip() for line in lines[2:4]] == [
         "calibrations  newest of the 2 you have",
-        "              ibm_manila@2024-05-27T18:27:23Z is the bundled one",
+        "              the bundled one is ibm_manila@2024-05-27T18:27:23Z",
     ]
     assert nv.load("ibm_manila@2024-05-27T18:27:23Z").fingerprint == bundled.fingerprint
     for ref in ("ibm_manila@2024-05-27", "ibm_manila@2024-06-03T10:00:00Z"):
@@ -423,13 +536,58 @@ def test_show_counts_the_calibrations_when_the_bundled_one_is_the_newest(vault: 
     assert lines[3].startswith("connectivity")
 
 
+def test_show_says_when_a_vault_copy_replaces_the_bundled_calibration(vault: Path) -> None:
+    bundled = nv.load("ibm_manila")
+    mine = _manila_in_the_vault("2024-05-27T18:27:23Z")
+    lines = runner.invoke(app, ["show", "ibm_manila"], env={"COLUMNS": "80"}).stdout.splitlines()
+    assert lines[0] == f"ibm_manila@2024-05-27T18:27:23Z  {mine.short_fingerprint}"
+    assert lines[2:4] == [
+        "calibrations  newest of the 2 you have",
+        f"              your vault copy replaces the bundled one, {bundled.short_fingerprint}",
+    ]
+
+
+def test_show_counts_the_calibrations_when_the_id_names_a_folder_here(
+    vault: Path, tmp_path: Path, monkeypatch
+) -> None:
+    _manila_in_the_vault("2024-06-03T10:00:00Z")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ibm_manila").mkdir()
+    lines = runner.invoke(app, ["show", "ibm_manila"], env={"COLUMNS": "80"}).stdout.splitlines()
+    assert lines[2] == "calibrations  newest of the 2 you have"
+
+
+def test_list_names_an_unknown_license_once_when_no_profile_states_one(vault: Path) -> None:
+    for when in ("2024-06-03T10:00:00Z", "2024-07-01T10:00:00Z"):
+        data = nv.load("ibm_manila").model_dump(mode="json", exclude_none=True)
+        data["device"].update(calibrated_at=when, vendor="acme")
+        data["provenance"].pop("license")
+        profile = Profile.model_validate(data)
+        vault.mkdir(parents=True, exist_ok=True)
+        profile.save(nv.catalog.vault_path(profile))
+    out = runner.invoke(app, ["list", "--vendor", "acme"], env={"COLUMNS": "30"}).stdout
+    assert "2 profiles, license unknown. See one with nv show <id>." in " ".join(out.split())
+
+
+def test_list_keeps_one_ids_calibrations_together_newest_first(vault: Path) -> None:
+    _manila_in_the_vault("2024-06-03T10:00:00Z")
+    lines = runner.invoke(app, ["list"], env={"COLUMNS": "80"}).stdout.splitlines()
+    at = [i for i, line in enumerate(lines) if " ibm_manila " in f" {line}"]
+    assert [lines[i].split()[:3] for i in at] == [
+        ["*", "ibm_manila", "2024-06-03"],
+        ["ibm_manila", "2024-05-27", "5"],
+    ]
+    assert at[1] == at[0] + 1 and lines[at[0] - 1].split()[0] == "ibm_kyiv"
+
+
 def test_check_says_which_calibration_a_bare_id_picked(vault: Path) -> None:
     require("cirq")
     newer = _manila_in_the_vault("2024-06-03T10:00:00Z")
     out = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq"]).stdout
-    assert out.startswith(f"ibm_manila (newest of 2) {newer.short_fingerprint} on qubits ")
+    newest = f"ibm_manila@2024-06-03T10:00:00Z (newest of 2) {newer.short_fingerprint} on qubits "
+    assert out.startswith(newest)
     dated = runner.invoke(app, ["check", "ibm_manila@2024-06-03", "--framework", "cirq"]).stdout
-    assert dated.startswith(f"ibm_manila {newer.short_fingerprint} on qubits ")
+    assert dated.startswith(f"ibm_manila@2024-06-03T10:00:00Z {newer.short_fingerprint} on qubits ")
 
 
 # pull ---------------------------------------------------------------------------------------
@@ -525,7 +683,7 @@ def test_pull_errors_name_flags_not_python_arguments(monkeypatch) -> None:
     assert "source=" not in result.stderr and "hint:" not in result.stderr
     monkeypatch.setattr(ibm_public, "fetch", not_listed)
     result = runner.invoke(app, ["pull", "ibm_fez"])
-    assert "try `nv show ibm_fez` for the bundled snapshot or --source ibm-account" in result.stderr
+    assert "try nv show ibm_fez for the bundled snapshot or --source ibm-account" in result.stderr
 
 
 def test_pull_checks_the_output_folder_before_fetching(monkeypatch, tmp_path: Path) -> None:
@@ -803,6 +961,15 @@ def test_check_of_a_named_framework_that_is_not_installed_installs_that_one(monk
     ]
 
 
+def test_check_names_a_framework_given_twice_once(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "cirq", None)
+    result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq,Cirq, cirq"])
+    assert result.stderr.splitlines() == [
+        "error: nv check needs a framework to check, and cirq is not installed",
+        f"hint: {install_hint('cirq')}",
+    ]
+
+
 def test_check_states_what_a_pass_means_only_after_a_pass() -> None:
     require("stim")
     result = runner.invoke(app, ["check", "quantinuum_h1-1", "--framework", "stim"])
@@ -813,15 +980,26 @@ def test_check_states_what_a_pass_means_only_after_a_pass() -> None:
 
 # bad input never prints a traceback -----------------------------------------------------------
 
+_PROFILE_FILE = "give a profile file (.json or .json.gz)"
+# file text -> what the error line says, and the hint line (with {path}), if any
 _DAMAGED = {
-    "not-json": ("{not json", "is not JSON (Expecting property name"),
-    "empty": ("", "is not JSON (Expecting value"),
-    "legacy-empty": ('{"schema_version": "0.1"}', "not a valid NoiseVault 0.1 file: provider"),
+    "not-json": ("{not json", "is not JSON (Expecting property name", _PROFILE_FILE),
+    "empty": ("", "is not JSON (Expecting value", _PROFILE_FILE),
+    "legacy-empty": (
+        '{"schema_version": "0.1"}',
+        "not a valid NoiseVault 0.1 file: provider",
+        None,
+    ),
     "legacy-null-gates": (
         json.dumps({**json.loads(MANILA_V01.read_text()), "gates": None}),
         "gates should be a list, not null; fix that field",
+        None,
     ),
-    "invalid": (json.dumps(toy(gates=None)), "is not a valid profile (1 problem); run `nv valid"),
+    "invalid": (
+        json.dumps(toy(gates=None)),
+        "is not a valid profile (1 problem)",
+        "run nv validate {path} to list them",
+    ),
 }
 _COMMANDS = {
     "show": lambda f: ["show", f],
@@ -838,7 +1016,7 @@ _COMMANDS = {
 def test_every_command_names_a_damaged_file_and_what_is_wrong(
     tmp_path: Path, command: str, damage: str
 ) -> None:
-    text, expected = _DAMAGED[damage]
+    text, expected, hint = _DAMAGED[damage]
     path = tmp_path / f"{damage}.json"
     path.write_text(text)
     result = runner.invoke(app, _COMMANDS[command](str(path)), env={"COLUMNS": "80"})
@@ -847,8 +1025,9 @@ def test_every_command_names_a_damaged_file_and_what_is_wrong(
     if command == "validate" and damage == "invalid":
         assert result.stderr == "error: gates: Input should be a valid dictionary\n"
         return
-    assert result.stderr.startswith(f"error: {path}") and expected in result.stderr
-    assert result.stderr.count("\n") == 1
+    first, *rest = result.stderr.splitlines()
+    assert first.startswith(f"error: {path}") and expected in first
+    assert rest == ([f"hint: {hint.format(path=path)}"] if hint else [])
 
 
 @pytest.mark.parametrize(
@@ -860,15 +1039,14 @@ def test_every_command_names_a_damaged_file_and_what_is_wrong(
         (["list", "--tech", "superconductin"], "did you mean superconducting?"),
         (["list", "--vendor", "ibmm"], "did you mean ibm?"),
         (["check", "ibm_manila", "--framework", "qiskt"], "did you mean qiskit?"),
-        (["validate", "missing.json"], "error: no file missing.json; check the path\n"),
-        (["show", "nosuch"], "error: no profile with id 'nosuch'; run `nv list`\n"),
+        (["validate", "missing.json"], "error: no file missing.json\nhint: check the path\n"),
     ],
 )
 def test_a_typo_or_bad_date_gets_one_error_with_the_way_out(args: list[str], error: str) -> None:
     result = runner.invoke(app, args)
     assert result.exit_code == 1 and result.stdout == ""
     assert error in result.stderr and "Traceback" not in result.output
-    assert len(result.stderr.splitlines()) == 1
+    assert len(result.stderr.splitlines()) == 1 + result.stderr.count("\nhint: ")
 
 
 def test_pull_names_the_at_flag_for_a_bad_date() -> None:
@@ -1074,8 +1252,8 @@ def test_list_shows_the_time_only_where_a_date_is_shared(vault: Path) -> None:
     at = [i for i, line in enumerate(lines) if "quantinuum_h1-1 " in line]
     rows = [(lines[i].lstrip("* ").split()[1:3], lines[i + 1].split()) for i in at]
     assert rows == [
-        (["2025-05-02", "20"], ["09:15", "UTC"]),
         (["2025-05-02", "20"], ["14:30", "UTC"]),
+        (["2025-05-02", "20"], ["09:15", "UTC"]),
         (["2025-05-02", "20"], ["00:00", "UTC"]),
     ]
     h1_2 = next(i for i, line in enumerate(lines) if "quantinuum_h1-2 " in line)
@@ -1093,15 +1271,30 @@ def test_diff_lists_added_qubits_as_ranges() -> None:
 @pytest.mark.parametrize(
     ("args", "error"),
     [
-        (["diff", "ibm_fez"], "error: missing argument 'after'; see `nv diff --help`\n"),
+        (["diff", "ibm_fez"], "error: missing argument 'after'\nhint: run nv diff --help\n"),
         (["shwo", "ibm_fez"], "error: no such command 'shwo'; did you mean 'show'?\n"),
-        (["show", "ibm_fez", "--qubit", "1"], "error: no such option: --qubit (Possible options"),
+        (
+            ["show", "ibm_fez", "--qubit", "1"],
+            "error: no such option: --qubit (Possible options: --qubits)\n",
+        ),
     ],
 )
-def test_a_usage_mistake_is_one_line(args: list[str], error: str) -> None:
+def test_a_usage_mistake_is_an_error_and_at_most_one_hint(args: list[str], error: str) -> None:
     result = runner.invoke(app, args, env={"COLUMNS": "80"}, prog_name="nv")
     assert result.exit_code == 2 and result.stdout == ""
-    assert result.stderr.startswith(error) and result.stderr.count("\n") == 1
+    assert result.stderr == error
+
+
+def test_every_ref_argument_is_described_the_same_way() -> None:
+    def help_text(command: str) -> str:
+        result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "200"}, prog_name="nv")
+        return re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # typer forces color on CI runners
+
+    for command in ("show", "check", "cite"):
+        assert "Profile id (ibm_fez), id@date, or a file path." in help_text(command), command
+    diff = help_text("diff")
+    assert "First profile id (ibm_fez), id@date, or a file path." in diff
+    assert "--top" in diff and "<int range>" not in diff
 
 
 def test_nv_alone_prints_the_help_and_no_error() -> None:
@@ -1128,13 +1321,17 @@ def test_help_ends_with_the_commands_to_start_with() -> None:
     assert "Start with" not in sub.output
 
 
-def test_an_unexpected_failure_is_one_line_unless_debugging(monkeypatch) -> None:
+def test_an_unexpected_failure_is_one_error_and_a_hint_unless_debugging(monkeypatch) -> None:
     def broken(ref: str) -> None:
         raise KeyError("provider")
 
     monkeypatch.setattr(nv.catalog, "load", broken)
     result = runner.invoke(app, ["show", "ibm_fez"])
-    assert result.exit_code == 1 and result.stderr.count("\n") == 1
-    assert result.stderr.startswith("error: unexpected KeyError: 'provider'; please report")
+    assert result.exit_code == 1
+    assert result.stderr.splitlines() == [
+        "error: unexpected KeyError: 'provider'",
+        "hint: please report this bug at https://github.com/Kyoshiki-Murasaki/noisevault/issues"
+        " (NOISEVAULT_DEBUG=1 shows the traceback)",
+    ]
     debug = runner.invoke(app, ["show", "ibm_fez"], env={"NOISEVAULT_DEBUG": "1"})
     assert isinstance(debug.exception, KeyError)

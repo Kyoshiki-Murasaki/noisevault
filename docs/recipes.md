@@ -17,7 +17,8 @@ Pin the calibration by its fingerprint and publish both.
    `nv:d9067e68adc2`. In steps 2 and 3, use that ref and fingerprint in place of
    `ibm_fez@2025-02-26` and `nv:06404cefa54f`.
 
-2. Print the citation. It names the source, the calibration time and the full fingerprint:
+2. Print the citation. It names the source, the calibration time, the NoiseVault version, the
+   ref that loads the calibration, and the full fingerprint:
 
    ```bash
    nv cite ibm_fez@2025-02-26
@@ -63,21 +64,21 @@ For other dates, use the dates your pulls print. The diff lists device medians, 
 pairs that changed most, and gates that were disabled or re-enabled. The start of the output:
 
 ```
-ibm_fez@2026-07-02 -> ibm_fez@2026-09-30  (90 days later)
-device median    before     after  change
-T1 (us)           119.6       118   -1.3%
-T2 (us)           89.44     92.16   +3.0%
-1q error       3.05e-04  3.16e-04   +3.6%
-2q error       2.72e-03  2.61e-03   -3.9%
-readout error  8.18e-03  1.05e-02  +28.4%
+ibm_fez 2026-07-02 -> 2026-09-30  (90 days later)
+device median        before     after  change
+T1 (us)               119.6       118   -1.3%
+T2 (us)               89.44     92.16   +3.0%
+1q avg infidelity  3.05e-04  3.16e-04   +3.6%
+2q avg infidelity  2.72e-03  2.61e-03   -3.9%
+readout error      8.18e-03  1.05e-02  +28.4%
 
 largest changes by qubit
-qubit  metric           before     after    change
-61     T2 (us)            5.25     98.94  +1784.8%
-123    readout error  6.35e-03  1.06e-01  +1565.4%
-149    1q error       1.40e-03  1.71e-02  +1121.7%
-113    T1 (us)           18.95     155.4   +720.0%
-30     T1 (us)           17.59     114.1   +548.6%
+qubit  metric               before     after    change
+61     T2 (us)                5.25     98.94  +1784.8%
+123    readout error      6.35e-03  1.06e-01  +1565.4%
+149    1q avg infidelity  1.40e-03  1.71e-02  +1121.7%
+113    T1 (us)               18.95     155.4   +720.0%
+30     T1 (us)               17.59     114.1   +548.6%
 ...
 ```
 

@@ -212,7 +212,7 @@ def _skipped(path: Path, exc: Exception) -> str:
         why = f"it links to {dangling}, which does not exist; remove the link"
     elif isinstance(exc, ValidationError):
         n = exc.error_count()
-        why = f"not a valid profile ({n} problem{'s' * (n != 1)}); run `nv validate {path}`"
+        why = f"not a valid profile ({n} problem{'s' * (n != 1)}); run nv validate {path}"
     elif isinstance(exc, OSError):
         why = exc.strerror or str(exc)
     else:
@@ -256,7 +256,7 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
     calibration time, a vault copy shadows a bundled one.
     """
     if isinstance(ref, str):
-        parsed = parse_ref(ref)
+        parsed = target(ref)
         if isinstance(parsed, Path):
             raise ValueError(f"{ref!r} is a path, not a catalog ref")
         ref = parsed
@@ -264,8 +264,14 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
     candidates = [info for info in known if info.id == ref.id]
     if not candidates:
         close = difflib.get_close_matches(ref.id, sorted({i.id for i in known}), n=3)
-        hint = f"; did you mean {', '.join(close)}?" if close else "; run `nv list`"
-        raise ProfileNotFound(f"no profile with id {ref.id!r}{hint}")
+        if close:
+            raise ProfileNotFound(
+                f"no profile with id {ref.id!r}; did you mean {', '.join(close)}?"
+            )
+        raise ProfileNotFound(
+            f"no profile with id {ref.id!r}",
+            hint="run nv list to see every profile you can load offline",
+        )
     if ref.timestamp is not None:
         matches = [i for i in candidates if i.calibrated_at == ref.timestamp]
     elif ref.date is not None:
@@ -274,15 +280,12 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
         newest = max(_epoch(i.calibrated_at) for i in candidates)
         matches = [i for i in candidates if _epoch(i.calibrated_at) == newest]
     if not matches:
-        raise ProfileNotFound(_no_calibration(ref, candidates))
+        raise _no_calibration(ref, candidates)
     if expect is not None:
         want = _expect_prefix(expect)
         pinned = [i for i in matches if i.fingerprint.startswith(want)]
         if not pinned:
-            raise FingerprintMismatch(
-                f"{_loaded(ref, matches)}, not the expected {expect}"
-                + _pinned_elsewhere(ref.id, want, known)
-            )
+            raise _mismatch(_loaded(ref, matches), expect, ref.id, known)
         matches = pinned
     shadowed = {_epoch(i.calibrated_at) for i in matches if i.location == "vault"}
     matches = [
@@ -291,12 +294,25 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
     if len(matches) > 1:
         listing = "; ".join(f"{i.ref} ({i.location}, nv:{i.fingerprint[:12]})" for i in matches)
         if len({i.calibrated_at for i in matches}) > 1:
-            fix = "use a full timestamp"
-        else:
-            files = ", ".join(str(i.path) for i in matches)
-            fix = f"they share a calibration time, so pass expect='nv:...' or load a file: {files}"
-        raise AmbiguousRef(f"{ref.id} matches {len(matches)} profiles: {listing}; {fix}")
+            raise AmbiguousRef(
+                f"{ref.id} matches {len(matches)} profiles: {listing}", hint="use a full timestamp"
+            )
+        files = ", ".join(str(i.path) for i in matches)
+        raise AmbiguousRef(
+            f"{ref.id} matches {len(matches)} profiles that share a calibration time: {listing}",
+            hint=f"pass expect='nv:...' or load one of their files: {files}",
+        )
     return matches[0]
+
+
+def target(ref: str | Path) -> Path | Ref:
+    """What a ref names, as :func:`parse_ref` reads it, except that a bare id that also names a
+    folder here is still the id."""
+    parsed = parse_ref(ref)
+    text = ref.strip() if isinstance(ref, str) else ""
+    if isinstance(parsed, Path) and parsed.is_dir() and text == parsed.name and "@" not in text:
+        return Ref(text.lower())
+    return parsed
 
 
 def load(ref: str | Path, *, expect: str | None = None) -> Profile:
@@ -305,13 +321,13 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
     ``expect`` pins the fingerprint (full hex, ``sha256:<hex>`` or ``nv:<12 hex>``); a different
     profile raises FingerprintMismatch.
     """
-    target = parse_ref(ref)
-    if isinstance(target, Path):
-        if not target.exists():
-            raise ProfileNotFound(f"no file {target}")
-        path, profile = target, load_file(target)
+    named = target(ref)
+    if isinstance(named, Path):
+        if not named.exists():
+            raise ProfileNotFound(f"no file {named}")
+        path, profile = named, load_file(named)
     else:
-        info = resolve(target, expect=expect)
+        info = resolve(named, expect=expect)
         path, profile = info.path, info.load()
     if expect is not None:
         _check_expect(profile, expect, path)
@@ -401,10 +417,10 @@ def _default_source(device: str) -> str:
     if source is not None:
         return source
     bundled = any(i.id == device for i in bundled_profiles())
-    hint = f"; {device} is bundled, so nv.load({device!r}) loads it offline" if bundled else ""
     raise SourceUnavailable(
         f"no live source pulls {device!r}: pull reads IBM devices (ibm_..., source='ibm' or"
-        f" 'ibm-account') and IonQ devices (ionq..., source='ionq'){hint}"
+        " 'ibm-account') and IonQ devices (ionq..., source='ionq')",
+        hint=f"{device} is bundled, so nv.load({device!r}) loads it offline" if bundled else None,
     )
 
 
@@ -415,8 +431,8 @@ def _unknown_source(source: str) -> str:
     vendor = next((v for v in offline if did_you_mean(source, [v])), None)
     if vendor and not guess:
         return (
-            f"unknown source {source!r}; {vendor} devices have no live source;"
-            f" `nv list --vendor {vendor}` shows the bundled ones (sources: {choices})"
+            f"unknown source {source!r}; no live source serves {vendor} devices; to see the"
+            f" bundled ones, run nv list --vendor {vendor}"
         )
     return f"unknown source {source!r}; {guess}choose one of {choices}"
 
@@ -432,13 +448,10 @@ def _expect_prefix(expect: str) -> str:
 
 
 def _check_expect(profile: Profile, expect: str, path: Path | Traversable) -> None:
-    want = _expect_prefix(expect)
-    if not profile.fingerprint.startswith(want):
+    if not profile.fingerprint.startswith(_expect_prefix(expect)):
         held = _ref(profile.id, profile.device.calibrated_at)
-        raise FingerprintMismatch(
-            f"{path} holds {held} ({profile.short_fingerprint}), not the expected {expect}"
-            + _pinned_elsewhere(profile.id, want, profiles())
-        )
+        loaded = f"{path} holds {held} ({profile.short_fingerprint})"
+        raise _mismatch(loaded, expect, profile.id, profiles())
 
 
 def _loaded(ref: Ref, held: list[ProfileInfo]) -> str:
@@ -449,35 +462,39 @@ def _loaded(ref: Ref, held: list[ProfileInfo]) -> str:
     return f"{said} is {found}" if newest == said else f"{said} loads {newest} ({found})"
 
 
-def _pinned_elsewhere(device: str, want: str, known: list[ProfileInfo]) -> str:
-    """The profile you have with the pinned fingerprint, or how to get its file."""
+def _mismatch(
+    loaded: str, expect: str, device: str, known: list[ProfileInfo]
+) -> FingerprintMismatch:
+    """The error for a profile that misses its pin. The hint names the profile you have with the
+    pinned fingerprint, or says how to get that file."""
+    want = _expect_prefix(expect)
+    missed = f"{loaded}, not the expected {expect}"
     match = next((i for i in known if i.fingerprint.startswith(want)), None)
     if match is not None:
-        return f"; {match.ref}, which you have, has that fingerprint; load that ref instead"
-    fetch = ""
+        return FingerprintMismatch(missed, hint=f"load {match.ref}, which has that fingerprint")
+    hint = "ask whoever pinned it for the profile file"
     if _pull_source(device):
-        fetch = (
-            f", or fetch that calibration with `nv pull {device} --at <a time it was in effect>`"
-            " if the source still serves it"
+        hint += (
+            ", or, if the source still serves that calibration, run"
+            f" nv pull {device} --at <a time it was in effect>"
         )
-    return (
-        ", and no profile you have has that fingerprint; ask whoever pinned it for the profile"
-        f" file{fetch}"
-    )
+    return FingerprintMismatch(f"{missed}, and no profile you have has that fingerprint", hint=hint)
 
 
-def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> str:
+def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> ProfileNotFound:
     """What a dated ref's date means when it names no profile, and what you have instead."""
     have = ", ".join(sorted(i.ref for i in candidates))
     if ref.timestamp is not None:
-        return f"no {ref.id} profile calibrated at {_stamp(ref.timestamp)}; you have {have}"
-    message = f"no {ref.id} profile calibrated on {ref.date} UTC; you have {have}"
-    if _pull_source(ref.id):
-        message += (
-            f"; to fetch the calibration in effect at {ref.date}, run"
-            f" `nv pull {ref.id} --at {ref.date}`"
+        return ProfileNotFound(
+            f"no {ref.id} profile calibrated at {_stamp(ref.timestamp)}; you have {have}"
         )
-    return message
+    fetch = (
+        f"to fetch the calibration in effect at {ref.date}, run nv pull {ref.id} --at {ref.date}"
+    )
+    return ProfileNotFound(
+        f"no {ref.id} profile calibrated on {ref.date} UTC; you have {have}",
+        hint=fetch if _pull_source(ref.id) else None,
+    )
 
 
 def _dedupe(infos: list[ProfileInfo]) -> list[ProfileInfo]:

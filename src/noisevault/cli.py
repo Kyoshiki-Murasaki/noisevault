@@ -26,9 +26,9 @@ from typing import Annotated, Any, NamedTuple, NoReturn, get_args
 
 import typer
 from pydantic import ValidationError
-from rich.cells import cell_len
-from rich.console import Console
+from rich.console import Console, RenderableType
 from rich.table import Table
+from rich.text import Text
 from typer.core import TyperGroup
 
 from . import __version__, catalog
@@ -42,12 +42,10 @@ from .errors import (
 )
 from .profile import (
     Profile,
-    Ref,
     Technology,
     gate_stats,
     json_schema,
     load_file,
-    parse_ref,
     qubit_medians,
 )
 from .table import GateNoise
@@ -86,23 +84,23 @@ class _Commands(TyperGroup):
             # Exit and Abort, from typer or click, carry an exit code: they are control flow.
             if hasattr(exc, "exit_code") or os.environ.get("NOISEVAULT_DEBUG"):
                 raise
-            err.print(
-                f"error: unexpected {type(exc).__name__}: {exc}; please report this bug at"
-                f" {REPOSITORY}/issues (NOISEVAULT_DEBUG=1 shows the traceback)",
-                markup=False,
+            _fail(
+                f"unexpected {type(exc).__name__}: {exc}",
+                f"please report this bug at {REPOSITORY}/issues"
+                " (NOISEVAULT_DEBUG=1 shows the traceback)",
             )
-            raise typer.Exit(1) from None
 
 
 def _usage_error(exc: Any) -> NoReturn:
     message = exc.format_message().rstrip(".").replace(". Did you mean", "; did you mean")
     message = message[:1].lower() + message[1:]
+    hint = None
     if not re.search(r"did you mean|possible options", message, re.I):
-        message += f"; see `{exc.ctx.command_path if exc.ctx else 'nv'} --help`"
-    err.print(f"error: {message}", markup=False)
-    raise typer.Exit(2) from None
+        hint = f"run {exc.ctx.command_path if exc.ctx else 'nv'} --help"
+    _fail(message, hint, code=2)
 
 
+_REF_HELP = "Profile id (ibm_fez), id@date, or a file path."
 _START = """
  Start with:
    nv list             the bundled devices, offline
@@ -149,11 +147,10 @@ _SOURCE_KINDS = {
     "hand_written": _SourceWords("by hand", "written by hand"),
     "derived": _SourceWords("derived", "derived from another profile"),
 }
-# What to do next, by failure type; the first match wins.
+# What to do next after a failure that carries no hint of its own; the first match wins.
 _HINTS: tuple[tuple[type[BaseException], str], ...] = (
-    (ProfileNotFound, "run `nv list` to see every profile you can load offline"),
     (ImportError, f"install the frameworks: {_INSTALL_ALL}"),
-    (ValidationError, "run `nv validate FILE` to list every problem in the file"),
+    (ValidationError, "run nv validate FILE to list every problem in the file"),
     (FileNotFoundError, "check the path, or give a profile id such as ibm_fez"),
 )
 _EXPECTED = (
@@ -220,7 +217,7 @@ def list_profiles(
             return
         if not rows:
             wanted = " ".join(x for x in (vendor, tech) if x)
-            raise ProfileNotFound(f"no {wanted} profile yet; run `nv list` to see them all")
+            raise ProfileNotFound(f"no {wanted} profile yet", hint="run nv list to see them all")
         same_day: dict[tuple[str, Any], list[datetime]] = {}
         for info in infos:
             if info.calibrated_at:
@@ -229,8 +226,15 @@ def list_profiles(
                 )
         for row, info in zip(rows, infos, strict=True):
             stamp = info.calibrated_at
-            row["when"] = _when(stamp, same_day[info.id, stamp.date()]) if stamp else "undated"
+            day = same_day[info.id, stamp.date()] if stamp else []
+            row["when"] = _when(stamp, day) if stamp else "undated"
+            row["short_ref"] = info.ref if len(day) > 1 else _ref_on_day(info.id, stamp)
             row["shown_license"] = (row["license"] or "-").split(" (")[0]
+        newest_first = sorted(
+            zip(rows, infos, strict=True),
+            key=lambda pair: (pair[1].id, -_epoch(pair[1].calibrated_at)),
+        )
+        rows = [row for row, _ in newest_first]
         licenses = {row["shown_license"] for row in rows}
         shared = licenses.pop() if len(licenses) == 1 and "-" not in licenses else None
         columns = ["id", "date", "qubits", "processor", "source"]
@@ -238,33 +242,49 @@ def list_profiles(
             columns.append("license")
         unlimited = out.options.update_width(10_000)
         table = _list_table(rows, columns)
-        if out.measure(table, options=unlimited).maximum > out.width:
-            columns.remove("source")
-            table = _list_table(rows, columns)
-        excess = out.measure(table, options=unlimited).maximum - out.width
-        if excess > 0:
-            widest = max([len("processor")] + [cell_len(r["processor"] or "-") for r in rows])
-            table.columns[columns.index("processor")].max_width = max(1, widest - excess)
-        out.print(table)
+        for column in _LIST_DROPS:
+            if out.measure(table, options=unlimited).maximum <= out.width:
+                break
+            if column in columns:
+                columns.remove(column)
+                table = _list_table(rows, columns)
+        _emit(table, width=out.measure(table, options=unlimited).maximum)
         if any(r["location"] == "vault" for r in rows):
-            out.print("* in your vault (`nv doctor` shows its folder)", markup=False)
+            _emit("* in your vault (nv doctor shows its folder)")
         count = _count(len(rows), "profile")
         if shared:
             count += f", all {shared}" if len(rows) > 1 else f", {shared}"
-        out.print(f"{count}. See one with `nv show <id>`.", markup=False)
-        out.print('Load one in Python with nv.load("<id>").', markup=False)
+        elif "license" not in columns:
+            count += f", {_licenses(rows)}"
+        _emit(f"{count}. See one with nv show <id>.")
+        _emit('Load one in Python with nv.load("<id>").')
+
+
+_LIST_DROPS = ("source", "processor", "license")
+
+
+def _licenses(rows: list[dict[str, Any]]) -> str:
+    """The most common license, and the profiles under each other one."""
+    by_license: dict[str, list[str]] = {}
+    for row in rows:
+        by_license.setdefault(row["shown_license"], []).append(row["short_ref"])
+    common, *others = sorted(by_license, key=lambda name: -len(by_license[name]))
+    named = {name: "license unknown" if name == "-" else name for name in by_license}
+    if not others:
+        return named[common]
+    exceptions = "; ".join(f"{', '.join(by_license[name])} ({named[name]})" for name in others)
+    return f"{named[common]} except {exceptions}"
 
 
 def _list_table(rows: list[dict[str, Any]], columns: list[str]) -> Table:
-    """The rows under technology headings. A cell too wide for its column ends in an ellipsis."""
+    """The rows under technology headings, in the order given. No cell is cut."""
     table = Table(box=None, pad_edge=False, header_style="bold")
     for column in columns:
         justify = "right" if column == "qubits" else "left"
-        table.add_column(column, justify=justify, no_wrap=True, overflow="ellipsis")
+        table.add_column(column, justify=justify, no_wrap=True)
     for technology in sorted({row["technology"] for row in rows}):
         table.add_row(f"[bold]{technology}[/bold]")
-        group = [r for r in rows if r["technology"] == technology]
-        for row in sorted(group, key=lambda r: r["location"] != "vault"):
+        for row in (r for r in rows if r["technology"] == technology):
             mark = "* " if row["location"] == "vault" else "  "
             cells = {
                 "id": f"{mark}{row['id']}",
@@ -318,7 +338,7 @@ def _list_row(info: catalog.ProfileInfo) -> dict[str, Any]:
 
 @app.command()
 def show(
-    ref: Annotated[str, typer.Argument(help="Profile id (ibm_fez), id@date, or a file path.")],
+    ref: Annotated[str, typer.Argument(help=_REF_HELP)],
     qubits: Annotated[
         str | None, typer.Option("--qubits", help="Also list these qubits, e.g. 0,1,2.")
     ] = None,
@@ -341,22 +361,25 @@ def show(
 
 class _OnHand(NamedTuple):
     count: int
-    other_bundled_ref: str | None
+    bundled: str | None
 
 
 def _on_hand(ref: str, profile: Profile) -> _OnHand | None:
-    """How many calibrations a bare id had to pick from, and the bundled one's ref when the id
-    loaded another. None for a dated ref, a file, or an id with one calibration."""
-    target = parse_ref(ref)
+    """How many calibrations a bare id had to pick from, and where the bundled one stands.
+    None for a dated ref, a file, or an id with one calibration."""
+    target = catalog.target(ref)
     if isinstance(target, Path) or target.date or target.timestamp:
         return None
     same = [info for info in catalog.profiles() if info.id == profile.id]
     if len(same) < 2:
         return None
-    bundled = [
-        i.ref for i in same if i.location == "bundled" and i.fingerprint != profile.fingerprint
-    ]
-    return _OnHand(len(same), bundled[0] if bundled else None)
+    bundled = next((i for i in same if i.location == "bundled"), None)
+    if bundled is None or bundled.fingerprint == profile.fingerprint:
+        return _OnHand(len(same), None)
+    if bundled.calibrated_at == profile.device.calibrated_at:
+        replaced = f"nv:{bundled.fingerprint[:12]}"
+        return _OnHand(len(same), f"your vault copy replaces the bundled one, {replaced}")
+    return _OnHand(len(same), f"the bundled one is {bundled.ref}")
 
 
 def card(profile: Profile) -> dict[str, Any]:
@@ -364,7 +387,7 @@ def card(profile: Profile) -> dict[str, Any]:
     dev, prov, table = profile.device, profile.provenance, profile.table
     medians = qubit_medians(profile)
     return {
-        "ref": f"{profile.id}@{_iso(dev.calibrated_at)}" if dev.calibrated_at else profile.id,
+        "ref": _ref(profile),
         "id": profile.id,
         "calibrated_at": _iso(dev.calibrated_at),
         "vendor": dev.vendor,
@@ -472,8 +495,8 @@ def _print_card(
     grid.add_row("device", device)
     if on_hand:
         grid.add_row("calibrations", f"newest of the {on_hand.count} you have")
-        if on_hand.other_bundled_ref:
-            grid.add_row("", f"{on_hand.other_bundled_ref} is the bundled one")
+        if on_hand.bundled:
+            grid.add_row("", on_hand.bundled)
     grid.add_row("connectivity", _describe_connectivity(data["connectivity"]))
     grid.add_row("natives", _natives_table(data["natives"]))
     grid.add_row("coherence", _coherence(data))
@@ -494,7 +517,7 @@ def _print_card(
     if not brief:
         _add_lines(grid, "assumptions", data["assumptions"])
         _add_lines(grid, "notes", data["notes"])
-    out.print(grid)
+    _emit(grid)
 
 
 def _add_lines(grid: Table, label: str, items: list[str]) -> None:
@@ -526,7 +549,7 @@ def _describe_connectivity(conn: dict[str, Any]) -> str:
 
 def _natives_table(natives: list[dict[str, Any]]) -> Table:
     table = Table(box=None, pad_edge=False, show_edge=False, header_style="italic")
-    for column in ("gate", "median avg infidelity", "duration", "records"):
+    for column in ("gate", "median avg\ninfidelity", "median\nduration", "records"):
         table.add_column(column, justify="left" if column == "gate" else "right")
     for n in natives:
         arity = f" ({n['qubits']}q)" if n["qubits"] else ""
@@ -605,23 +628,29 @@ def _qubit_row(profile: Profile, index: int) -> dict[str, Any]:
 
 
 def _print_qubits(rows: list[dict[str, Any]]) -> None:
-    table = Table(box=None, pad_edge=False, header_style="bold")
-    for column in ("qubit", "T1 (us)", "T2 (us)", "P(1|0)", "P(0|1)", "1q avg infidelity", "state"):
-        table.add_column(column, justify="right" if column != "state" else "left")
-    for r in rows:
-        one = f"{fmt_error(r['error_1q'])} ({r['gate_1q']})" if r["gate_1q"] else "-"
-        state = "disabled" if r["disabled"] else (r["label"] or "")
-        table.add_row(
+    """One row per qubit. The state column appears only when a qubit has a state."""
+    columns = ["qubit", "T1 (us)", "T2 (us)", "P(1|0)", "P(0|1)", "1q avg infidelity", "state"]
+    cells = [
+        [
             str(r["qubit"]),
             fmt_time(r["t1_us"]),
             fmt_time(r["t2_us"]),
             fmt_error(r["p1_given_0"]),
             fmt_error(r["p0_given_1"]),
-            one,
-            state,
-        )
+            f"{fmt_error(r['error_1q'])} ({r['gate_1q']})" if r["gate_1q"] else "-",
+            "disabled" if r["disabled"] else (r["label"] or ""),
+        ]
+        for r in rows
+    ]
+    if not any(row[-1] for row in cells):
+        columns.pop()
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for column in columns:
+        table.add_column(column, justify="right" if column != "state" else "left")
+    for row in cells:
+        table.add_row(*row[: len(columns)])
     out.print()
-    out.print(table)
+    _emit(table)
 
 
 # pull ---------------------------------------------------------------------------------------
@@ -659,13 +688,17 @@ def pull(
 def _check_writable(output: Path) -> None:
     folder = output.parent
     if output.is_dir():
-        raise ValueError(
-            f"-o {output} is a directory; give a file name such as {output / 'x.json'}"
+        raise NoiseVaultError(
+            f"-o {output} is a directory", hint=f"give a file name such as {output / 'x.json'}"
         )
     if not folder.is_dir():
-        raise ValueError(f"-o {output}: the folder {folder} does not exist; create it first")
+        raise NoiseVaultError(
+            f"-o {output}: the folder {folder} does not exist", hint="create it first"
+        )
     if not os.access(folder, os.W_OK):
-        raise ValueError(f"-o {output}: you cannot write to {folder}; choose another folder")
+        raise NoiseVaultError(
+            f"-o {output}: you cannot write to {folder}", hint="choose another folder"
+        )
 
 
 # diff ---------------------------------------------------------------------------------------
@@ -673,9 +706,15 @@ def _check_writable(output: Path) -> None:
 
 @app.command()
 def diff(
-    before: Annotated[str, typer.Argument(help="First profile (ref or file).")],
-    after: Annotated[str, typer.Argument(help="Second profile (ref or file).")],
-    top: Annotated[int, typer.Option("--top", min=0, help="Qubits and pairs to list.")] = 5,
+    before: Annotated[
+        str, typer.Argument(help="First profile id (ibm_fez), id@date, or a file path.")
+    ],
+    after: Annotated[
+        str, typer.Argument(help="Second profile id (ibm_kyiv), id@date, or a file path.")
+    ],
+    top: Annotated[
+        int, typer.Option("--top", min=0, metavar="N", help="Qubits and pairs to list.")
+    ] = 5,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
 ) -> None:
     """Show how calibration changed between two profiles."""
@@ -685,11 +724,13 @@ def diff(
         if as_json:
             _echo_json(result.to_dict())
             return
-        out.print(f"{_diff_title(first, second)}  ({describe_delta(result.time_delta)})")
+        _emit(
+            Text.from_markup(f"{_diff_title(first, second)}  ({describe_delta(result.time_delta)})")
+        )
         for warning in result.warnings:
             err.print(f"warning: {warning}", markup=False)
         if result.identical:
-            out.print("No change: the two profiles have the same fingerprint.")
+            _emit("No change: the two profiles have the same fingerprint.")
             return
         medians = Table(box=None, pad_edge=False, header_style="bold")
         for column in ("device median", "before", "after", "change"):
@@ -701,7 +742,7 @@ def diff(
                 fmt_metric(c.metric, c.after),
                 _change(c),
             )
-        out.print(medians)
+        _emit(medians)
         for title, changes in (("qubit", result.qubits), ("pair", result.pairs)):
             if not changes:
                 continue
@@ -719,22 +760,22 @@ def diff(
                     _change(c),
                 )
             out.print()
-            out.print(f"largest changes by {title}")
-            out.print(table)
+            _emit(f"largest changes by {title}")
+            _emit(table)
         for label, items in (
             ("newly disabled", result.newly_disabled),
             ("re-enabled", result.reenabled),
         ):
             if items:
                 out.print()
-                out.print(label)
-                out.print(_loci_table(items))
+                _emit(label)
+                _emit(_loci_table(items))
         for label, qubits in (
             ("qubits added", result.qubits_added),
             ("qubits removed", result.qubits_removed),
         ):
             if qubits:
-                out.print(f"{label}: {_runs(qubits)}", markup=False)
+                _emit(f"{label}: {_runs(qubits)}")
 
 
 def _runs(indices: Sequence[int]) -> str:
@@ -752,9 +793,11 @@ def _runs(indices: Sequence[int]) -> str:
 
 def _diff_title(first: Profile, second: Profile) -> str:
     """``a@date -> b@date``; one device is named once, with times when the dates match."""
-    if first.id != second.id:
-        return f"[bold]{_ref_on_day(first)}[/bold] -> [bold]{_ref_on_day(second)}[/bold]"
     a, b = first.device.calibrated_at, second.device.calibrated_at
+    if first.id != second.id:
+        return (
+            f"[bold]{_ref_on_day(first.id, a)}[/bold] -> [bold]{_ref_on_day(second.id, b)}[/bold]"
+        )
     if a and b and a.date() == b.date() and a != b:
         when = (_iso(a), _iso(b))
     else:
@@ -762,9 +805,8 @@ def _diff_title(first: Profile, second: Profile) -> str:
     return f"[bold]{first.id}[/bold] {when[0]} -> {when[1]}"
 
 
-def _ref_on_day(profile: Profile) -> str:
-    when = profile.device.calibrated_at
-    return f"{profile.id}@{when.date().isoformat()}" if when else profile.id
+def _ref_on_day(device: str, when: datetime | None) -> str:
+    return f"{device}@{when.date().isoformat()}" if when else device
 
 
 def _loci_table(labels: tuple[str, ...]) -> Table:
@@ -796,7 +838,7 @@ def _change(change: Any) -> str:
 
 @app.command()
 def check(
-    ref: Annotated[str, typer.Argument(help="Profile id, id@date, or a file path.")],
+    ref: Annotated[str, typer.Argument(help=_REF_HELP)],
     framework: Annotated[
         str | None,
         typer.Option(
@@ -811,7 +853,9 @@ def check(
     with _friendly():
         names = list(FRAMEWORKS)
         if framework is not None:
-            names = [n.strip().lower() for n in framework.split(",") if n.strip()]
+            names = list(
+                dict.fromkeys(n.strip().lower() for n in framework.split(",") if n.strip())
+            )
             unknown = [n for n in names if n not in FRAMEWORKS]
             if not names or unknown:
                 given = unknown[0] if unknown else framework
@@ -836,13 +880,9 @@ def check(
             chain = "-".join(str(result.layout[i]) for i in range(len(result.layout)))
             on_hand = _on_hand(ref, profile)
             newest = f" (newest of {on_hand.count})" if on_hand else ""
-            out.print(
-                f"[bold]{profile.id}[/bold]{newest} {profile.short_fingerprint} on qubits {chain}"
-            )
-            out.print(
-                f"{len(result.circuits)} circuits: {', '.join(c.name for c in result.circuits)}",
-                markup=False,
-            )
+            title = Text(_ref(profile), style="bold")
+            _emit(Text.assemble(title, f"{newest} {profile.short_fingerprint} on qubits {chain}"))
+            _emit(f"{len(result.circuits)} circuits: {', '.join(c.name for c in result.circuits)}")
             table = Table(box=None, pad_edge=False, header_style="bold")
             for column in ("framework", "result", "TVD", "tolerance", "circuits", "method"):
                 table.add_column(
@@ -868,10 +908,10 @@ def check(
                 )
             for name, _ in result.skipped:
                 table.add_row(name, "not installed" if name in missing else "skipped")
-            out.print(table)
+            _emit(table)
             for f in result.frameworks:
                 for part in f.not_run:
-                    out.print(f"{f.framework}: {part.describe()}", markup=False)
+                    _emit(f"{f.framework}: {part.describe()}")
             for name, reason in result.skipped:
                 if name not in missing:
                     out.print(f"{name} skipped: {reason}", markup=False, soft_wrap=True)
@@ -879,7 +919,7 @@ def check(
                 command = install_hint(",".join(missing))
                 out.print(f"To add the missing frameworks: {command}", markup=False, soft_wrap=True)
             if any(f.passed for f in result.frameworks):
-                out.print(NOTE, markup=False)
+                _emit(NOTE)
         if len(missing) == len(names):
             _none_installed(missing, named=framework is not None)
         if not result.frameworks:
@@ -911,7 +951,7 @@ def _none_installed(missing: list[str], *, named: bool) -> NoReturn:
 
 @app.command()
 def cite(
-    ref: Annotated[str, typer.Argument(help="Profile id, id@date, or a file path.")],
+    ref: Annotated[str, typer.Argument(help=_REF_HELP)],
     bibtex: Annotated[bool, typer.Option("--bibtex", help="Print a BibTeX entry.")] = False,
 ) -> None:
     """Print a citation for a profile, with its fingerprint."""
@@ -930,20 +970,19 @@ def validate(
         try:
             profile = load_file(file)
         except FileNotFoundError:
-            _fail(f"no file {file}; check the path")
+            _fail(f"no file {file}", "check the path")
         except ValidationError as exc:
             for line in _validation_lines(exc):
                 err.print(f"error: {line}", markup=False)
             raise typer.Exit(1) from None
         except (*_UNREADABLE, NoiseVaultError) as exc:
-            _fail(_unreadable(file, exc))
+            _fail(*_unreadable(file, exc))
     notes = [str(w.message) for w in caught] + _soft_issues(profile)
-    when = profile.device.calibrated_at.isoformat() if profile.device.calibrated_at else "undated"
-    out.print(
+    when = _iso(profile.device.calibrated_at) or "undated"
+    _emit(
         f"ok: {profile.id} calibrated {when}, {profile.device.num_qubits} qubits,"
         f" {len(profile.gates)} gates, {len(profile.calibrations)} calibration records,"
-        f" {profile.short_fingerprint}",
-        markup=False,
+        f" {profile.short_fingerprint}"
     )
     for note in notes:
         err.print(f"warning: {note}", markup=False)
@@ -964,19 +1003,19 @@ def doctor() -> None:
         except PackageNotFoundError:
             table.add_row(package, "not installed")
             missing.append(package)
-    out.print(table)
+    _emit(table)
     vault = catalog.vault_dir()
     with _friendly():
         count = len(catalog.vault_profiles()) if vault.is_dir() else 0
     out.print(f"vault: {vault} ({count} profiles)", markup=False, soft_wrap=True)
-    out.print(f"bundled profiles: {len(catalog.bundled_profiles())}")
+    _emit(f"bundled profiles: {len(catalog.bundled_profiles())}")
     extras = sorted({extra for p in missing if (extra := _PACKAGES[p])})
     if extras:
         command = install_hint(",".join(extras))
         out.print(f"To add the missing frameworks: {command}", markup=False, soft_wrap=True)
     loose = [p for p in missing if _PACKAGES[p] is None]
     if loose:
-        out.print(f"To add {', '.join(loose)}: pip install {' '.join(loose)}", markup=False)
+        _emit(f"To add {', '.join(loose)}: pip install {' '.join(loose)}")
 
 
 @app.command()
@@ -989,46 +1028,48 @@ def schema() -> None:
 
 
 def _load(ref: str) -> Profile:
-    target = parse_ref(ref)
-    if isinstance(target, Path):
-        if not target.exists():
-            raise FileNotFoundError(errno.ENOENT, "no such file", str(target))
-        if target.is_dir():
-            text = ref.strip()
-            if text == target.name and "@" not in text:  # a bare id that names a folder here
-                return catalog.resolve(Ref(text.lower())).load()
-            raise ValueError(
-                f"{ref} is a folder; give a profile file (.json or .json.gz) or a profile id"
-                " such as ibm_fez"
-            )
-        try:
-            return load_file(target)
-        except _UNREADABLE as exc:
-            raise ValueError(_unreadable(target, exc)) from None
-    return catalog.load(ref)
+    target = catalog.target(ref)
+    if not isinstance(target, Path):
+        return catalog.load(ref)
+    if not target.exists():
+        raise FileNotFoundError(errno.ENOENT, "no such file", str(target))
+    if target.is_dir():
+        raise NoiseVaultError(
+            f"{ref} is a folder", hint=f"{_PROFILE_FILE} or a profile id such as ibm_fez"
+        )
+    try:
+        return load_file(target)
+    except _UNREADABLE as exc:
+        message, hint = _unreadable(target, exc)
+        raise NoiseVaultError(message, hint=hint) from None
 
 
 # What reading a profile file can raise besides FileNotFoundError; ValidationError is a ValueError.
 _UNREADABLE = (ValueError, OSError, EOFError, zlib.error)
 
 
-def _unreadable(path: Path, exc: BaseException) -> str:
-    """One line naming the file, what is wrong with it, and what to do."""
+_PROFILE_FILE = "give a profile file (.json or .json.gz)"
+
+
+def _unreadable(path: Path, exc: BaseException) -> tuple[str, str | None]:
+    """What is wrong with a file, and what to do about it."""
     if isinstance(exc, ValidationError):
         problems = _count(exc.error_count(), "problem")
-        return f"{path} is not a valid profile ({problems}); run `nv validate {path}` to list them"
+        return f"{path} is not a valid profile ({problems})", f"run nv validate {path} to list them"
     if isinstance(exc, json.JSONDecodeError):
         where = f"{exc.msg} at line {exc.lineno}, column {exc.colno}"
-        return f"{path} is not JSON ({where}); give a profile file (.json or .json.gz)"
+        return f"{path} is not JSON ({where})", _PROFILE_FILE
     if isinstance(exc, UnicodeDecodeError):
-        return f"{path} is not JSON (not UTF-8 text); give a profile file (.json or .json.gz)"
+        return f"{path} is not JSON (not UTF-8 text)", _PROFILE_FILE
     if isinstance(exc, EOFError | zlib.error | gzip.BadGzipFile):
-        return f"cannot read {path}: it is a damaged gzip file ({exc}); copy or pull it again"
+        return f"cannot read {path}: it is a damaged gzip file ({exc})", "copy or pull it again"
     if isinstance(exc, IsADirectoryError):
-        return f"cannot read {path}: it is a folder; give a profile file (.json or .json.gz)"
+        return f"cannot read {path}: it is a folder", _PROFILE_FILE
     if isinstance(exc, OSError):
-        return f"cannot read {path}: {exc.strerror or exc}; check the file and its permissions"
-    return f"{path}: {exc}"
+        return f"cannot read {path}: {exc.strerror or exc}", "check the file and its permissions"
+    if isinstance(exc, NoiseVaultError):
+        return f"{path}: {exc.message}", exc.hint
+    return f"{path}: {exc}", None
 
 
 @contextmanager
@@ -1052,28 +1093,28 @@ def _report_warnings(caught: list[warnings.WarningMessage]) -> None:
     caught.clear()
 
 
-def _error(exc: BaseException) -> None:
-    if isinstance(exc, ValidationError):
-        message = f"not a valid profile ({_count(exc.error_count(), 'problem')})"
-    elif isinstance(exc, FileNotFoundError) and exc.filename:
-        message = f"no file {exc.filename}"
-    else:
-        message = _cli_terms(str(exc) or type(exc).__name__)
-    err.print(f"error: {message}", markup=False)
+def _error(exc: BaseException) -> NoReturn:
+    if isinstance(exc, NoiseVaultError):
+        _fail(_cli_terms(exc.message), exc.hint and _cli_terms(exc.hint))
     hint = next((h for kind, h in _HINTS if isinstance(exc, kind)), None)
-    if hint and "did you mean" not in message and "`nv " not in message:
-        err.print(f"hint: {hint}", markup=False)
-    raise typer.Exit(1) from None
+    if isinstance(exc, ValidationError):
+        _fail(f"not a valid profile ({_count(exc.error_count(), 'problem')})", hint)
+    if isinstance(exc, FileNotFoundError) and exc.filename:
+        _fail(f"no file {exc.filename}", hint)
+    _fail(_cli_terms(str(exc) or type(exc).__name__), hint)
 
 
 # Library messages name Python arguments; at the command line the same choice is a flag.
 _CLI_TERMS = (
     (re.compile(r"""source=(['"])([\w-]+)\1 or (['"])([\w-]+)\3"""), r"--source \2 or \4"),
     (re.compile(r"""source=(['"])([\w-]+)\1"""), r"--source \2"),
-    (re.compile(r"""nv\.load\((['"])([\w.@:-]+)\1\)"""), r"`nv show \2`"),
+    (re.compile(r"""nv\.load\((['"])([\w.@:-]+)\1\)"""), r"nv show \2"),
     (re.compile(r"\bat=(?= )"), "--at"),
     (re.compile(r"\bat=(?=['\"])"), "--at "),
-    (re.compile(r"pass expect='nv:\.\.\.' or load a file:"), "give one of their files instead:"),
+    (
+        re.compile(r"pass expect='nv:\.\.\.' or load one of their files:"),
+        "give one of their files:",
+    ),
 )
 
 
@@ -1087,13 +1128,39 @@ def _count(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
-def _fail(message: str) -> None:
+def _fail(message: str, hint: str | None = None, *, code: int = 1) -> NoReturn:
+    """The fact on an ``error:`` line, and the next step, if any, on a ``hint:`` line."""
     err.print(f"error: {message}", markup=False)
-    raise typer.Exit(1)
+    if hint:
+        err.print(f"hint: {hint}", markup=False)
+    raise typer.Exit(code) from None
+
+
+def _emit(renderable: RenderableType, *, width: int | None = None) -> None:
+    """Print without the spaces rich pads and wraps lines with, so pasted output is clean. A
+    string is plain text, not markup. With a ``width`` above the terminal's, rich lays the lines
+    out at that width and the terminal wraps them, so no cell is cut."""
+    if isinstance(renderable, str):
+        renderable = Text(renderable)
+    options = out.options if width is None else out.options.update_width(width)
+    for line in out.render_lines(renderable, options, pad=False):
+        text = Text.assemble(*((segment.text, segment.style) for segment in line))
+        text.rstrip()
+        out.print(text, soft_wrap=True)
 
 
 def _echo_json(data: Any) -> None:
     typer.echo(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _ref(profile: Profile) -> str:
+    """The ref that loads this calibration: ``id@timestamp``, or the id when it has no date."""
+    when = profile.device.calibrated_at
+    return f"{profile.id}@{_iso(when)}" if when else profile.id
+
+
+def _epoch(when: datetime | None) -> float:
+    return when.timestamp() if when else float("-inf")
 
 
 def _iso(when: datetime | None) -> str | None:

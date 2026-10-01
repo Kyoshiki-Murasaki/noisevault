@@ -17,11 +17,12 @@ profile files still load.
   [docs/profile-format.md](docs/profile-format.md).
 - **Fingerprints.** Every profile has a SHA-256 fingerprint of its physics.
   `nv.load(ref, expect="nv:...")` fails if the profile changed, and `nv cite` prints a
-  citation with the full fingerprint. On a mismatch, the error names the calibration the ref
-  loaded and, if you have it, the ref of the calibration with the pinned fingerprint. A dated
-  ref with no calibration on that UTC day fails with "no ibm_fez profile calibrated on
-  2025-03-01 UTC", and for a device `nv pull` serves, the error ends with the
-  `nv pull ibm_fez --at 2025-03-01` command that fetches the calibration in effect then.
+  citation with the full fingerprint, the NoiseVault version and the ref that loads the cited
+  calibration. On a mismatch, the error names the calibration the ref loaded and, if you have
+  it, the ref of the calibration with the pinned fingerprint. A dated ref with no calibration
+  on that UTC day fails with "no ibm_fez profile calibrated on 2025-03-01 UTC", and for a
+  device `nv pull` serves, its hint is the `nv pull ibm_fez --at 2025-03-01` command that
+  fetches the calibration in effect then.
 - **25 bundled profiles that load offline**: 18 IBM devices from qiskit-ibm-runtime, 5
   Quantinuum machines from Quantinuum's published benchmark data, and Google's Rainbow and
   Weber from cirq-google. All are Apache-2.0 data, and the files are byte-identical on
@@ -65,13 +66,26 @@ profile files still load.
   well-calibrated chain of qubits that each have every one-qubit native the device has.
 - **Command line** `nv` (also `noisevault`): `list`, `show`, `pull`, `diff`, `check`, `cite`,
   `validate`, `doctor` and `schema`.
-  - A bare `nv` prints the help. A usage mistake prints one line with the closest match.
-  - `nv check` lists missing frameworks with one install command, and counts a circuit that
-    ran with gates removed as reduced. It also samples a measurement-only circuit through each
+  - A bare `nv` prints the help, which ends with three commands to start with. A usage
+    mistake prints one line with the closest match.
+  - A failure prints what went wrong on an `error:` line and the next step on a `hint:` line.
+    In Python, a `NoiseVaultError` keeps that step in `hint`, and `str(error)` ends with it.
+  - `nv show` and `nv diff` label gate errors as average gate infidelity.
+    When you have several calibrations of a device, `nv show` and `nv check` say which one a
+    bare id loaded, and `nv check` names the calibration it checked.
+  - `nv check` lists missing frameworks with one install command, and with no framework
+    installed it prints one error and one install command. It counts a circuit that ran with
+    gates removed as reduced. It also samples a measurement-only circuit through each
     framework's own readout. Each row shows the TVD and the tolerance of the circuit with the
     highest ratio of TVD to tolerance. `--json` reports that circuit's name, TVD and tolerance
     under `worst`.
-  - `nv list` shows the time when two calibrations share a date.
+  - `nv list` keeps one device's calibrations together, newest first, and shows the time when
+    two calibrations share a date. It never cuts an id or a date. In a narrow terminal it
+    leaves out the source, then the processor, then the license column, and its last line
+    then names each license. A license all profiles share is stated once.
+  - `nv validate` says what an unknown or a missing key means.
+  - Output writes commands plainly, without backticks, so they paste into a shell as they are,
+    and no line ends in padding spaces.
   - `nv diff` marks values as new or gone and compares both orders of a symmetric pair.
   - A damaged or unreadable file in the vault is skipped with a warning, and the other
     profiles still list and load.
@@ -82,7 +96,7 @@ profile files still load.
 - Install from GitHub with the extra for your framework:
   `pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"`.
   To try the command line without installing, run
-  `uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault nv list`.
+  `uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault nv show ibm_fez`.
 - The core install needs only numpy, pydantic, typer and rich. Qiskit, Cirq, PennyLane and
   Stim are extras, and importing `noisevault` imports none of them.
 - Minimum versions are pennylane 0.43.3, stim 1.15, typer 0.27 and rich 13.8. CI installs

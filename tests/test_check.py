@@ -4,10 +4,12 @@ import functools
 import importlib
 import json
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 from conftest import require, toy
+from typer.testing import CliRunner
 
 import noisevault as nv
 from noisevault import gates
@@ -20,6 +22,7 @@ from noisevault.check import (
     build_circuits,
     check,
 )
+from noisevault.cli import app
 from noisevault.errors import LayoutError, NoiseVaultError, install_hint
 from noisevault.profile import Profile
 from noisevault.reference import _apply
@@ -431,8 +434,13 @@ def test_the_default_chain_leaves_out_a_link_only_a_custom_gate_calibrates() -> 
     data = toy(gates=gates, calibrations=custom, connectivity={"edges": [[0, 1]]})
     profile = Profile.model_validate(data)
     assert profile.suggest_layout(3) == {0: 0, 1: 1, 2: 2}
-    with pytest.raises(LayoutError, match="qubits 1 and 2 share no calibrated 2-qubit native"):
+    with pytest.raises(
+        LayoutError, match="qubits 1 and 2 share no calibrated 2-qubit native"
+    ) as info:
         check(profile, layout=[0, 1, 2])
+    assert info.value.hint == (
+        "pass a layout whose neighbors are connected (profile.suggest_layout(n) gives one)"
+    )
     result = check(profile, frameworks=["cirq"])
     assert result.layout == {0: 0, 1: 1}
     assert result.passed, result
@@ -451,16 +459,28 @@ def test_the_default_chain_leaves_out_qubits_no_one_qubit_native_calibrates(
 ) -> None:
     profile = _sx_calibrated_on(*calibrated)
     assert profile.suggest_layout(3) == {0: 0, 1: 1, 2: 2}
-    with pytest.raises(NoiseVaultError, match=r"known unitary on qubits \[0, 1, 2\], so there"):
+    with pytest.raises(
+        NoiseVaultError, match=r"known unitary on qubits \[0, 1, 2\], so there"
+    ) as info:
         check(profile, layout=[0, 1, 2])
+    assert info.value.hint == "pass layout= with other qubits"
     result = check(profile, frameworks=["cirq"])
     assert result.layout == layout
     assert result.passed, result
 
 
-def test_with_no_calibrated_one_qubit_native_the_one_qubit_chain_has_nothing_to_check() -> None:
-    with pytest.raises(NoiseVaultError, match=r"on qubits \[0\], so there is nothing to check"):
+def test_with_no_calibrated_one_qubit_native_the_one_qubit_chain_has_nothing_to_check(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        NoiseVaultError, match=r"on qubits \[0\], so there is nothing to check$"
+    ) as info:
         check(_sx_calibrated_on())
+    assert info.value.hint is None
+    path = _sx_calibrated_on().save(tmp_path / "toy.json")
+    result = CliRunner().invoke(app, ["check", str(path)])
+    assert result.stderr.startswith("error: test_toy has no calibrated native gate")
+    assert "hint:" not in result.stderr and "layout=" not in result.stderr
 
 
 def test_a_device_with_every_qubit_disabled_has_no_default_chain() -> None:

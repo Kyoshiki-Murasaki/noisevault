@@ -234,7 +234,8 @@ def check(
     if not circuits:
         raise NoiseVaultError(
             f"{profile.id} has no calibrated native gate with a known unitary on qubits {chain},"
-            " so there is nothing to check; pass layout= with other qubits"
+            " so there is nothing to check",
+            hint=None if layout is None else "pass layout= with other qubits",
         )
     expected = _Expected(profile, chain)
     results, skipped = [], []
@@ -297,9 +298,9 @@ def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int]) -> 
         for i in range(n - 1):
             if not _two_qubit_ops(profile, chain, i):
                 raise LayoutError(
-                    f"qubits {chain[i]} and {chain[i + 1]} share no calibrated 2-qubit native"
-                    " gate; pass a layout whose neighbors are connected"
-                    " (profile.suggest_layout(n) gives one)"
+                    f"qubits {chain[i]} and {chain[i + 1]} share no calibrated 2-qubit native gate",
+                    hint="pass a layout whose neighbors are connected"
+                    " (profile.suggest_layout(n) gives one)",
                 )
     return chain
 

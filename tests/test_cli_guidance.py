@@ -17,9 +17,12 @@ runner = CliRunner()
 
 
 def _one_error(args: list[str], code: int = 1) -> str:
+    """The error line and, when there is a next step, the hint line after it."""
     result = runner.invoke(app, args, env={"COLUMNS": "80"}, prog_name="nv")
     assert result.exit_code == code and result.stdout == ""
-    assert result.stderr.startswith("error: ") and result.stderr.count("\n") == 1, result.stderr
+    first, *rest = result.stderr.splitlines()
+    assert first.startswith("error: ") and len(rest) <= 1, result.stderr
+    assert all(line.startswith("hint: ") for line in rest), result.stderr
     return result.stderr
 
 
@@ -47,8 +50,8 @@ def test_pull_of_a_mistyped_ionq_device_names_the_close_one(monkeypatch) -> None
     [
         ("ibmm", "unknown source 'ibmm'; did you mean ibm? choose one of ibm, ibm-account, ionq"),
         ("IBM-Account", None),
-        ("googel", "google devices have no live source; `nv list --vendor google` shows"),
-        ("google", "google devices have no live source; `nv list --vendor google` shows"),
+        ("googel", "no live source serves google devices; to see the bundled ones, run nv list"),
+        ("google", "no live source serves google devices; to see the bundled ones, run nv list"),
         ("xyz", "unknown source 'xyz'; choose one of ibm, ibm-account, ionq\n"),
     ],
 )
@@ -75,7 +78,7 @@ def test_an_ambiguous_ref_on_the_command_line_says_what_to_type(vault: Path) -> 
     first, second = _same_time_pair(vault)
     error = _one_error(["show", "ibm_manila@2024-05-27T18:27:23Z"])
     assert "expect=" not in error
-    assert f"give one of their files instead: {first}, {second}" in error
+    assert f"\nhint: give one of their files: {first}, {second}\n" in error
     assert runner.invoke(app, ["show", str(first)]).exit_code == 0
 
 
@@ -89,12 +92,14 @@ def test_an_ambiguous_ref_in_python_keeps_the_python_fix(vault: Path) -> None:
 @pytest.mark.parametrize(
     ("args", "error"),
     [
-        (["--bogus"], "error: no such option: --bogus; see `nv --help`\n"),
+        (["--bogus"], "error: no such option: --bogus\nhint: run nv --help\n"),
         (["--vresion"], "error: no such option: --vresion (Possible options: --version)\n"),
-        (["--bogus", "list"], "error: no such option: --bogus; see `nv --help`\n"),
+        (["--bogus", "list"], "error: no such option: --bogus\nhint: run nv --help\n"),
     ],
 )
-def test_a_mistyped_top_level_option_is_one_line(args: list[str], error: str) -> None:
+def test_a_mistyped_top_level_option_is_one_error_and_at_most_one_hint(
+    args: list[str], error: str
+) -> None:
     assert _one_error(args, code=2) == error
 
 

@@ -21,7 +21,7 @@ import noisevault as nv
 from noisevault import catalog
 from noisevault.catalog import bundled_profiles, vault_dir, vault_path
 from noisevault.cli import app
-from noisevault.errors import AmbiguousRef, FingerprintMismatch, ProfileNotFound
+from noisevault.errors import AmbiguousRef, FingerprintMismatch, ProfileNotFound, SourceUnavailable
 from noisevault.profile import Profile
 
 FRAMEWORKS = {
@@ -98,30 +98,62 @@ def test_vault_refs_newest_date_and_ambiguity(vault: Path) -> None:
     assert nv.load("test_toy@2025-01-01T20:00:00Z").gates["sx"].avg_infidelity == 2e-3
     with pytest.raises(AmbiguousRef) as info:
         nv.load("test_toy@2025-01-01")
-    assert "2025-01-01T08:00:00Z" in str(info.value) and "2025-01-01T20:00:00Z" in str(info.value)
+    assert "2025-01-01T08:00:00Z" in info.value.message
+    assert "2025-01-01T20:00:00Z" in info.value.message
+    assert info.value.hint == "use a full timestamp"
     with pytest.raises(ProfileNotFound, match="2024-12-31 UTC; you have test_toy@2025-01-01T08"):
         nv.load("test_toy@2024-12-31")
 
 
 def test_a_ref_date_that_misses_says_it_names_the_calibration_day() -> None:
     misses = {
-        "ibm_fez@2025-03-01": "no ibm_fez profile calibrated on 2025-03-01 UTC; you have"
-        " ibm_fez@2025-02-26T20:16:25Z; to fetch the calibration in effect at 2025-03-01, run"
-        " `nv pull ibm_fez --at 2025-03-01`",
-        "quantinuum_h2-1@2020-01-01": "no quantinuum_h2-1 profile calibrated on 2020-01-01 UTC;"
-        " you have quantinuum_h2-1@2025-04-30T00:00:00Z",
-        "ibm_fez@2025-02-26T00:00:00Z": "no ibm_fez profile calibrated at 2025-02-26T00:00:00Z;"
-        " you have ibm_fez@2025-02-26T20:16:25Z",
+        "ibm_fez@2025-03-01": (
+            "no ibm_fez profile calibrated on 2025-03-01 UTC;"
+            " you have ibm_fez@2025-02-26T20:16:25Z",
+            "to fetch the calibration in effect at 2025-03-01, run nv pull ibm_fez --at 2025-03-01",
+        ),
+        "quantinuum_h2-1@2020-01-01": (
+            "no quantinuum_h2-1 profile calibrated on 2020-01-01 UTC;"
+            " you have quantinuum_h2-1@2025-04-30T00:00:00Z",
+            None,
+        ),
+        "ibm_fez@2025-02-26T00:00:00Z": (
+            "no ibm_fez profile calibrated at 2025-02-26T00:00:00Z;"
+            " you have ibm_fez@2025-02-26T20:16:25Z",
+            None,
+        ),
     }
-    for ref, message in misses.items():
+    for ref, (message, hint) in misses.items():
         with pytest.raises(ProfileNotFound) as info:
             nv.load(ref)
-        assert str(info.value) == message
+        assert (info.value.message, info.value.hint) == (message, hint)
+        assert str(info.value) == (f"{message}; {hint}" if hint else message)
+
+
+def test_an_unknown_id_says_where_to_see_the_ids() -> None:
+    with pytest.raises(ProfileNotFound) as info:
+        nv.load("xyzzy")
+    assert info.value.message == "no profile with id 'xyzzy'"
+    assert info.value.hint == "run nv list to see every profile you can load offline"
 
 
 def test_unknown_id_suggests_close_matches() -> None:
     with pytest.raises(ProfileNotFound, match="ibm_manila"):
         nv.load("ibm_manilla")
+
+
+def test_an_id_that_also_names_a_folder_here_loads_the_id(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ibm_manila").mkdir()
+    assert nv.load("ibm_manila") == nv.load("ibm_manila@2024-05-27")
+    assert nv.catalog.resolve("ibm_manila").location == "bundled"
+
+
+def test_pulling_a_bundled_device_no_source_serves_says_how_to_load_it() -> None:
+    with pytest.raises(SourceUnavailable) as info:
+        nv.pull("google_weber")
+    assert info.value.hint == "google_weber is bundled, so nv.load('google_weber') loads it offline"
+    assert str(info.value).endswith(f"; {info.value.hint}")
 
 
 def test_vault_copy_of_a_bundled_profile_is_not_ambiguous(vault: Path) -> None:
@@ -199,11 +231,12 @@ def test_a_fingerprint_mismatch_names_the_calibration_that_has_the_pin(vault: Pa
         "ibm_manila@2024-06-03": f"ibm_manila@2024-06-03 is {held}",
         str(path): f"{path} holds ibm_manila@2024-06-03T10:00:00Z ({held})",
     }
-    found = "ibm_manila@2024-05-27T18:27:23Z, which you have, has that fingerprint"
+    hint = "load ibm_manila@2024-05-27T18:27:23Z, which has that fingerprint"
     for ref, head in heads.items():
         with pytest.raises(FingerprintMismatch) as info:
             nv.load(ref, expect=pin)
-        assert str(info.value) == f"{head}, not the expected {pin}; {found}; load that ref instead"
+        assert info.value.message == f"{head}, not the expected {pin}"
+        assert info.value.hint == hint and str(info.value).endswith(f"; {hint}")
     assert nv.load("ibm_manila@2024-05-27T18:27:23Z", expect=pin) == bundled
 
 
@@ -211,24 +244,30 @@ def test_a_fingerprint_no_profile_has_says_how_to_get_the_file() -> None:
     nowhere, held = "nv:000000000000", nv.load("ibm_manila").short_fingerprint
     with pytest.raises(FingerprintMismatch) as info:
         nv.load("ibm_manila", expect=nowhere)
-    assert str(info.value) == (
+    assert info.value.message == (
         f"ibm_manila loads ibm_manila@2024-05-27T18:27:23Z ({held}), not the expected"
-        f" {nowhere}, and no profile you have has that fingerprint; ask whoever"
-        " pinned it for the profile file, or fetch that calibration with"
-        " `nv pull ibm_manila --at <a time it was in effect>` if the source still serves it"
+        f" {nowhere}, and no profile you have has that fingerprint"
+    )
+    assert info.value.hint == (
+        "ask whoever pinned it for the profile file, or, if the source still serves that"
+        " calibration, run nv pull ibm_manila --at <a time it was in effect>"
     )
     with pytest.raises(FingerprintMismatch) as info:
         nv.load("quantinuum_h2-1", expect=nowhere)
-    assert str(info.value).endswith("; ask whoever pinned it for the profile file")
+    assert info.value.hint == "ask whoever pinned it for the profile file"
 
 
 def test_same_time_profiles_in_the_vault_are_told_apart_by_expect(vault: Path) -> None:
     first, second = _changed_manila(5e-4), _changed_manila(6e-4)
     first.save(vault / "first.json.gz")
     second.save(vault / "second.json.gz")
-    with pytest.raises(AmbiguousRef, match="expect='nv:...'") as info:
+    with pytest.raises(AmbiguousRef) as info:
         nv.load("ibm_manila@2024-05-27T18:27:23Z")
-    assert "first.json.gz" in str(info.value) and "second.json.gz" in str(info.value)
+    assert info.value.message.startswith("ibm_manila matches 2 profiles that share a calibration")
+    assert info.value.hint == (
+        "pass expect='nv:...' or load one of their files:"
+        f" {vault / 'first.json.gz'}, {vault / 'second.json.gz'}"
+    )
     assert nv.load("ibm_manila", expect=second.fingerprint) == second
 
 
@@ -419,7 +458,7 @@ def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:
     ]
     assert all("\n" not in m for m in messages)
     assert f"links to {vault.parent / 'moved_away.json.gz'}, which does not exist" in messages[2]
-    assert f"run `nv validate {vault / 'empty.json'}`" in messages[0]
+    assert messages[0].endswith(f"; run nv validate {vault / 'empty.json'}")
 
 
 def test_a_link_to_an_unreadable_file_is_skipped_and_the_rest_still_list(

@@ -45,9 +45,9 @@ print(fez.suggest_layout(4))
 ```
 
 `suggest_layout(n)` returns a connected chain of n enabled qubits with low summed gate and
-readout error. It prefers complete qubits: qubits with every single-qubit native, other than
-the identity, that is usable on at least one qubit of the device, counting calibration records
-that enable or disable a gate.
+readout error. It prefers complete qubits. A complete qubit has every single-qubit native,
+apart from the identity, that is usable on at least one qubit of the device. The records that
+enable or disable a gate decide where it is usable.
 It is a starting point, not a placer. A layout onto a disabled or missing qubit raises
 `LayoutError` with the fix.
 

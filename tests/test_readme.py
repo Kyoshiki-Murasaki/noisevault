@@ -33,6 +33,7 @@ from rich.terminal_theme import TerminalTheme
 from typer.testing import CliRunner
 
 from noisevault import catalog, cli
+from noisevault.check import NOTE
 
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
@@ -369,6 +370,10 @@ def same_line(shown: str, current: str) -> bool:
     except ValueError:
         return False
     return all(max(x, y) < ROUNDOFF or max(x, y) <= 10 * min(x, y) for x, y in pairs)
+
+
+def test_the_readme_says_what_a_pass_means_in_the_words_nv_check_prints() -> None:
+    assert NOTE in " ".join(TEXT.split())
 
 
 def test_check_output_matches_a_current_run() -> None:
