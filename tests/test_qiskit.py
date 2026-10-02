@@ -28,7 +28,7 @@ from qiskit import QuantumCircuit, transpile  # noqa: E402
 from qiskit.circuit import Parameter  # noqa: E402
 from qiskit.circuit.library import iSwapGate  # noqa: E402
 from qiskit.quantum_info import SuperOp  # noqa: E402
-from qiskit.transpiler import PassManager  # noqa: E402
+from qiskit.transpiler import CouplingMap, PassManager  # noqa: E402
 from qiskit_aer import AerSimulator  # noqa: E402
 from qiskit_aer.noise.passes import RelaxationNoisePass  # noqa: E402
 
@@ -92,7 +92,7 @@ def tvd(p: np.ndarray, q: np.ndarray) -> float:
 
 
 def ghz(n: int) -> QuantumCircuit:
-    qc = QuantumCircuit(n)
+    qc = QuantumCircuit(n, name=f"ghz{n}")
     qc.h(0)
     for i in range(n - 1):
         qc.cx(i, i + 1)
@@ -547,11 +547,81 @@ def test_run_rejects_an_untranspiled_circuit_with_the_fix(manila: Profile) -> No
         " does not provide cx on that locus)"
     )
     assert caught.value.hint == _TRANSPILE_FIRST
-    with pytest.raises(CircuitNotNativeError) as caught:
-        sim.run(QuantumCircuit(6, name="wide"))
-    assert caught.value.message == "circuit 'wide' has 6 qubits but ibm_manila has 5"
-    assert caught.value.hint == _TRANSPILE_FIRST
     assert sim.run(transpile(ghz(2), sim), shots=10).result().success
+
+
+def _ghz_for_a_line_of_8(n: int) -> QuantumCircuit:
+    return transpile(
+        ghz(n),
+        coupling_map=CouplingMap.from_line(8),
+        basis_gates=["cx", "rz", "sx", "x"],
+        seed_transpiler=1,
+    )
+
+
+def _five_of_eight_qubits() -> QuantumCircuit:
+    circuit = QuantumCircuit(8, 5, name="sparse")
+    circuit.h(0)
+    circuit.cx([0, 2, 4, 6], [2, 4, 6, 7])
+    circuit.barrier()
+    circuit.measure([0, 2, 4, 6, 7], range(5))
+    return circuit
+
+
+_BUILD_NARROWER = (
+    "transpile also counts its idle qubits, so build it on at most 5 qubits and run"
+    " sim.run(transpile(circuit, sim))"
+)
+
+
+@pytest.mark.parametrize(
+    ("build", "message", "hint"),
+    [
+        (
+            lambda: _ghz_for_a_line_of_8(3),
+            "circuit 'ghz3' has 8 qubits but ibm_manila has 5",
+            "it was transpiled for a backend with 8 qubits, so transpile your original circuit"
+            " for this simulator instead: sim.run(transpile(original, sim))",
+        ),
+        (
+            lambda: _ghz_for_a_line_of_8(6),
+            "circuit 'ghz6' has 8 qubits but ibm_manila has 5",
+            "it was transpiled for a backend with 8 qubits from a circuit with 6, so transpile that"
+            " circuit for a profile with at least 6 qubits (nv list shows how many each profile"
+            " has)",
+        ),
+        (
+            _five_of_eight_qubits,
+            "circuit 'sparse' has 8 qubits but ibm_manila has 5",
+            _BUILD_NARROWER,
+        ),
+        (
+            lambda: QuantumCircuit(6, name="empty"),
+            "circuit 'empty' has 6 qubits but ibm_manila has 5",
+            _BUILD_NARROWER,
+        ),
+        (
+            lambda: ghz(6),
+            "circuit 'ghz6' has 6 qubits but ibm_manila has 5",
+            "it needs 6 qubits, so run it on a profile with at least 6 qubits (nv list shows how"
+            " many each profile has)",
+        ),
+    ],
+    ids=[
+        "transpiled elsewhere, fits",
+        "transpiled elsewhere, too many",
+        "idle qubits",
+        "no operations",
+        "too many",
+    ],
+)
+def test_a_circuit_wider_than_the_device_gets_a_step_that_can_work(
+    manila: Profile, build, message, hint
+) -> None:
+    with pytest.raises(CircuitNotNativeError) as caught:
+        quiet_export(manila).run(build())
+    assert caught.value.message == message
+    assert caught.value.hint == hint
 
 
 # reset and delays ----------------------------------------------------------------------------

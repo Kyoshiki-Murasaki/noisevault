@@ -39,7 +39,7 @@ except ImportError as exc:
         f"the Qiskit export needs Qiskit and Qiskit Aer: {install_hint('qiskit')}"
     ) from exc
 
-from qiskit.circuit import Delay, Gate, Measure, Parameter, QuantumCircuit, Reset
+from qiskit.circuit import Barrier, Delay, Gate, Measure, Parameter, QuantumCircuit, Reset
 from qiskit.circuit import library as qiskit_gates
 from qiskit.circuit.equivalence_library import SessionEquivalenceLibrary
 from qiskit.circuit.library import CXGate, PauliGate, UnitaryGate, XXPlusYYGate
@@ -104,8 +104,9 @@ def _cx_via_sqrt_iswap() -> QuantumCircuit:
 SessionEquivalenceLibrary.add_equivalence(CXGate(), _cx_via_sqrt_iswap())
 # Registry natives Qiskit has no gate for, exported as this module's own.
 _OWN_GATES: dict[str, type[Gate]] = {"sqrt_iswap": SqrtISwapGate}
-# Simulator directives that act on no device resource.
+# Barriers and simulator directives, which act on no device resource.
 _DIRECTIVES = (
+    Barrier,
     SaveData,
     SetDensityMatrix,
     SetMatrixProductState,
@@ -217,11 +218,11 @@ class NoiseVaultSimulator(AerSimulator):
             raise CircuitNotNativeError(
                 f"circuit {circuit.name!r} has {circuit.num_qubits} qubits but {self.profile.id}"
                 f" has {target.num_qubits}",
-                hint=_TRANSPILE_FIX,
+                hint=_width_hint(circuit, target.num_qubits),
             )
         for instruction in circuit.data:
             op = instruction.operation
-            if op.name == "barrier" or isinstance(op, _DIRECTIVES):
+            if isinstance(op, _DIRECTIVES):
                 continue
             qargs = tuple(circuit.find_bit(q).index for q in instruction.qubits)
             if not target.instruction_supported(op.name, qargs):
@@ -245,6 +246,35 @@ class NoiseVaultSimulator(AerSimulator):
             qargs = tuple(circuit.find_bit(q).index for q in instruction.qubits)
             for event, key in self._events.get((instruction.operation.name, qargs), ()):
                 self.report.count(event, key)
+
+
+def _width_hint(circuit: QuantumCircuit, width: int) -> str:
+    """The next step for a circuit with more qubits than the device's ``width``."""
+    if circuit.layout is None:
+        acted_on = {
+            q for i in circuit.data if not isinstance(i.operation, _DIRECTIVES) for q in i.qubits
+        }
+        needed = len(acted_on)
+        if needed <= width:
+            return (
+                f"transpile also counts its idle qubits, so build it on at most {width} qubits and"
+                " run sim.run(transpile(circuit, sim))"
+            )
+        return (
+            f"it needs {needed} qubits, so run it on a profile with at least {needed} qubits (nv"
+            " list shows how many each profile has)"
+        )
+    needed = len(circuit.layout.initial_index_layout(filter_ancillas=True))
+    if needed <= width:
+        return (
+            f"it was transpiled for a backend with {circuit.num_qubits} qubits, so transpile your"
+            " original circuit for this simulator instead: sim.run(transpile(original, sim))"
+        )
+    return (
+        f"it was transpiled for a backend with {circuit.num_qubits} qubits from a circuit with"
+        f" {needed}, so transpile that circuit for a profile with at least {needed} qubits (nv list"
+        " shows how many each profile has)"
+    )
 
 
 def to_qiskit(
