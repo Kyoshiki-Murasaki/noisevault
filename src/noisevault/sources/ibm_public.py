@@ -68,7 +68,7 @@ _CONFIGURATION = TypeAdapter(_Configuration)
 def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
     """The calibration of ``device`` now, or the newest one older than ``at``.
 
-    ``at`` is a datetime or ISO 8601 string; a date or naive time is read as UTC.
+    ``at`` is a datetime or ISO 8601 string. A date or a naive time is UTC.
     """
     name = device.strip().lower()
     url = properties_url(name, at)
@@ -139,7 +139,7 @@ def listed_devices() -> list[str]:
 
 
 def _processor(name: str) -> str | None:
-    """The processor type from the public configuration; None when it cannot be read."""
+    """The processor type from the public configuration, or None if NoiseVault cannot read it."""
     url = f"{BASE_URL}/{urllib.parse.quote(name)}/configuration"
     try:
         config = read_reply(fetch(url), url, _CONFIGURATION, sender=_SENDER, hint=_TRY_LATER)
@@ -160,18 +160,18 @@ def _not_found(name: str, at: str | date | datetime | None) -> SourceUnavailable
         )
     from ..catalog import bundled_profiles as bundled
 
-    known = f" (it lists {', '.join(listed)})" if listed else ""
+    known = f" (the endpoint lists {', '.join(listed)})" if listed else ""
     guess = did_you_mean(name, listed or [])
     if any(info.id == name for info in bundled()):
         hint = f"{name} is bundled, so nv.load({name!r}) loads it offline"
     else:
         hint = "if your IBM account can see it, pull with source='ibm-account'"
-    retired = "if not, it may be retired" if guess else "it may be retired"
+    retired = "if not, the device may be retired" if guess else "the device may be retired"
     return SourceUnavailable(
         f"{name} is not listed on the public endpoint{known}; {guess}{retired}", hint=hint
     )
 
 
 def bundled_profiles() -> list[Profile]:
-    """Live pulls are never bundled: IBM's terms for this data are not an open license."""
+    """None, because IBM's terms for this data are not an open license."""
     return []

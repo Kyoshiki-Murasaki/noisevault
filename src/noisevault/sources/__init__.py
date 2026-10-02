@@ -30,7 +30,9 @@ class Origin:
         return SourceDataError(f"{self.name}: {problem}", hint=self.hint)
 
     def profile(self, data: Mapping[str, Any]) -> Profile:
-        """The profile of ``data``; a value the format refuses is a SourceDataError naming it."""
+        """The profile of ``data``. A value that the format refuses raises a SourceDataError that
+        names the value.
+        """
         try:
             return Profile.model_validate(data)
         except ValidationError as exc:
@@ -38,8 +40,8 @@ class Origin:
 
 
 def _first_problem(exc: ValidationError, data: Mapping[str, Any]) -> str:
-    """The first field's problem, from its deepest error, which for a union is the member the
-    value was meant for.
+    """The problem of the first field, from its deepest error. For a union, the deepest error is in
+    the member that the value is for.
     """
     errors = exc.errors()
     field = errors[0]["loc"][:1]
@@ -58,8 +60,8 @@ _RECORD_NAMES: Mapping[str, Callable[[Mapping[str, Any]], str]] = {
 
 
 def _where(loc: Sequence[str | int], data: Mapping[str, Any]) -> str:
-    """Where ``loc`` points in ``data``, such as ``readout.error of qubit 3``. A key ``data``
-    lacks is pydantic's name for a union member and is left out.
+    """Where ``loc`` points in ``data``, such as ``readout.error of qubit 3``. A key that ``data``
+    does not have is pydantic's name for a union member, and the result does not include it.
     """
     keys: list[str | int] = []
     node: Any = data
@@ -85,7 +87,9 @@ def checked_by(check: Callable[[str], object]) -> Callable[[str], str]:
 
 
 def read_reply(raw: bytes, url: str, shape: TypeAdapter[Any], *, sender: str, hint: str) -> Any:
-    """``raw`` parsed as JSON of ``shape``; SourceUnavailable naming ``url`` when it is not."""
+    """``raw`` parsed as JSON of ``shape``. If ``raw`` is not, raise SourceUnavailable that names
+    ``url``.
+    """
     try:
         data = parse_json(raw)
     except ValueError:

@@ -1,8 +1,8 @@
-"""The conversion report every framework export carries as ``.report``.
+"""The report every framework export carries as ``.report``.
 
-Adapters fill one Report per exported object; events keep accumulating as circuits are
-processed. The same helpers decide how clamps, effects and repeated warnings are recorded, so
-every framework reports the same way.
+Each framework export fills one Report for each exported object. The Report adds events while
+the framework processes circuits. The same helpers decide how the Report records clamps,
+effects and repeated warnings, so every framework reports the same way.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .errors import NoiseApproximationWarning, UnsupportedEffect
+from .errors import NoiseApproximationWarning, UnsupportedEffect, qubit_loci
 from .profile import unmodeled_note
 
 if TYPE_CHECKING:
@@ -23,13 +23,13 @@ if TYPE_CHECKING:
     from .channels import GateChannels
     from .profile import Effect, GateSpec, Profile
 
-HONESTY = "Calibration-derived models approximate the hardware; they are not a digital twin."
+HONESTY = "Calibration-derived models approximate the hardware. They are not a digital twin."
 _INCLUDES = {
     "1q_dressing": (
         "single-qubit gate error",
         "explicit single-qubit gates in the circuit add their own error on top",
     ),
-    "leakage": ("leakage", "applied as depolarizing noise; no population leaves the qubit"),
+    "leakage": ("leakage", "applied as depolarizing noise, so no population leaves the qubit"),
     "spam": (
         "state preparation and measurement error",
         "readout and preparation noise, where applied, add their own error on top",
@@ -41,7 +41,7 @@ _EVENTS = {  # event -> how summary() states one key's count
         "{key} took the calibration recorded for the opposite qubit order {times}"
     ),
     "circuit_channel_kept": (
-        "the circuit's own {key} was kept as written, with no noise added, {times}"
+        "the export kept the circuit's own {key} as written, with no noise added, {times}"
     ),
 }
 
@@ -135,7 +135,7 @@ class Report:
             self.approximate(
                 what,
                 "a per-cycle error applied to each gate",
-                "it also counts the surrounding layer",
+                "the stated error also counts the surrounding layer",
             )
         for item in spec.includes or ():
             name, effect = _INCLUDES[item]
@@ -146,14 +146,14 @@ class Report:
             self.approximate(what, "read under an importer assumption", spec.assumption)
 
     def record_effects(self, effects: Iterable[Effect]) -> None:
-        """Effects are not implemented by any adapter in this release: omit or refuse."""
+        """Omit or refuse each effect, because no export models effects in this release."""
         for effect in effects:
             target = effect.gate or effect.on
             if effect.allow != "omit":
                 raise UnsupportedEffect(
                     f"effect {effect.type} on {target} asks for allow={effect.allow!r}, but"
                     f" {self.framework} export does not model effects yet",
-                    hint="set allow to 'omit' to convert without it",
+                    hint="set allow to 'omit' to export without the effect",
                 )
             self.omit(f"effect {effect.type} on {target}")
 
@@ -215,12 +215,13 @@ class Report:
         if noisier:
             lines.append(
                 f"clamped: {_gates(len(noisier))} noisier than stated because relaxation"
-                f" alone exceeds the stated error; largest {_worst(noisier)}"
+                f" alone exceeds the stated error. The largest is {_worst(noisier)}"
             )
         if quieter:
             lines.append(
-                f"clamped: {_gates(len(quieter))} less noisy than stated because the strongest"
-                f" depolarizing noise on top of relaxation falls short; largest {_worst(quieter)}"
+                f"clamped: {_gates(len(quieter))} less noisy than stated because relaxation plus"
+                f" the strongest depolarizing noise stays below the stated error. The largest"
+                f" is {_worst(quieter)}"
             )
         if self.events:
             lines.append(
@@ -239,7 +240,7 @@ def warn_from_caller(message: str, category: type[Warning], packages: Collection
     """Warn at the first calling frame outside NoiseVault and ``packages`` (top-level names).
 
     An export runs inside the framework's own calls (``with_noise``, ``qml.add_noise``), so a
-    fixed stacklevel lands on library code; the user's own line is what they can act on.
+    fixed stacklevel points at framework code. The user can act only on their own line.
     """
     skipped = {"noisevault", *packages}
     frame, level = sys._getframe(1), 2
@@ -258,7 +259,7 @@ def _gates(n: int) -> str:
 
 def _worst(clamps: list[Clamp]) -> str:
     c = max(clamps, key=lambda c: abs(c.achieved - c.requested))
-    return f"{c.gate}{list(c.qubits)} {c.requested:.3g} -> {c.achieved:.3g}"
+    return f"{c.gate} on {qubit_loci(c.qubits)}, {c.requested:.3g} -> {c.achieved:.3g}"
 
 
 def _count_sentence(event: str, key: str, n: int) -> str:

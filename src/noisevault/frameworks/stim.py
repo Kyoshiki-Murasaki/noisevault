@@ -1,11 +1,12 @@
-"""Stim export: a noisy copy of a Stim circuit that carries its conversion report.
+"""Stim export: a noisy copy of a Stim circuit that carries its report.
 
-Every Clifford gate is followed by the Pauli twirl of the channel the shared conversion rules
-give it: PAULI_CHANNEL_1 or PAULI_CHANNEL_2, or for a Pauli product on three or more qubits a
-CORRELATED_ERROR chain with the same probabilities. Twirling keeps each gate's average
-fidelity but drops relaxation's pull toward |0>, so the export matches the twirled model, not
-the full channel. Measurements get readout error, resets get preparation error, and with
-``tick_ns`` every qubit left idle in a TICK layer gets twirled relaxation for that time.
+After every Clifford gate, the export adds the Pauli twirl of the channel that the shared
+conversion rules give the gate. The twirl is PAULI_CHANNEL_1 or PAULI_CHANNEL_2. For a Pauli
+product on three or more qubits, the twirl is a CORRELATED_ERROR chain with the same
+probabilities. Twirling keeps the average fidelity of each gate but drops relaxation's bias
+toward |0>. Thus the export matches the twirled model, not the full channel. Measurements get
+readout error, and resets get preparation error. With ``tick_ns``, every qubit that stays idle
+in a TICK layer gets twirled relaxation for that time.
 Annotations, REPEAT blocks, detectors and observables pass through unchanged.
 """
 
@@ -25,6 +26,7 @@ from ..errors import (
     MissingCalibrationError,
     NoiseVaultError,
     install_hint,
+    qubit_loci,
 )
 
 try:
@@ -48,12 +50,12 @@ EventCounts = tuple[tuple[str, str, int], ...]  # (event, key, count) that one g
 
 _ANNOTATIONS = frozenset({"DETECTOR", "OBSERVABLE_INCLUDE", "QUBIT_COORDS", "SHIFT_COORDS"})
 _HERALDED = frozenset({"HERALDED_ERASE", "HERALDED_PAULI_CHANNEL_1"})
-_COMBINED = frozenset({"MPP", "SPP", "SPP_DAG"})  # a target group is joined by combiners
+_COMBINED = frozenset({"MPP", "SPP", "SPP_DAG"})  # combiners join the targets of a group
 _X, _Z = 1, 2
 _Y = _X | _Z
 _I_POWER = {(_X, _Y): 1, (_Y, _Z): 1, (_Z, _X): 1, (_Y, _X): 3, (_Z, _Y): 3, (_X, _Z): 3}
 # The registry gate each Stim gate equals and, for an MS gate at fixed phases, the rotation it
-# also equals; conversion.native_name picks the one a profile calibrates.
+# also equals. conversion.native_name picks the gate that a profile calibrates.
 _NAMES: dict[str, tuple[str, str | None]] = {
     **{name: (row.name, None) for row in gates.GATES.values() for name in row.stim},
     "SQRT_Y": ("ry", None),
@@ -85,7 +87,7 @@ class ExistingNoiseError(NoiseVaultError, ValueError):
 class NoiseVaultStimCircuit(stim.Circuit):
     """A noisy ``stim.Circuit`` carrying ``.report``, ``.profile`` and ``.layout``.
 
-    ``.readout_flips`` is set for ``readout="exact"``: one row per measurement record,
+    ``readout="exact"`` sets ``.readout_flips``, with one row per measurement record,
     (P(flip | recorded 0), P(flip | recorded 1)), which :func:`sample_with_readout` applies.
     Stim methods that build a new circuit (``copy``, ``flattened``, ``+``) return a plain
     ``stim.Circuit`` without these attributes. Pickling and ``copy.deepcopy`` keep them, with
@@ -111,8 +113,8 @@ class NoiseVaultStimCircuit(stim.Circuit):
         """Stim's detector error model, reading PAULI_CHANNEL components as independent.
 
         Stim refuses PAULI_CHANNEL_1/2 and ELSE_CORRELATED_ERROR without
-        ``approximate_disjoint_errors``, an O(p^2) approximation, so it is on by default here;
-        pass False to get Stim's refusal.
+        ``approximate_disjoint_errors``, an O(p^2) approximation. Thus this method turns the
+        option on by default. Pass False to get Stim's refusal.
         """
         return super().detector_error_model(
             approximate_disjoint_errors=approximate_disjoint_errors, **options
@@ -131,13 +133,14 @@ def to_stim(
 ) -> NoiseVaultStimCircuit:
     """A copy of ``circuit`` with the profile's noise, and a report of what it approximated.
 
-    ``layout`` maps Stim qubit indices to physical qubits (identity by default;
-    :func:`layout_from_coords` derives one from QUBIT_COORDS). ``readout="symmetrize"`` flips
-    each result with the mean of P(1|0) and P(0|1); ``"exact"`` leaves measurements perfect and
-    stores the asymmetric error for :func:`sample_with_readout`; ``"none"`` adds no readout
-    error. ``tick_ns`` is the duration of one TICK layer: qubits idle in a layer relax for that
-    long. ``existing_noise`` says what to do with noise already in the circuit: ``"error"``
-    raises, ``"keep"`` keeps it, ``"strip"`` removes it.
+    ``layout`` maps Stim qubit indices to physical qubits (identity by default, or
+    :func:`layout_from_coords` makes a layout from QUBIT_COORDS). ``readout="symmetrize"``
+    flips each result with the mean of P(1|0) and P(0|1). ``"exact"`` leaves measurements
+    perfect and keeps the asymmetric error for :func:`sample_with_readout`. ``"none"`` adds no
+    readout error. ``tick_ns`` is the duration of one TICK layer, and qubits idle in a layer
+    relax for that duration. ``existing_noise`` says what to do with noise already in the
+    circuit. ``"error"`` raises an error, ``"keep"`` keeps the noise, and ``"strip"`` removes
+    the noise.
     """
     _check_choice("readout", readout, Readout)
     _check_choice("existing_noise", existing_noise, ExistingNoise)
@@ -198,11 +201,11 @@ def sample_with_readout(
 def layout_from_coords(circuit: stim.Circuit | str, profile: Profile) -> dict[int, int]:
     """Place the circuit on the device by matching its QUBIT_COORDS to the profile's coords.
 
-    Tries the eight rotations and reflections of the square lattice, also after a 45 degree
-    turn (Stim's rotated surface codes put neighbors on diagonals), and every translation. A
-    placement must land every qubit on an enabled device qubit and every 2-qubit gate on a pair
-    with a calibrated native gate. Among valid placements it returns the one with the lowest
-    summed 2-qubit gate error and mean readout error.
+    Tries the eight rotations and reflections of the square lattice and every translation. It
+    also tries them after a 45 degree turn, because Stim's rotated surface codes put neighbors
+    on diagonals. A placement must put every qubit on an enabled device qubit and every 2-qubit
+    gate on a pair with a calibrated native gate. From the valid placements, the function
+    returns the one with the lowest summed 2-qubit gate error and mean readout error.
     """
     circuit = _as_circuit(circuit)
     found = _scan(circuit)
@@ -210,8 +213,8 @@ def layout_from_coords(circuit: stim.Circuit | str, profile: Profile) -> dict[in
     missing = sorted(q for q in found.qubits if len(coords.get(q, ())) < 2)
     if missing:
         raise LayoutError(
-            f"qubits {missing} have no 2D QUBIT_COORDS in the circuit",
-            hint="add them or pass layout=",
+            f"the circuit gives no 2D QUBIT_COORDS for {qubit_loci(*((q,) for q in missing))}",
+            hint="add QUBIT_COORDS for each qubit or pass layout=",
         )
     device = _Device(profile)
     labels = sorted(found.qubits)
@@ -293,8 +296,8 @@ def _check_existing_noise(found: _Scan, policy: ExistingNoise) -> None:
         )
     if found.herald is not None and policy == "strip":
         raise ExistingNoiseError(
-            f"{found.herald} adds measurement records that later rec[] targets count, so it"
-            " cannot be stripped",
+            f"{found.herald} adds measurement records that later rec[] targets count, so"
+            " NoiseVault cannot strip the instruction",
             hint="remove it from the circuit or pass existing_noise='keep'",
         )
 
@@ -308,8 +311,8 @@ def _check_exact_readout(found: _Scan) -> None:
     if problem:
         raise ValueError(
             f"readout='exact' flips recorded bits after sampling, which is exact only for"
-            f" single-qubit measurements that nothing reads during the circuit, but {problem};"
-            " use readout='symmetrize'"
+            f" single-qubit measurements that nothing reads during the circuit, but {problem}."
+            " Use readout='symmetrize'"
         )
 
 
@@ -323,7 +326,7 @@ class _Resolved(NamedTuple):
 
 
 class _Exporter:
-    """Emits Stim program text; text parsing is far faster than stim.Circuit.append."""
+    """Writes Stim program text, because Stim parses text much faster than stim.Circuit.append."""
 
     def __init__(
         self,
@@ -379,7 +382,7 @@ class _Exporter:
         again = first
         if peel:
             # Idle noise at the body's first TICK depends on what ran before it, which differs
-            # between the first pass and later ones; then the first pass is written out once.
+            # between the first pass and later ones. Thus the exporter writes the first pass once.
             # The two walks count 1 and count - 1 passes, so events total count either way.
             self._passes = outer * (count - 1)
             again, after = self.block(body, set(after))
@@ -521,13 +524,13 @@ class _Exporter:
         steps = [exc.hint] if exc.hint else []
         if len(wires) == 2 and isinstance(self.table.typical(2, wires), Unavailable):
             steps.append(
-                "pass layout= so 2-qubit gates land on connected pairs"
-                " (profile.suggest_layout(n) proposes one, noisevault.stim.layout_from_coords"
-                " matches the circuit's QUBIT_COORDS)"
+                "pass layout= to put 2-qubit gates on connected pairs"
+                " (profile.suggest_layout(n) proposes a layout, and"
+                " noisevault.stim.layout_from_coords matches the circuit's QUBIT_COORDS)"
             )
         instruction = f"{stim_name} {' '.join(map(str, qubits))}"
         return type(exc)(
-            f"{instruction} (physical qubits {list(wires)}): {exc.message}",
+            f"{instruction} (physical {qubit_loci(wires)}): {exc.message}",
             hint="; ".join(steps) or None,
         )
 
@@ -599,7 +602,9 @@ class _Exporter:
         }
         for key, qubits in self.unknown.items():
             if qubits:
-                self.report.mark_unknown(f"{texts[key]} of physical qubits {_qubit_list(qubits)}")
+                self.report.mark_unknown(
+                    f"{texts[key]} of physical {qubit_loci(*((q,) for q in sorted(qubits)))}"
+                )
 
 
 def _describe(
@@ -612,7 +617,7 @@ def _describe(
     report.approximate(
         "gate noise",
         "Pauli twirl of each gate's channel",
-        "keeps average gate fidelity, drops relaxation's bias toward |0>",
+        "keeps average gate fidelity but drops relaxation's bias toward |0>",
     )
     report.approximate(
         "detector_error_model()",
@@ -623,7 +628,7 @@ def _describe(
         report.approximate(
             "readout error",
             "symmetric flip with the mean of P(1|0) and P(0|1)",
-            "Stim flips results symmetrically; readout='exact' keeps the asymmetry",
+            "Stim flips results symmetrically, but readout='exact' keeps the asymmetry",
         )
     elif readout == "exact":
         report.mark_exact("readout error, applied by sample_with_readout")
@@ -641,12 +646,14 @@ def _describe(
         report.approximate(
             "idle noise",
             f"twirled relaxation for {tick_ns} ns on each qubit idle in a TICK layer",
-            "qubits busy in a layer get only their gate or readout noise; the layer after the"
-            " last TICK gets none",
+            "qubits busy in a layer get only their gate or readout noise, and the layer after"
+            " the last TICK gets no idle noise",
         )
     if found.noise is not None:
         if existing_noise == "keep":
-            report.approximate("noise already in the circuit", "kept, on top of the profile's")
+            report.approximate(
+                "noise already in the circuit", "kept, with the profile's noise added"
+            )
         else:
             report.omit("noise already in the circuit (stripped)")
 
@@ -677,10 +684,10 @@ def _kind(name: str) -> Kind:
 def gate_name(stim_name: str, defined: Container[str] = ()) -> str:
     """The canonical NoiseVault name a Stim gate takes its noise from.
 
-    A gate equal to a rotation at a fixed angle takes the rotation's name when ``defined``, a
-    profile's gate names, has the rotation but not the gate (see
-    :func:`~noisevault.conversion.native_name`): ``SQRT_X`` is ``sx``, or ``rx`` on a profile
-    with ``rx`` but no ``sx``; ``SQRT_XX`` is ``ms`` when the profile has ``ms``, else ``rxx``.
+    ``defined`` is a profile's gate names. A gate equal to a rotation at a fixed angle takes the
+    rotation's name when ``defined`` has the rotation but not the gate (see
+    :func:`~noisevault.conversion.native_name`). ``SQRT_X`` is ``sx``, or ``rx`` on a profile
+    with ``rx`` but no ``sx``. ``SQRT_XX`` is ``ms`` when the profile has ``ms``, else ``rxx``.
     Gates outside the registry keep their lowercased Stim name and get the typical-noise rule.
     """
     if stim_name not in _NAMES:
@@ -690,7 +697,7 @@ def gate_name(stim_name: str, defined: Container[str] = ()) -> str:
 
 
 def _pauli_channel(probs: Sequence[float]) -> str:
-    """PAULI_CHANNEL_1/2 prefix; metrics' label order is Stim's, first letter on target 0."""
+    """PAULI_CHANNEL_1/2 prefix. The label order of metrics is Stim's, first letter on target 0."""
     if not any(probs):
         return ""
     return f"{_PAULI_CHANNEL[len(probs)]}({','.join(map(repr, probs))})"
@@ -699,8 +706,8 @@ def _pauli_channel(probs: Sequence[float]) -> str:
 def _correlated_errors(probs: Sequence[float], qubits: Sequence[int]) -> tuple[str, ...]:
     """The Pauli channel ``probs`` on 3+ ``qubits``, which no PAULI_CHANNEL instruction takes.
 
-    An ELSE_CORRELATED_ERROR fires only when no earlier error in its chain did, so each takes
-    its probability divided by the chance that none has fired yet.
+    An ELSE_CORRELATED_ERROR fires only when no earlier error in its chain fired. Thus each
+    error takes its probability divided by the chance that no earlier error fired.
     """
     lines: list[str] = []
     untouched = 1.0
@@ -796,12 +803,6 @@ def _short(inst: stim.CircuitInstruction) -> str:
     return text if len(text) <= 60 else text[:57] + "..."
 
 
-def _qubit_list(qubits: set[int]) -> str:
-    ordered = sorted(qubits)
-    shown = ", ".join(map(str, ordered[:10]))
-    return shown + (f", ... ({len(ordered)} qubits)" if len(ordered) > 10 else "")
-
-
 def _as_circuit(circuit: Any) -> stim.Circuit:
     if isinstance(circuit, str):
         return stim.Circuit(circuit)
@@ -870,7 +871,7 @@ def _grid_units(points: np.ndarray) -> np.ndarray:
 
 
 class _PlacementCost:
-    """Summed 2-qubit error of the circuit's pairs plus mean readout error; inf if unusable."""
+    """Summed 2-qubit error of the circuit's pairs plus mean readout error, or inf if unusable."""
 
     def __init__(self, profile: Profile, pairs: np.ndarray) -> None:
         self.table = profile.table

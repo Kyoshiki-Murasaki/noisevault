@@ -14,9 +14,9 @@ UnknownGates = Literal["typical", "error"]
 TYPICAL_FIX = "compile to native gates for realistic gate counts, or pass unknown_gates='error'"
 
 
-# The gates each registry gate equals, in the order a profile without its own calibration
-# takes theirs: a fixed gate equals its rotation at one angle, up to global phase. A z-family
-# fixed gate, and u1, equal p exactly, so p comes before rz.
+# The gates that each registry gate equals, in the order that a profile without a calibration
+# for the registry gate uses their calibrations. A fixed gate equals its rotation at one angle,
+# up to global phase. A z-family fixed gate, and u1, equal p exactly, so p comes before rz.
 _FALLBACKS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         **dict.fromkeys(("x", "sx", "sxdg"), ("rx",)),
@@ -31,12 +31,12 @@ _FALLBACKS: Mapping[str, tuple[str, ...]] = MappingProxyType(
 def native_name(name: str, defined: Container[str], rotation: str | None = None) -> str:
     """The gate whose calibration an operation equal to registry gate ``name`` uses.
 
-    ``defined`` holds a profile's gate names. The profile's ``name`` comes first, then the
-    first defined gate it equals: ``rx`` for ``sx``; ``p``, then ``rz``, for ``s`` and the other
-    z-family gates. ``rotation`` names that gate for a native outside this table (``rxx`` or
-    ``ryy`` for an ``ms``). With none defined, the operation keeps its own name, except that a
-    native with parameters gives way to ``rotation``, so errors and reports name the gate the
-    circuit wrote.
+    ``defined`` holds a profile's gate names. The profile's own ``name`` comes first. Next comes the
+    first defined gate that ``name`` equals. For ``sx``, that gate is ``rx``. For ``s`` and the
+    other z-family gates, ``p`` comes first and then ``rz``. ``rotation`` names that gate for a
+    native outside this table (``rxx`` or ``ryy`` for an ``ms``). If the profile defines no such
+    gate, the operation keeps its own name. A native with parameters gives way to ``rotation``, so
+    errors and reports name the gate the circuit wrote.
     """
     if name in defined:
         return name
@@ -56,15 +56,16 @@ def resolve_op(
     unknown_gates: UnknownGates,
     report: Report,
 ) -> GateChannels:
-    """Channels for gate ``name`` on physical ``qubits``; records what it did in ``report``.
+    """Channels for gate ``name`` on physical ``qubits``, with each decision recorded in ``report``.
 
-    An ideal gate gets no channels and a calibrated one its own. A disabled gate raises
-    DisabledGateError. A gate with no calibration there (not defined, not a native, no error
-    metric, or a pair the profile does not allow) raises MissingCalibrationError when
-    ``unknown_gates`` is ``"error"``; with ``"typical"`` it gets the noise of the typical native
-    gate of its arity, reported and warned about once per gate name. Under either setting, a
-    gate with no calibration there raises MissingCalibrationError if it needs several native
-    entanglers or acts on more than two qubits.
+    An ideal gate gets no channels and a calibrated gate gets its own channels. A disabled gate
+    raises DisabledGateError. A gate has no calibration on ``qubits`` in four cases. The profile
+    does not define the gate, or the gate is not a native. The gate has no error metric, or the
+    profile does not allow the pair. With ``unknown_gates="error"``, such a gate raises
+    MissingCalibrationError. With ``"typical"``, the gate gets the noise of the typical native gate
+    of its arity. The report and one warning for each gate name state the substitution. Under either
+    setting, a gate with no calibration on ``qubits`` raises MissingCalibrationError if it needs
+    several native entanglers or acts on more than two qubits.
     """
     if unknown_gates not in ("typical", "error"):
         raise ValueError(f"unknown_gates={unknown_gates!r}: choose 'typical' or 'error'")
@@ -72,7 +73,7 @@ def resolve_op(
     _check_qubits(table, name, qubits)
     info = gates.lookup(name)
     if info is not None and info.unitary is None:
-        raise ValueError(f"{name} is not a unitary gate; resolve_op only handles gates")
+        raise ValueError(f"{name} is not a unitary gate, and resolve_op handles only gates")
 
     found = table.gate(name, qubits)
     if isinstance(found, GateNoise) and found.state != "uncalibrated":
@@ -95,21 +96,24 @@ def resolve_op(
         )
     typical = table.typical(len(qubits), qubits)
     if isinstance(typical, Unavailable):
-        raise MissingCalibrationError(f"{where}: {why}, and {typical.reason}")
+        raise MissingCalibrationError(
+            f"{where}: {why}. No calibrated {len(qubits)}-qubit native gate is usable there either"
+        )
     report.count("typical_noise_used", name)
     report.approximate(
         f"gate {name}", f"noise of the typical {len(qubits)}-qubit native gate", TYPICAL_FIX
     )
     report.warn_once(
         f"typical_noise_used:{name}",
-        f"{where}: {why}; using the noise of {typical.gate} instead. To fix: {TYPICAL_FIX}",
+        f"{where}: {why}, so the export uses the noise of {typical.gate} instead."
+        f" To fix: {TYPICAL_FIX}",
     )
     return _channels(table, typical, report)
 
 
 def _check_qubits(table: NoiseTable, name: str, qubits: tuple[int, ...]) -> None:
     if len(set(qubits)) != len(qubits):
-        raise LayoutError(f"{name} acts on {qubit_loci(qubits)}; its targets must be distinct")
+        raise LayoutError(f"{name} acts on {qubit_loci(qubits)}, but its qubits must be distinct")
     for q in qubits:
         if not 0 <= q < table.num_qubits:
             raise LayoutError(

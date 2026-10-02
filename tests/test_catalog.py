@@ -89,7 +89,7 @@ def test_expect_pins_the_fingerprint() -> None:
     assert isinstance(info.value, nv.NoiseVaultError)
     assert (info.value.message, info.value.hint) == (
         "expect='nv:abc' is not a fingerprint",
-        "give a full sha256 fingerprint or nv:<12 hex>",
+        "pass a full sha256 fingerprint or nv:<12 hex>",
     )
 
 
@@ -109,26 +109,26 @@ def test_vault_refs_newest_date_and_ambiguity(vault: Path) -> None:
     assert "2025-01-01T08:00:00Z" in info.value.message
     assert "2025-01-01T20:00:00Z" in info.value.message
     assert info.value.hint == "use a full timestamp"
-    with pytest.raises(ProfileNotFound, match="2024-12-31 UTC; you have test_toy@2025-01-01T08"):
+    with pytest.raises(ProfileNotFound, match="2024-12-31 UTC. You have test_toy@2025-01-01T08"):
         nv.load("test_toy@2024-12-31")
 
 
 def test_a_ref_date_that_misses_says_it_names_the_calibration_day() -> None:
     misses = {
         "ibm_fez@2025-03-01": (
-            "no ibm_fez profile calibrated on 2025-03-01 UTC;"
-            " you have ibm_fez@2025-02-26T20:16:25Z",
-            "run nv pull ibm_fez --at 2025-03-01T23:59:59Z to fetch the calibration in effect at"
-            " the end of that day, then load the ref it prints",
+            "no ibm_fez profile calibrated on 2025-03-01 UTC."
+            " You have ibm_fez@2025-02-26T20:16:25Z",
+            "run nv pull ibm_fez --at 2025-03-01T23:59:59Z to download the calibration in effect"
+            " at the end of that day. Then load the ref that nv pull prints",
         ),
         "quantinuum_h2-1@2020-01-01": (
-            "no quantinuum_h2-1 profile calibrated on 2020-01-01 UTC;"
-            " you have quantinuum_h2-1@2025-04-30T00:00:00Z",
+            "no quantinuum_h2-1 profile calibrated on 2020-01-01 UTC."
+            " You have quantinuum_h2-1@2025-04-30T00:00:00Z",
             None,
         ),
         "ibm_fez@2025-02-26T00:00:00Z": (
-            "no ibm_fez profile calibrated at 2025-02-26T00:00:00Z;"
-            " you have ibm_fez@2025-02-26T20:16:25Z",
+            "no ibm_fez profile calibrated at 2025-02-26T00:00:00Z."
+            " You have ibm_fez@2025-02-26T20:16:25Z",
             None,
         ),
     }
@@ -174,7 +174,7 @@ def test_pulling_from_a_vendor_no_source_serves_says_how_to_list_its_profiles() 
         nv.pull("ibm_fez", source="google")
     assert isinstance(info.value, nv.NoiseVaultError)
     assert (info.value.message, info.value.hint) == (
-        "unknown source 'google'; no source serves google devices",
+        "unknown source 'google'. No source serves google devices",
         "run nv list --vendor google to see the google profiles you can load offline",
     )
 
@@ -304,8 +304,8 @@ def test_a_mismatch_hint_names_the_file_of_an_undated_profile(vault: Path) -> No
 def test_a_missed_date_lists_each_ref_once_past_a_vault_copy(vault: Path) -> None:
     _save_vault_copy_and_later_manila()
     error = (
-        "no ibm_manila profile calibrated on 2025-01-01 UTC;"
-        " you have ibm_manila@2024-05-27T18:27:23Z, ibm_manila@2024-06-03T10:00:00Z"
+        "no ibm_manila profile calibrated on 2025-01-01 UTC."
+        " You have ibm_manila@2024-05-27T18:27:23Z, ibm_manila@2024-06-03T10:00:00Z"
     )
     with pytest.raises(ProfileNotFound) as info:
         nv.load("ibm_manila@2025-01-01")
@@ -346,7 +346,7 @@ def test_a_fingerprint_no_profile_has_says_how_to_get_the_file() -> None:
         f" {nowhere}, and no profile you have has that fingerprint"
     )
     assert info.value.hint == (
-        "ask whoever pinned that fingerprint for the profile file, or, if the source still serves"
+        "ask whoever pinned that fingerprint for the profile file. If the source still serves"
         " that calibration, run nv pull ibm_manila --at <a time it was in effect>"
     )
     with pytest.raises(FingerprintMismatch) as info:
@@ -454,7 +454,7 @@ def test_following_the_hint_of_a_missed_date_ends_with_a_profile_that_loads(
     pull = re.search(r"run nv (pull \S+ --at \S+)", hint)
     assert pull is not None, hint
     assert runner.invoke(app, pull.group(1).split()).stdout.split()[0] == printed
-    assert hint.endswith(", then load the ref it prints")
+    assert hint.endswith(". Then load the ref that nv pull prints")
     assert runner.invoke(app, ["show", printed]).exit_code == 0
     assert runner.invoke(app, asked).exit_code == (0 if "2024-06-01" in printed else 1)
 
@@ -490,7 +490,7 @@ def test_vault_files_named_by_whole_seconds_still_load_and_are_reused(
     assert _pull_quietly() == (held, legacy, False)
     reconverted = _dated("2024-05-27T18:27:23.100000Z", 1.5e-3)
     _serve(monkeypatch, reconverted)
-    with pytest.warns(UserWarning, match="converted differently"):
+    with pytest.warns(UserWarning, match="imports the same calibration differently"):
         pulled = catalog.pull_and_save("ibm_toy", source="ibm")
     assert pulled.path == legacy and list(vault.glob("*.json.gz")) == [legacy]
     assert nv.load(legacy) == reconverted
@@ -733,8 +733,8 @@ def test_an_index_time_with_an_offset_does_not_bypass_utc_day_matching(vault: Pa
         with pytest.raises(ProfileNotFound) as info:
             nv.load("ibm_manila@2024-05-28", expect=expect)
         assert info.value.message == (
-            "no ibm_manila profile calibrated on 2024-05-28 UTC;"
-            " you have ibm_manila@2024-05-27T18:27:23Z"
+            "no ibm_manila profile calibrated on 2024-05-28 UTC."
+            " You have ibm_manila@2024-05-27T18:27:23Z"
         )
     assert _indexed(vault)[path.name] == entry
 
@@ -760,8 +760,8 @@ def test_a_stale_index_date_does_not_bypass_dated_ref_matching(vault: Path) -> N
     with pytest.raises(ProfileNotFound) as info:
         nv.load("ibm_manila@2024-05-28")
     assert info.value.message == (
-        "no ibm_manila profile calibrated on 2024-05-28 UTC;"
-        " you have ibm_manila@2024-05-27T18:27:23Z"
+        "no ibm_manila profile calibrated on 2024-05-28 UTC."
+        " You have ibm_manila@2024-05-27T18:27:23Z"
     )
     with pytest.raises(ProfileNotFound):
         nv.load("ibm_manila@2024-05-28", expect=manila.short_fingerprint)
@@ -883,7 +883,7 @@ def test_a_vault_file_saved_over_after_it_resolved_leaves_its_day_not_found(
     with pytest.raises(ProfileNotFound) as info:
         nv.load("test_toy@2025-01-01")
     assert info.value.message == (
-        "no test_toy profile calibrated on 2025-01-01 UTC; you have test_toy@2025-02-01T00:00:00Z"
+        "no test_toy profile calibrated on 2025-01-01 UTC. You have test_toy@2025-02-01T00:00:00Z"
     )
 
 
@@ -898,8 +898,8 @@ def test_a_file_that_changes_under_both_reads_of_a_load_is_not_found(
     with pytest.raises(ProfileNotFound) as info:
         nv.load("test_toy@2025-01-01")
     assert (info.value.message, info.value.hint) == (
-        f"{path} holds test_toy@2025-02-01T00:00:00Z, not test_toy@2025-01-01;"
-        " the file changed during this load",
+        f"{path} holds test_toy@2025-02-01T00:00:00Z, not test_toy@2025-01-01,"
+        " because the file changed during this load",
         "load test_toy@2025-01-01 again",
     )
 
@@ -949,7 +949,7 @@ def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:
     ]
     assert all("\n" not in m for m in messages)
     assert f"links to {vault.parent / 'moved_away.json.gz'}, which does not exist" in messages[2]
-    assert messages[0].endswith(f"; run nv validate {vault / 'empty.json'}")
+    assert messages[0].endswith(f". Run nv validate {vault / 'empty.json'}")
 
 
 def test_a_link_to_an_unreadable_file_is_skipped_and_the_rest_still_list(
@@ -1033,8 +1033,8 @@ def test_a_pull_onto_an_unreadable_vault_file_does_not_call_it_saved(
             catalog.pull_and_save("ibm_toy", source="ibm")
     assert isinstance(info.value, nv.NoiseVaultError)
     assert (info.value.message, info.value.hint) == (
-        f"{path} exists but cannot be read",
-        f"make it readable or move it out of {vault}, then pull again",
+        f"{path} exists but is not readable",
+        f"make the file readable or move the file out of {vault}, then pull again",
     )
     monkeypatch.undo()
     assert path.read_bytes() == before

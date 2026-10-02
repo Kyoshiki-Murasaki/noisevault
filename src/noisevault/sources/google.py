@@ -1,23 +1,24 @@
-"""Google processors from the calibrations cirq_google ships, read the way cirq_google reads them.
+"""Google processors from the calibrations that cirq_google ships, read as cirq_google reads them.
 
-cirq_google bundles one representative calibration per virtual processor and converts it to
-noise with ``noise_properties_from_calibration``. This module takes T1, Tphi, readout errors,
-gate times and fSim coherent errors from that conversion, and the per-gate errors from the
-calibration itself, since their scope needs care:
+cirq_google bundles one representative calibration per virtual processor. cirq_google converts
+that calibration to noise with ``noise_properties_from_calibration``. This module takes T1, Tphi,
+readout errors, gate times and fSim coherent errors from that conversion. It takes the per-gate
+errors from the calibration, because their scope needs care:
 
 - 1Q ``single_qubit_rb_pauli_error_per_gate``: randomized benchmarking Pauli error per
   PhasedXZ gate, stored as process infidelity (Pauli error = process infidelity).
 - 2Q ``..._xeb_pauli_error_per_cycle``: Cirq's calibration docs define an XEB cycle as a random
-  single-qubit gate on each qubit followed by the entangler, and say the value "is the error rate
-  per cycle (both the 1 qubit gates as well as the 2 qubit gate)". Google's inferred per-gate
-  error subtracts the single-qubit RB contribution. rainbow and weber are converted that way.
-  willow_pink carries the same key, but its values reproduce Google's published per-gate CZ
-  error for that chip (below), so its scope is contradictory: it is read as per gate, stated in
-  the gate's ``assumption``, and not bundled.
+  single-qubit gate on each qubit followed by the entangler. The docs say the value "is the error
+  rate per cycle (both the 1 qubit gates as well as the 2 qubit gate)". Google's inferred
+  per-gate error subtracts the single-qubit RB contribution. This module converts rainbow and
+  weber that way. willow_pink has the same key, but its values reproduce Google's published
+  per-gate CZ error for that chip (below). The scope of the willow_pink values is
+  contradictory. This module reads them as per gate, states that in the gate's ``assumption``,
+  and does not bundle willow_pink.
 
-cirq_google's own noise model applies the per-cycle value to the entangler as is; its legacy
-rainbow and weber model also charges Z gates 25 ns and the 1Q error, while the device spec gives
-Z gates 0 ns (virtual), which is what the profile uses.
+cirq_google's own noise model applies the per-cycle value to the entangler as is. Its legacy
+rainbow and weber model also charges Z gates 25 ns and the 1Q error. The device spec gives Z
+gates 0 ns (virtual), and the profile uses the device spec.
 """
 
 from __future__ import annotations
@@ -64,16 +65,16 @@ _TWO_QUBIT_ASSUMPTION = {
     "cycle": "Google XEB Pauli error per cycle (a random single-qubit gate on each qubit, then"
     " the entangler), minus both qubits' 1Q RB Pauli errors as Google infers its per-gate"
     " error; stored as the total process infidelity, including the coherent fSim part",
-    "unresolved": "Google labels this XEB Pauli error per cycle, but for willow_pink the values"
-    " reproduce Google's published per-gate CZ error (Willow spec sheet, QEC chip, 0.33% +-"
-    " 0.18% average error = 4/5 of the file's mean and spread), so it is read unchanged as the"
-    " per-gate process infidelity, as cirq_google's own noise model does; the scope is not"
-    " confirmed",
+    "unresolved": "Google labels this value XEB Pauli error per cycle. For willow_pink, the"
+    " values reproduce Google's published per-gate CZ error. The Willow spec sheet gives 0.33% +-"
+    " 0.18% average error for the QEC chip, which is 4/5 of the file's mean and spread."
+    " NoiseVault reads the value unchanged as the per-gate process infidelity, as cirq_google's"
+    " own noise model does. The scope is not confirmed",
 }
 
 
 def bundled_profiles() -> list[Profile]:
-    """rainbow and weber; willow_pink is left out while its 2Q error scope is unresolved."""
+    """rainbow and weber. willow_pink stays out while the scope of its 2Q error is unresolved."""
     return [from_cirq_google(name) for name in PROCESSORS if name not in NOT_BUNDLED]
 
 
@@ -82,7 +83,7 @@ def from_cirq_google(processor_id: str) -> Profile:
     name = processor_id.strip().lower().removeprefix("google_")
     if name not in PROCESSORS:
         raise ValueError(
-            f"unknown Google processor {processor_id!r}; choose one of {', '.join(PROCESSORS)}"
+            f"unknown Google processor {processor_id!r}. Choose one of {', '.join(PROCESSORS)}"
         )
     try:
         import cirq_google
@@ -91,7 +92,7 @@ def from_cirq_google(processor_id: str) -> Profile:
         raise SourceUnavailable(
             "cirq_google is not installed", hint=install_hint("google")
         ) from None
-    # both arrived in cirq-google 1.6; 1.5 has neither, and no willow_pink calibration
+    # Both arrived in cirq-google 1.6. 1.5 has neither and has no willow_pink calibration.
     if not hasattr(factory, "load_device_noise_properties") or name not in getattr(
         factory, "MEDIAN_CALIBRATIONS", {}
     ):
@@ -311,8 +312,8 @@ def _fsim_infidelity(gate: cirq.PhasedFSimGate) -> float:
     and e^{-i(2 gamma + phi)}.
 
     Decimal arithmetic gives the same digits on every platform. libm's sin, cos and exp can
-    differ in the last ulp, and the cancellation in 1 - |tr U|^2/16 lifts that into the digits a
-    profile stores; at 40 digits over 25 survive it.
+    differ in the last ulp. The cancellation in 1 - |tr U|^2/16 moves that difference into the
+    digits that a profile stores. At 40 digits, more than 25 digits stay correct.
     """
     with localcontext(prec=40):
         theta, zeta, gamma, phi = (

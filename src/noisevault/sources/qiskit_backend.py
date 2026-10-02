@@ -1,10 +1,10 @@
 """Profiles from Qiskit backends and from IBM calibration data.
 
-Every IBM source (a BackendV2 Target, BackendProperties JSON from the public endpoint or an
-account, a calibration CSV) is first read into a :class:`Calibration`, and :func:`to_profile`
-turns that into a Profile. The IBM conventions (dead-gate sentinel, virtual ``rz``, medians as
-device defaults, RB qualifiers) therefore live in one place. Qiskit is imported only by the
-functions that read a backend, so the other IBM sources work on a core install.
+Every IBM source goes first into a :class:`Calibration`: a BackendV2 Target, BackendProperties
+JSON from the public endpoint or an account, and a calibration CSV. Then :func:`to_profile`
+turns the Calibration into a Profile. As a result, the IBM conventions (dead-gate sentinel,
+virtual ``rz``, medians as device defaults, RB qualifiers) are in one place. Only the functions
+that read a backend import Qiskit, so the other IBM sources work on a core install.
 """
 
 from __future__ import annotations
@@ -59,8 +59,9 @@ _IBM_QUALIFIERS: Mapping[int, Mapping[str, Any]] = {
 _QISKIT_TO_CANONICAL = {info.qiskit: info.name for info in gates.GATES.values() if info.qiskit}
 
 # The curated bundle: modern Heron and Eagle r3 snapshots, the two real Nighthawk snapshots, and
-# FakeManilaV2 for 5-qubit demos. FakeNighthawk is left out: its package says its values are not
-# typical of the device. FakeFractionalBackend and other test backends are left out too.
+# FakeManilaV2 for 5-qubit demos. The bundle leaves out FakeNighthawk, because its package says
+# its values are not typical of the device. The bundle also leaves out FakeFractionalBackend and
+# other test backends.
 BUNDLED_FAKES = (
     "FakeAachen",
     "FakeBerlin",
@@ -129,10 +130,10 @@ class Calibration:
 
 
 def from_qiskit_backend(backend: Any) -> Profile:
-    """A profile from any Qiskit BackendV2, e.g. a qiskit-ibm-runtime fake or a live backend.
+    """A profile from any Qiskit BackendV2, such as a qiskit-ibm-runtime fake or a live backend.
 
-    Gate errors, durations and T1/T2 come from the backend's Target; the asymmetric readout pair,
-    preparation error and calibration time come from ``backend.properties()`` when it exists.
+    Gate errors, durations and T1/T2 come from the backend's Target. The asymmetric readout pair,
+    preparation error and calibration time come from ``backend.properties()`` if it exists.
     """
     properties = _properties(backend)
     target = _target(backend, properties)
@@ -234,8 +235,9 @@ def _properties(backend: Any) -> Any:
 def _target(backend: Any, properties: Any) -> Any:
     """The Target of the same calibration as ``properties``, or None for a non-BackendV2.
 
-    A qiskit-ibm-runtime backend keeps the Target it built first when only its properties are
-    refreshed, so its Target is rebuilt from the snapshot the rest of the profile reads.
+    A qiskit-ibm-runtime backend keeps its first Target when a refresh changes only its
+    properties. For this reason, this function builds the Target again from the snapshot that
+    the rest of the profile reads.
     """
     if properties is not None and type(backend).__module__.startswith("qiskit_ibm_runtime"):
         from qiskit_ibm_runtime.utils.backend_converter import convert_to_target
@@ -261,8 +263,9 @@ def _shipped_props(backend: Any) -> bytes | None:
     """The properties file qiskit-ibm-runtime ships for this fake, or None when the backend's
     data is not what the package ships.
 
-    ``refresh()`` overwrites the installed files with account data or reads a temporary copy,
-    so the files are checked against the wheel's RECORD and the backend against a fresh instance.
+    ``refresh()`` overwrites the installed files with account data or reads a temporary copy.
+    For this reason, this function checks the files against the wheel's RECORD, and the backend
+    against a new instance.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # fake backends warn about deprecations on creation
@@ -371,9 +374,9 @@ def _backend_provenance(backend: Any) -> dict[str, Any]:
             "redistributable": "unknown",
             "source_hash": sha256_bytes(json.dumps(props, sort_keys=True, default=str).encode()),
             "notes": [
-                f"Not the snapshot qiskit-ibm-runtime {version} ships for {class_name}, e.g. after"
-                " refresh(), so it is IBM Quantum service data under IBM's terms and the"
-                " package's Apache-2.0 license does not cover it."
+                f"This data is not the snapshot that qiskit-ibm-runtime {version} ships for"
+                f" {class_name}, for example after refresh(). The data is IBM Quantum service data"
+                " under IBM's terms, and the package's Apache-2.0 license does not cover it."
             ],
         }
     live = type(backend).__module__.startswith("qiskit_ibm_runtime")
@@ -392,15 +395,15 @@ def _backend_provenance(backend: Any) -> dict[str, Any]:
 def _model_caveat(backend: Any, shipped: bytes, version: str) -> str | None:
     """A note when a fake's snapshot is a model rather than a device's calibration, else None.
 
-    A snapshot taken from a device carries its name (``ibm_fez``, ``ibmq_manila``); the
-    package's modeled backends name themselves (``fake_nighthawk``, ``fake_fractional``).
+    A snapshot taken from a device has the device name (``ibm_fez``, ``ibmq_manila``). The
+    package's modeled backends have their own names (``fake_nighthawk``, ``fake_fractional``).
     """
     name = json.loads(shipped).get("backend_name") or ""
     if not name.startswith("fake_"):
         return None
     note = (
         f"qiskit-ibm-runtime {version} {type(backend).__name__} is a model, not a calibration"
-        f" of an IBM device: its snapshot names the backend {name}."
+        f" of an IBM device. Its snapshot names the backend {name}."
     )
     # The package's own words on what the model is and is not, from the class docstring's
     # prose (examples, lists and directives follow it).
@@ -416,9 +419,9 @@ def _model_caveat(backend: Any, shipped: bytes, version: str) -> str | None:
 def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> Calibration:
     """Read IBM BackendProperties as a dict (``properties().to_dict()`` or the REST JSON).
 
-    The readout error and length on each qubit become its ``measure`` instruction; the gate
-    list's own ``measure`` entries repeat those numbers and are skipped. A time in a unit it
-    does not know is a SourceDataError from ``origin``.
+    The readout error and length on each qubit become its ``measure`` instruction. The
+    ``measure`` entries of the gate list repeat those numbers, so this function skips them. A
+    time in an unknown unit raises a SourceDataError from ``origin``.
     """
     qubits: dict[int, QubitCalibration] = {}
     instructions: list[Instruction] = []
@@ -492,8 +495,8 @@ def _in_unit(
         return units.convert(float(value), _UNIT_ALIASES.get(given, given), unit)
     except KeyError:
         raise origin.refuse(
-            f"{param['name']} of {owner} has the unknown time unit {given!r}; expected ns, us, µs,"
-            " ms or s"
+            f"{param['name']} of {owner} has the unknown time unit {given!r}, not one of ns, us,"
+            " µs, ms or s"
         ) from None
 
 
@@ -545,15 +548,16 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any], *, origin: Origi
     for key, label in _COHERENCE.items():
         if any(key in q for q in working):
             notes += [
-                f"Qubit {index} reported {label} = {value:g} us; treated as missing,"
-                " the device median applies."
+                f"Qubit {index} reported {label} = {value:g} us. NoiseVault treats the value as"
+                " missing, so the device median applies."
                 for index, value in invalid[key]
             ]
         elif on_working := [(i, v) for i, v in invalid[key] if i not in disabled_qubits]:
             index, value = on_working[0]
             raise SourceDataError(
-                f"{cal.name} reports no valid {label} on any working qubit (e.g. qubit {index}:"
-                f" {label} = {value:g} us); {label} must be a positive number of microseconds"
+                f"{cal.name} reports no valid {label} on any working qubit (for example, qubit"
+                f" {index}: {label} = {value:g} us). {label} must be a positive number of"
+                " microseconds"
             )
     explained = {key: {index for index, _ in found} for key, found in invalid.items()}
     lacking = {
@@ -609,7 +613,8 @@ def _without_invalid_coherence(
 ) -> tuple[dict[int, QubitCalibration], dict[str, list[tuple[int, float]]]]:
     """The qubits with nonpositive or nonfinite T1/T2 cleared, and what each cleared one said.
 
-    A dead qubit can report T1 = 0; treating it as missing keeps the rest of the device usable.
+    A dead qubit can report T1 = 0. If the value counts as missing, the rest of the device stays
+    usable.
     """
     qubits = dict(cal.qubits)
     invalid: dict[str, list[tuple[int, float]]] = {key: [] for key in _COHERENCE}
@@ -752,7 +757,7 @@ def _qubit_record(
 
 
 def _connectivity(instructions: Iterable[Instruction]) -> dict[str, Any]:
-    """Pairs of every 2-qubit instruction; directed when any 2-qubit gate is directional."""
+    """Pairs of every 2-qubit instruction, directed if any 2-qubit gate is directional."""
     pairs = {inst.qubits for inst in instructions if len(inst.qubits) == 2}
     names = {inst.name for inst in instructions if len(inst.qubits) == 2}
     directed = any(not gates.is_symmetric(name) for name in names)
@@ -799,8 +804,10 @@ def _median_idle(records: Sequence[Mapping[str, Any]], ibm: bool) -> dict[str, A
 
 
 def _clean(value: float) -> float:
-    """Twelve significant digits: drops the float residue of s -> ns/us conversions, so the same
-    calibration read from a Target or from BackendProperties gets the same fingerprint."""
+    """Twelve significant digits, without the float residue of s -> ns/us conversions.
+
+    As a result, a calibration read from a Target or from BackendProperties gets one fingerprint.
+    """
     return float(f"{value:.12g}")
 
 
@@ -818,7 +825,7 @@ def as_utc(value: str | date | datetime, *, name: str = "at") -> datetime:
     except ValueError:
         raise ValueError(
             f"{name}={value!r} is not an ISO 8601 date or time,"
-            " e.g. '2025-06-01' or '2025-06-01T12:00:00Z'"
+            " such as '2025-06-01' or '2025-06-01T12:00:00Z'"
         ) from None
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=UTC)

@@ -1,11 +1,12 @@
 """Cirq export: a ``cirq.NoiseModel`` that adds a profile's noise to every operation.
 
-Each gate is followed by the channels the shared conversion rules give it, as
-``cirq.KrausChannel`` on the same qubits. Mid-circuit measurements get the readout assignment
-error as a ``MeasurementGate`` confusion map and terminal ones as a channel just before them
-(see :class:`NoiseVaultNoiseModel`), resets get the preparation error, and ``WaitGate`` gets
-thermal relaxation. ``LineQubit(i)`` is device qubit ``i`` unless ``layout`` says otherwise;
-``GridQubit(r, c)`` is the qubit at coords ``(r, c)`` when the profile records coords.
+After each gate, the export adds the channels that the shared conversion rules give the gate,
+as ``cirq.KrausChannel`` on the same qubits. A mid-circuit measurement gets the readout
+assignment error as a ``MeasurementGate`` confusion map. A terminal measurement gets the same
+error as a channel directly before it (see :class:`NoiseVaultNoiseModel`). A reset gets the
+preparation error, and ``WaitGate`` gets thermal relaxation. ``LineQubit(i)`` is device qubit
+``i`` unless ``layout`` gives a different qubit. ``GridQubit(r, c)`` is the qubit at coords
+``(r, c)`` when the profile records coords.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from ..errors import LayoutError, install_hint
 try:
     import cirq
 except ImportError as exc:
-    raise ImportError(f"to_cirq needs Cirq; install it with: {install_hint('cirq')}") from exc
+    raise ImportError(f"the Cirq export needs Cirq: {install_hint('cirq')}") from exc
 
 from .. import gates
 from ..channels import readout_matrix
@@ -42,11 +43,12 @@ _ANGLE_TOL = 1e-9
 class _PowFamily:
     """Canonical names of a Cirq EigenGate class by exponent, compared modulo ``period``.
 
-    ``names`` are the fixed gates at their exponents and ``other`` the registry gate with a
-    parameter that the class equals at every exponent (``p`` for ``ZPowGate``, exactly; ``rx``
-    for ``XPowGate``, up to global phase). Which calibration either takes on a profile is
-    :func:`~noisevault.conversion.native_name`'s rule. When ``other`` is None too the gate is
-    unknown at other exponents and is reported as ``base**exponent``.
+    ``names`` are the fixed gates at their exponents. ``other`` is the registry gate with a
+    parameter that the class equals at every exponent. For ``ZPowGate``, ``other`` is ``p``
+    exactly. For ``XPowGate``, ``other`` is ``rx`` up to global phase.
+    :func:`~noisevault.conversion.native_name` decides which calibration each one takes on a
+    profile. When ``other`` is also None, the gate is unknown at other exponents and the report
+    shows it as ``base**exponent``.
     """
 
     base: str
@@ -74,8 +76,8 @@ class _PowFamily:
 
 # Up to a global phase these gates repeat with period 2 in the exponent (iSWAP with 4), so
 # inverses such as X**-1, S**-1 or CZ**-1 from cirq.inverse map to their gates. MS(pi, 0) is
-# XX**-0.5 and MS(pi/2, +-pi/2) is YY**+-0.5, so both signs are the native MS; MSGate is an
-# XXPowGate and is named the same way.
+# XX**-0.5 and MS(pi/2, +-pi/2) is YY**+-0.5, so both signs are the native MS. MSGate is an
+# XXPowGate and gets its name the same way.
 _XX = _PowFamily("rxx", 2, ((0.5, "ms"), (-0.5, "ms")), "rxx")
 _POW: dict[type, _PowFamily] = {
     cirq.XPowGate: _PowFamily("x", 2, ((1, "x"), (0.5, "sx"), (-0.5, "sxdg")), "rx"),
@@ -87,8 +89,8 @@ _POW: dict[type, _PowFamily] = {
     cirq.CXPowGate: _PowFamily("cx", 2, ((1, "cx"),), None),
     cirq.CZPowGate: _PowFamily("cz", 2, ((1, "cz"),), None),
     cirq.SwapPowGate: _PowFamily("swap", 2, ((1, "swap"),), None),
-    # ISWAP**-0.5 is the same coupler pulse with the opposite sign; Google calibrates the pair
-    # as one gate and cirq_google charges it the sqrt_iswap error.
+    # ISWAP**-0.5 is the same coupler pulse with the opposite sign. Google calibrates the two
+    # as one gate, and cirq_google gives both the sqrt_iswap error.
     cirq.ISwapPowGate: _PowFamily(
         "iswap", 4, ((1, "iswap"), (0.5, "sqrt_iswap"), (-0.5, "sqrt_iswap")), None
     ),
@@ -104,7 +106,7 @@ _POW: dict[type, _PowFamily] = {
 class ECRGate(cirq.Gate):
     """IBM's echoed cross-resonance gate ``ecr``, with the gate registry's unitary.
 
-    Cirq has no ECR of its own; the noise model gives this gate a profile's ``ecr`` noise.
+    Cirq has no ECR gate, so the noise model gives ECRGate the ``ecr`` noise of a profile.
     """
 
     def _num_qubits_(self) -> int:
@@ -124,7 +126,7 @@ class ECRGate(cirq.Gate):
 
 
 def _registry_by_class() -> dict[str, str]:
-    """Registry gates whose Cirq class alone names them (e.g. Rx -> rx)."""
+    """Registry gates that are the only registry gate of their Cirq class, for example Rx -> rx."""
     names: dict[str, list[str]] = defaultdict(list)
     for info in gates.GATES.values():
         if info.cirq and info.unitary is not None:
@@ -135,26 +137,28 @@ def _registry_by_class() -> dict[str, str]:
 _BY_CLASS = _registry_by_class()
 _OWN_GATES: dict[type, str] = {ECRGate: "ecr"}
 _RESOLVE_FIRST = (
-    "resolve its parameters before adding noise: cirq.resolve_parameters(circuit,"
-    " params).with_noise(model), or give the parameterized circuit and its sweep to a simulator"
-    " built with noise=model, which resolves them first"
+    "Resolve the parameters before you add noise: cirq.resolve_parameters(circuit,"
+    " params).with_noise(model). You can also give the parameterized circuit and its sweep to a"
+    " simulator made with noise=model, which resolves them first"
 )
 
 
 def gate_name(gate: cirq.Gate, defined: Container[str] = ()) -> str:
     """The canonical NoiseVault name of a Cirq unitary gate.
 
-    The most specific class decides: this module's own gates (:class:`ECRGate`), an exponent
-    table for the power gates, else the gate registry's Cirq column. A power gate at a fixed
-    angle (``ZZ**0.5`` is ``zz``, ``X`` is ``x``, ``XX**0.5`` and ``YY**0.5`` are ``ms``) takes
-    its rotation's name instead (``rzz``, ``rx``, ``rxx``, ``ryy``) when ``defined``, a
-    profile's gate names, has the rotation but not the fixed gate (see
+    The most specific class decides the name. The order is this module's own gates
+    (:class:`ECRGate`), an exponent table for the power gates, then the gate registry's Cirq
+    column. ``defined`` is a profile's gate names. A power gate at a fixed angle has the name
+    of the fixed gate: ``ZZ**0.5`` is ``zz``, ``X`` is ``x``, ``XX**0.5`` and ``YY**0.5`` are
+    ``ms``. The power gate takes its rotation's name (``rzz``, ``rx``, ``rxx``, ``ryy``) when
+    ``defined`` has the rotation but not the fixed gate (see
     :func:`~noisevault.conversion.native_name`). ``Z**t`` is exactly ``p(pi t)``, so a profile's
-    ``p`` comes before ``rz`` at every exponent, after the fixed gate (``s``, ``t``, ...) at
-    its own. Any other gate is named after its class in snake case without the ``Gate`` suffix
-    (``FSimGate`` -> ``fsim``, ``MatrixGate`` -> ``matrix``), so a profile can calibrate it
-    under that name; otherwise it gets the typical-noise rule. A power gate whose name depends
-    on an unresolved exponent (``X**t`` is ``x`` at t=1) raises ValueError.
+    ``p`` comes before ``rz`` at every exponent, and after the fixed gate (``s``, ``t``, ...)
+    at the exponent of that gate. Any other gate takes the name of its class in snake case
+    without the ``Gate`` suffix (``FSimGate`` -> ``fsim``, ``MatrixGate`` -> ``matrix``). A
+    profile can calibrate the gate under that name. If the profile does not, the gate gets the
+    typical-noise rule. A power gate whose name depends on an unresolved exponent (``X**t`` is
+    ``x`` at t=1) raises ValueError.
     """
     for cls in type(gate).__mro__:
         if cls in _OWN_GATES:
@@ -162,7 +166,7 @@ def gate_name(gate: cirq.Gate, defined: Container[str] = ()) -> str:
         family = _POW.get(cls)
         if family is not None:
             if family.names and cirq.is_parameterized(gate):
-                raise ValueError(f"the gate of {gate!r} depends on its exponent; {_RESOLVE_FIRST}")
+                raise ValueError(f"the gate of {gate!r} depends on its exponent. {_RESOLVE_FIRST}")
             return family.name_for(gate.exponent, defined)  # type: ignore[attr-defined]
         if cls.__name__ in _BY_CLASS:
             return _BY_CLASS[cls.__name__]
@@ -204,7 +208,9 @@ class _QubitMap:
                 f"layout has no device qubit for {qid!r}", hint="map every circuit qubit in layout="
             )
         if qid.dimension != 2:
-            raise LayoutError(f"{qid!r} has dimension {qid.dimension}; profiles describe qubits")
+            raise LayoutError(
+                f"{qid!r} has dimension {qid.dimension}, but a profile describes qubits"
+            )
         (index,) = normalize_layout([qid], {qid: self._default_index(qid)}, self._profile).values()
         self._known[qid] = index
         return index
@@ -219,19 +225,23 @@ class _QubitMap:
                 some = ", ".join(f"GridQubit{c}" for c in list(self._coords)[:3])
                 raise LayoutError(
                     f"{self._profile.id} has no qubit at coords ({qid.row}, {qid.col})",
-                    hint=f"use the device's coords (e.g. {some}) or {fix}",
+                    hint=f"use the device's coords, for example {some}, or {fix}",
                 )
             return index
-        why = "records no qubit coords" if isinstance(qid, cirq.GridQubit) else "cannot place it"
+        why = (
+            "records no qubit coords"
+            if isinstance(qid, cirq.GridQubit)
+            else "cannot place this type of qubit"
+        )
         raise LayoutError(
-            f"{qid!r} needs a layout: {self._profile.id} {why} and only LineQubit(i) maps to"
-            " device qubit i by default",
+            f"{qid!r} needs a layout, because {self._profile.id} {why} and only LineQubit(i)"
+            " maps to device qubit i by default",
             hint=fix,
         )
 
 
 def _keyed_layout(layout: CirqLayout) -> dict[cirq.Qid, int]:
-    """A layout keyed by Cirq qubits; a sequence or integer keys mean LineQubit(i)."""
+    """A layout keyed by Cirq qubits. A sequence or an integer key means LineQubit(i)."""
     if not isinstance(layout, Mapping):
         return {cirq.LineQubit(i): p for i, p in enumerate(layout)}
     keyed: dict[cirq.Qid, int] = {}
@@ -245,22 +255,23 @@ def _keyed_layout(layout: CirqLayout) -> dict[cirq.Qid, int]:
 
 
 class NoiseVaultNoiseModel(cirq.NoiseModel):
-    """A profile's noise as a Cirq noise model; ``.report`` says what was reproduced.
+    """A profile's noise as a Cirq noise model. ``.report`` says what the export reproduced.
 
-    Use it with ``cirq.DensityMatrixSimulator(noise=model)`` (exact) or
-    ``cirq.Simulator(noise=model)`` (sampled trajectories). The report keeps collecting events,
-    such as gates that got typical noise, as circuits are simulated.
+    Use the model with ``cirq.DensityMatrixSimulator(noise=model)`` (exact) or
+    ``cirq.Simulator(noise=model)`` (sampled trajectories). The report adds events, such as
+    gates that got typical noise, each time Cirq simulates a circuit.
 
     Readout error is classical: a mid-circuit measurement reports a flipped bit and leaves the
-    qubit in its true state (a ``confusion_map``). A terminal measurement instead gets the same
-    assignment probabilities as a channel just before it, because Cirq samples terminal
-    measurements from the original circuit's gates and would drop a confusion map. Sampled
-    results are exact either way, but the state ``simulate()`` returns after a terminal
-    measurement includes those flips; inspect states with ``readout=False`` or without the
-    final measurements.
+    qubit in its true state (a ``confusion_map``). A terminal measurement gets the same
+    assignment probabilities as a channel directly before it. Cirq samples terminal
+    measurements from the gates of the original circuit and does not use a confusion map
+    there. Sampled results are exact in both cases. But after a terminal measurement, the
+    state that ``simulate()`` returns includes the flips. To inspect states, use
+    ``readout=False`` or remove the final measurements.
 
-    Report events count conversions, not shots or runs: Cirq converts a circuit once per run or
-    per part of a run, and a repeat of the circuit converted last reuses that conversion.
+    Report events count each noisy circuit that the model builds, not shots or runs. Cirq asks
+    for a noisy circuit once per run or once per part of a run. A repeat of the last circuit
+    uses the noisy circuit again.
     """
 
     def __init__(
@@ -288,8 +299,8 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
     ) -> Sequence[cirq.OP_TREE]:
         moments = tuple(moments)
         # Cirq's per-shot paths (trajectories, mid-circuit measurements) ask for the same
-        # moments on every repetition; reusing the last conversion keeps them fast and keeps
-        # report events from counting shots.
+        # moments on every repetition. The model returns its last result again, so these paths
+        # stay fast and report events do not count shots.
         if self._last is not None and self._last[0] == moments:
             return self._last[1]
         self._qubits.physical(system_qubits)
@@ -308,7 +319,7 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
         return noisy
 
     def noisy_operation(self, operation: cirq.Operation) -> cirq.OP_TREE:
-        """The operation followed by its noise; a measurement gets a ``confusion_map``."""
+        """The operation followed by its noise. A measurement gets a ``confusion_map``."""
         return self._noisy(operation, terminal=False)
 
     def _noisy(self, operation: cirq.Operation, *, terminal: bool) -> cirq.OP_TREE:
@@ -317,14 +328,15 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
             return operation
         if isinstance(operation, cirq.ClassicallyControlledOperation):
             raise ValueError(
-                f"{operation!r} is classically controlled, which the Cirq export does not"
-                " support yet; replace the feed-forward with a quantum-controlled gate and"
-                " measure at the end, or simulate the parts before and after it separately"
+                f"{operation!r} is classically controlled, and the Cirq export does not support"
+                " classical control. Replace the feed-forward with a quantum-controlled gate and a"
+                " final measurement, or simulate the parts before and after separately"
             )
         if gate is None:
             raise ValueError(
-                f"{operation!r} is not a plain gate operation; flatten it first, e.g."
-                " cirq.Circuit(cirq.decompose(circuit, keep=lambda op: op.gate is not None))"
+                f"{operation!r} is not a plain gate operation. Flatten the circuit first, for"
+                " example with cirq.Circuit(cirq.decompose(circuit, keep=lambda op: op.gate is not"
+                " None))"
             )
         physical = self._qubits.physical(operation.qubits)
         if isinstance(gate, cirq.MeasurementGate):
@@ -361,8 +373,8 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
     def _phased_xz(
         self, gate: cirq.PhasedXZGate, qids: Sequence[cirq.Qid], physical: tuple[int, ...]
     ) -> list[cirq.Operation]:
-        """PhasedXZ is exactly the r gate (PhasedXPow) then ``Z**z``, each with its noise; the
-        Z part is named as a ``Z**z`` of its own would be.
+        """PhasedXZ is exactly the r gate (PhasedXPow) then ``Z**z``, each with its noise. The
+        Z part gets the same name as a separate ``Z**z``.
 
         Google calibrates PhasedXZ as r with a virtual Z, so it needs no typical noise there.
         Only a profile without its own ``phased_xz`` gets here.
@@ -381,8 +393,8 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
         if self._readout:
             raise ValueError(
                 f"{operation!r} is not a cirq.measure, so NoiseVault cannot add its readout"
-                " error; rotate into the Z basis and use cirq.measure, or pass"
-                " readout=False to keep it noiseless"
+                " error. Rotate into the Z basis and use cirq.measure, or pass readout=False to"
+                " keep the measurement noiseless"
             )
         return operation
 
@@ -398,8 +410,8 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
             return operation
         if gate.confusion_map:
             raise ValueError(
-                f"{operation!r} already has a confusion_map; remove it, or pass readout=False to"
-                " keep your own readout model"
+                f"{operation!r} already has a confusion_map. Remove the confusion_map, or pass"
+                " readout=False to keep your own readout model"
             )
         matrices = {}
         for position, index in enumerate(physical):
@@ -414,7 +426,7 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
             self.report.approximate(
                 "state after a terminal measurement",
                 "includes the readout flips",
-                "sampled results are exact; inspect states with readout=False",
+                "sampled results are exact. Inspect states with readout=False",
             )
             flips = [
                 cirq.KrausChannel(_assignment_kraus(m)).on(operation.qubits[position])
@@ -442,7 +454,7 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
         self, operation: cirq.Operation, gate: cirq.WaitGate, physical: tuple[int, ...]
     ) -> list[cirq.Operation]:
         if cirq.is_parameterized(gate):
-            raise ValueError(f"{operation!r} has an unresolved duration; {_RESOLVE_FIRST}")
+            raise ValueError(f"{operation!r} has an unresolved duration. {_RESOLVE_FIRST}")
         duration = float(gate.duration.total_nanos())
         out = [operation]
         for qid, index in zip(operation.qubits, physical, strict=True):
@@ -475,8 +487,8 @@ def to_cirq(
     sequence indexed by LineQubit) to device qubits. Without it ``LineQubit(i)`` is qubit ``i``
     and ``GridQubit(r, c)`` is the qubit at coords ``(r, c)`` if the profile records coords.
     ``unknown_gates="typical"`` gives gates the profile does not calibrate the noise of its
-    typical native gate (reported and warned about once per gate); ``"error"`` raises
-    instead. ``readout=False`` leaves measurements noiseless.
+    typical native gate, with one report entry and one warning per gate. ``"error"`` raises
+    an error instead. ``readout=False`` leaves measurements noiseless.
     """
     if unknown_gates not in get_args(UnknownGates):
         raise ValueError(f"unknown_gates={unknown_gates!r}: choose 'typical' or 'error'")
@@ -505,7 +517,7 @@ def to_cirq(
         report.omit("readout error (readout=False)")
     report.mark_exact("preparation error after each reset")
     report.mark_exact("thermal relaxation during WaitGate")
-    report.omit("preparation error of the initial state (only resets get it)")
+    report.omit("preparation error of the initial state (only resets get preparation error)")
     report.omit("idle noise outside WaitGate (unscheduled idle time)")
     return NoiseVaultNoiseModel(
         profile, report, qubits, unknown_gates=unknown_gates, readout=readout

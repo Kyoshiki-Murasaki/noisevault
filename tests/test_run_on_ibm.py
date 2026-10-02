@@ -46,7 +46,7 @@ usage           about 6.1 s of QPU time (IBM's estimate)
 counts file     fez.counts.json
 """
 WAITING = (
-    "waiting for it to run\nCtrl-C stops waiting; run the same command again to collect the job\n"
+    "waiting for it to run\nCtrl-C stops waiting. Run the same command again to collect the job\n"
 )
 
 
@@ -210,7 +210,7 @@ def test_a_missing_ibm_extra_gives_the_install_command(tmp_path: Path) -> None:
     )
     assert (result.returncode, result.stdout) == (1, "")
     assert result.stderr == (
-        f"error: scripts/run_on_ibm.py needs qiskit-ibm-runtime\nhint: {install_hint('ibm')}\n"
+        f"error: run_on_ibm.py needs qiskit-ibm-runtime\nhint: {install_hint('ibm')}\n"
     )
 
 
@@ -296,6 +296,15 @@ def test_one_job_carries_every_option_the_counts_format_checks(local_run: LocalR
 
 
 _PEP_723 = re.compile(r"(?m)^# /// script$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
+
+
+def test_the_usage_names_the_script_the_same_way_for_uv_and_a_clone() -> None:
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.startswith(
+        "usage: run_on_ibm.py [-h] [--shots N] -o FILE [--yes] DEVICE\n"
+    )
 
 
 def test_uv_runs_the_script_from_a_url_with_noisevault_from_the_repository() -> None:
@@ -499,7 +508,7 @@ def test_a_changed_duration_binds_the_counts_to_the_plan_and_warns() -> None:
         planned,
         f"IBM recalibrated ibm_fez before the job ran ({latest.short_fingerprint}), and sx on"
         " qubit 136 now takes 28 ns, not 24 ns, so the submitted delays may not match the"
-        f" timeline that ran; the counts bind to the planned calibration {FEZ}",
+        f" timeline that ran. The counts bind to the planned calibration {FEZ}",
         "run the script again for counts that match one calibration",
     )
 
@@ -534,7 +543,7 @@ def test_a_calibration_older_than_the_plan_binds_the_counts_to_the_plan() -> Non
     assert script.bind(submitted, ran, lambda at: latest) == script.Binding(
         planned,
         f"the calibration IBM returned for the time the job ran, {latest.short_fingerprint}, is"
-        f" older than the planned {planned.short_fingerprint}; the counts bind to the planned"
+        f" older than the planned {planned.short_fingerprint}. The counts bind to the planned"
         " calibration",
     )
 
@@ -549,7 +558,7 @@ def test_a_failed_pull_at_run_time_binds_the_counts_to_the_plan() -> None:
     assert script.bind(submitted, ran, calibration) == script.Binding(
         planned,
         "could not pull the calibration in effect when the job ran (IBM did not return the"
-        " calibration of ibm_fez (timeout)); the counts bind to the planned calibration"
+        " calibration of ibm_fez (timeout)). The counts bind to the planned calibration"
         f" {planned.short_fingerprint}",
     )
 
@@ -707,7 +716,7 @@ def test_without_a_terminal_the_script_asks_for_yes(
     assert script.main(["ibm_fez", "-o", str(folder / "fez.counts.json")]) == 1
     assert capsys.readouterr().err == (
         "error: cannot ask before submitting, because standard input is not a terminal\n"
-        "hint: pass --yes to submit without asking\n"
+        "hint: give --yes to submit without asking\n"
     )
     assert submissions == []
     assert list(folder.iterdir()) == []
@@ -747,7 +756,7 @@ def test_a_missing_account_gives_the_setup_step(
         (
             "fez.counts.json",
             "{output} exists",
-            "give -o a new file name; the script never replaces counts",
+            "give -o a new file name. The script never replaces a counts file",
         ),
         ("nowhere/fez.counts.json", "no folder {folder}", "create it, or give -o another path"),
     ],

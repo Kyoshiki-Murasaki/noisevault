@@ -32,7 +32,7 @@ SETUP = (
 
 
 def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
-    """The calibration of ``device`` now, or the newest one older than ``at``, via the account.
+    """The calibration of ``device`` now, or the newest one older than ``at``, through the account.
 
     Everything comes from ``backend.properties(datetime=at)``, so gates, qubits and readout are
     one snapshot even for a past ``at`` (the backend's Target always describes the present).
@@ -48,7 +48,7 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
     when = None if at is None else as_utc(at)
     try:
         props = backend.properties(datetime=when)
-    except Exception as exc:  # API, protocol and network errors all surface here
+    except Exception as exc:  # API, protocol and network errors all arrive here
         raise SourceUnavailable(
             f"IBM did not return the calibration of {device} ({exc})",
             hint="try again later, or pull without an account with source='ibm'",
@@ -56,7 +56,7 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
     if props is None:
         if at is None:
             raise SourceUnavailable(
-                f"IBM returned no calibration for {device}; retired devices have none",
+                f"IBM returned no calibration for {device}. Retired devices have no calibration",
                 hint="run nv list to see every profile you can load offline",
             )
         raise SourceUnavailable(
@@ -112,5 +112,5 @@ def _runtime_version() -> str:
 
 
 def bundled_profiles() -> list[Profile]:
-    """Account data is never bundled: it is yours, under IBM's terms."""
+    """None, because account data is yours, under IBM's terms."""
     return []

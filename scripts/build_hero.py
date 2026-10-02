@@ -105,10 +105,10 @@ def parse(rows: list[str]) -> Hero:
 
 
 def chain(segments: list[tuple[Point, Point]]) -> list[list[Point]]:
-    """Join segments left to right into polylines, merging straight runs into one leg.
+    """Join segments left to right into polylines, and merge straight runs into one leg.
 
-    Neighbouring strokes meet at a shared cell edge, except │, which stands mid-cell: a start
-    within half a cell of the current end on the same line continues the polyline.
+    Neighbouring strokes meet at a shared cell edge, but │ stands in the middle of its cell. So a
+    start within half a cell of the current end, on the same line, continues the polyline.
     """
     lines: list[list[Point]] = []
     for a, b in sorted(segments):
@@ -178,7 +178,7 @@ def main() -> int:
     if args.check:
         stale = [p for p, text in files.items() if not p.exists() or p.read_text("utf-8") != text]
         for p in stale:
-            print(f"{p.relative_to(ROOT)} is out of date; run python scripts/build_hero.py")
+            print(f"{p.relative_to(ROOT)} is out of date. Run python scripts/build_hero.py")
         if not stale:
             print("up to date")
         return 1 if stale else 0

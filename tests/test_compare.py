@@ -488,12 +488,13 @@ def test_a_gate_factor_that_is_not_identified_has_nothing_to_save() -> None:
     xx = PlannedCircuit(name="xx", qubits=(0,), ops=XX)
     neither = compare(profile, simulate(profile, [xx], shots=4000, seed=2, run_at=LATER))
     with pytest.raises(
-        NoiseVaultError, match="^gate and readout factors are not identified; nothing to save$"
+        NoiseVaultError,
+        match="^gate and readout factors are not identified, so there is nothing to save$",
     ):
         neither.fitted_profile()
     readout_only = compare(profile, written(profile, [("readout", (), {"0": 3960, "1": 40})]))
     with pytest.raises(
-        NoiseVaultError, match="^the gate factor is not identified; nothing to save$"
+        NoiseVaultError, match="^the gate factor is not identified, so there is nothing to save$"
     ):
         readout_only.fitted_profile()
 

@@ -99,7 +99,7 @@ _FORBIDDEN_NAME = re.compile(r"[@/\\]")
 
 
 class _Model(BaseModel):
-    # model_copy(update=...) skips validation, so a nested instance must be checked again
+    # model_copy(update=...) skips validation, so pydantic must check a nested instance again
     model_config = ConfigDict(
         extra="forbid", frozen=True, allow_inf_nan=False, revalidate_instances="always"
     )
@@ -109,7 +109,7 @@ class FrozenDict(dict):
     """A dict that refuses changes, so a validated profile cannot drift from its fingerprint."""
 
     def _refuse(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("a Profile is immutable; use profile.model_copy(update=...) to change it")
+        raise TypeError("a Profile is immutable. Use profile.model_copy(update=...) to change it")
 
     __setitem__ = __delitem__ = __ior__ = clear = pop = popitem = setdefault = update = _refuse
 
@@ -123,10 +123,11 @@ _MAX_NESTING = 64
 def _freeze(value: Any, where: str = "", depth: int = 1) -> Any:
     """Read-only copy of JSON data: mappings become FrozenDict, lists and tuples become tuples.
 
-    Anything that would not survive a save unchanged is refused: a non-string key (``0`` and
-    ``"0"`` would collide), a set or other object, a nonfinite number, which JSON would write as
-    null (``allow_inf_nan=False`` does not reach values typed ``Any``), and nesting deeper than
-    ``_MAX_NESTING`` levels (pydantic cannot save nesting deeper than 255 levels).
+    The copy refuses each value that a save would change. One such value is a non-string key,
+    because ``0`` and ``"0"`` would collide. Others are a set or other object, and a nonfinite
+    number, which JSON would write as null. ``allow_inf_nan=False`` does not reach values typed
+    ``Any``. The copy also refuses nesting deeper than ``_MAX_NESTING`` levels, because pydantic
+    cannot save nesting deeper than 255 levels.
     """
     if isinstance(value, Mapping | list | tuple) and depth > _MAX_NESTING:
         raise ValueError(f"nested more than {_MAX_NESTING} levels deep")
@@ -185,7 +186,7 @@ class Connectivity(_Model):
     def _canonical_edges(
         cls, edges: tuple[tuple[int, int], ...], info: ValidationInfo
     ) -> tuple[tuple[int, int], ...]:
-        """Distinct edges, sorted; an undirected edge is written (low, high)."""
+        """Distinct edges, sorted. An undirected edge has the form (low, high)."""
         directed = info.data.get("directed", False)
         seen: set[tuple[int, int]] = set()
         for a, b in edges:
@@ -255,7 +256,10 @@ class _RecordKey(_Model):
 
 
 class CalibrationRecord(_GateFields, _RecordKey):
-    """Calibration of one gate on specific qubits; overrides the definition field by field."""
+    """Calibration of one gate on specific qubits.
+
+    A record overrides the definition field by field.
+    """
 
 
 class Readout(_Model):
@@ -307,7 +311,10 @@ class _QubitKey(_Model):
 
 
 class QubitRecord(Idle, _QubitKey):
-    """Per-qubit values; idle fields override ``idle`` one by one, readout and prep as a whole."""
+    """Per-qubit values.
+
+    Idle fields override ``idle`` one by one, and readout and prep as a whole.
+    """
 
     readout: Readout | None = None
     prep: Prep | None = None
@@ -317,7 +324,10 @@ class QubitRecord(Idle, _QubitKey):
 
 
 class Effect(_Model):
-    """Physics the format records but no adapter implements yet (always reported omitted)."""
+    """Physics that the format records but no export implements yet.
+
+    The report always lists an effect as omitted.
+    """
 
     type: EffectType
     gate: str | None = None
@@ -371,9 +381,9 @@ class Provenance(_Model):
 class ErrorFactor(_Model):
     """One factor on the profile's own error rates, with its 95% interval when fitted.
 
-    ``bound`` says the interval reached an end of the fit's domain, so only one side is a
-    confidence limit: "lower" keeps ``high`` only (printed "at most"), "upper" keeps ``low``
-    only (printed "at least"). A hand-written factor has no interval and no bound.
+    ``bound`` says that the interval reached an end of the fit's domain, so only one side is a
+    limit. "lower" keeps only ``high``, printed "at most". "upper" keeps only ``low``, printed
+    "at least". A hand-written factor has no interval and no bound.
     """
 
     factor: NonNegative
@@ -418,7 +428,7 @@ class ErrorFactor(_Model):
 
 
 class CountsFit(_Model):
-    """The counts the factors were fitted to. Every field is required, ``p_value`` included."""
+    """The counts that the fit used. Every field is required, ``p_value`` included."""
 
     counts: Sha256
     source: CountsSource
@@ -464,13 +474,13 @@ class UnmodeledError(_Model):
             interval = factor.low is not None or factor.high is not None
             if self.fit is not None and not interval:
                 raise ValueError(
-                    f"{name}: a fitted factor states its interval; give low and high,"
+                    f"{name}: a fitted factor states its interval. Give low and high,"
                     " or one of them with bound"
                 )
             if self.fit is None and interval:
                 raise ValueError(
-                    f"{name}: an interval needs the fit it came from;"
-                    " add fit, or drop low, high and bound"
+                    f"{name}: an interval needs the fit it came from."
+                    " Add fit, or drop low, high and bound"
                 )
         return self
 
@@ -532,7 +542,10 @@ def _latex(text: str) -> str:
 
 
 def merge_spec(definition: GateSpec, record: CalibrationRecord) -> GateSpec:
-    """Apply a record to its definition: field by field, except the metric is replaced whole."""
+    """Apply a record to its definition field by field.
+
+    The record's metric replaces the whole metric of the definition.
+    """
     base = definition.model_dump(exclude_none=True)
     override = record.model_dump(exclude_none=True, exclude={"gate", "qubits"})
     if any(key in override for key in metrics.METRIC_KEYS):
@@ -671,13 +684,13 @@ class Profile(_Model):
             return self._table
 
     def model_copy(self, *, update: dict[str, Any] | None = None, deep: bool = False) -> Profile:
-        """A copy; with ``update`` the result is validated like any new profile."""
+        """A copy. With ``update``, NoiseVault validates the result like any new profile."""
         if update:
             return type(self).model_validate({**self.to_dict(), **update})
         return super().model_copy(deep=deep)
 
     def uncorrected(self) -> Profile:
-        """This profile without ``unmodeled_error``: the calibration as stated."""
+        """The profile without ``unmodeled_error``, which is the calibration as stated."""
         if self.unmodeled_error is None:
             return self
         return self.model_copy(update={"unmodeled_error": None})
@@ -696,7 +709,7 @@ class Profile(_Model):
         return _readable_json(self.to_dict())
 
     def save(self, path: str | Path) -> Path:
-        """Write canonical JSON, replacing ``path``; a ``.gz`` suffix writes reproducible gzip."""
+        """Write canonical JSON and replace ``path``. A ``.gz`` suffix writes reproducible gzip."""
         path = Path(path)
         if path.suffix == ".gz":
             text = json.dumps(self.to_dict(), separators=(",", ":"), ensure_ascii=False)
@@ -708,11 +721,12 @@ class Profile(_Model):
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Profile:
-        """Validate a profile dict; a format 0.1 dict is upgraded in memory with a warning."""
+        """Validate a profile dict. A format 0.1 dict gets an upgrade in memory and a warning."""
         if compat.is_v01(data):
             data = compat.upgrade_v01(data)
             warnings.warn(
-                "upgraded a NoiseVault 0.1 file to format 1.0 in memory; save it to keep 1.0",
+                "upgraded a NoiseVault 0.1 file to format 1.0 in memory."
+                " Save the profile to keep format 1.0",
                 MigrationWarning,
                 stacklevel=2,
             )
@@ -740,11 +754,11 @@ class Profile(_Model):
     ) -> Profile:
         """A hypothetical device where every gate of an arity has the same error.
 
-        Every registry 1-qubit unitary gate, and on two or more qubits every 2-qubit one, is
-        defined (except z-family gates, free through a virtual ``rz``, and multi-entangler gates,
-        which must be decomposed), so any circuit of such gates resolves to calibrated noise
-        without approximation. Only a device of two or more qubits needs ``two_qubit_error`` and
-        uses ``two_qubit_ns``.
+        The profile defines every registry 1-qubit unitary gate and, on two or more qubits,
+        every 2-qubit unitary gate. Z-family gates are free through a virtual ``rz``, and
+        multi-entangler gates need a decomposition, so the profile defines neither. Thus any
+        circuit of the defined gates resolves to calibrated noise without approximation. Only a
+        device of two or more qubits needs ``two_qubit_error`` and uses ``two_qubit_ns``.
         """
         if num_qubits >= 2 and two_qubit_error is None:
             raise ValueError(
@@ -788,6 +802,8 @@ class Profile(_Model):
     __str__ = __repr__
 
     def summary(self) -> str:
+        from .diff import fmt_us
+
         dev, prov, stated = self.device, self.provenance, self.uncorrected()
         when = dev.calibrated_at.date().isoformat() if dev.calibrated_at else "undated"
         lines = [
@@ -803,7 +819,7 @@ class Profile(_Model):
             )
         medians = qubit_medians(stated)
         if medians.t1_us is not None:
-            lines.append(f"  median T1 {medians.t1_us:.4g} us")
+            lines.append(f"  median T1 {fmt_us(medians.t1_us)} us")
         lines.append(
             "  readout unknown"
             if medians.readout_error is None
@@ -922,8 +938,8 @@ def gate_loci(profile: Profile, name: str) -> list[GateNoise]:
 
     The candidates are each enabled qubit or connected pair (in both orders) and each recorded
     locus. A symmetric gate's pair counts once when both orders resolve to the same state, error
-    and duration, and twice when a record makes them differ. A locus the table refuses is left
-    out.
+    and duration, and twice when a record makes them differ. The result leaves out a locus that
+    the table refuses.
     """
     from .table import GateNoise
 
@@ -1028,12 +1044,12 @@ def _loci(count: int) -> str:
 
 
 def _profile_issues(profile: Profile) -> list[str]:
-    """Cross-field rules of the format; each issue names where it is."""
+    """Cross-field rules of the format. Each issue names its location."""
     issues: list[str] = []
     n = profile.device.num_qubits
     if not _ID.match(profile.id):
         issues.append(
-            f"device: the profile id {profile.id!r} (from vendor and name) may only use letters,"
+            f"device: the profile id {profile.id!r} (from vendor and name) can use only letters,"
             " digits and _ . - so that refs can name it"
         )
     arity: dict[str, int] = {}
@@ -1072,7 +1088,7 @@ def _profile_issues(profile: Profile) -> list[str]:
         if len(record.qubits) != arity[record.gate]:
             issues.append(f"{where}: {record.gate} acts on {arity[record.gate]} qubits")
         if len(set(record.qubits)) != len(record.qubits):
-            issues.append(f"{where}: targets must be distinct")
+            issues.append(f"{where}: the qubits must be distinct")
         if any(q >= n for q in record.qubits):
             issues.append(f"{where}: qubit outside 0..{n - 1}")
         key = (record.gate, record.qubits)
@@ -1110,8 +1126,8 @@ def _profile_issues(profile: Profile) -> list[str]:
     if fit.calibration != calibration:
         issues.append(
             f"unmodeled_error.fit.calibration: fitted to calibration nv:{fit.calibration[:12]},"
-            f" but this profile's calibration is nv:{calibration[:12]};"
-            " drop unmodeled_error or refit with nv compare"
+            f" but this profile's calibration is nv:{calibration[:12]}."
+            " Drop unmodeled_error or refit with nv compare"
         )
     return issues
 
@@ -1129,7 +1145,7 @@ def unmodeled_note(profile: Profile) -> tuple[str, ...]:
 
 
 def canonical_json(data: Any) -> str:
-    """Sorted keys, no whitespace, floats as repr(float): the text every hash is taken over."""
+    """Sorted keys, no whitespace, floats as repr(float). Every hash uses this text as input."""
     return json.dumps(
         data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     )
@@ -1162,7 +1178,7 @@ def _median(values: Sequence[float]) -> float | None:
 
 
 def profile_id(vendor: str | None, name: str) -> str:
-    """``name`` if it already starts with ``vendor_``, else ``vendor_name``; lowercase."""
+    """``name`` if it already starts with ``vendor_``, else ``vendor_name``, in lowercase."""
     name = re.sub(r"\s+", "-", name.lower())
     if vendor is None:
         return name
@@ -1215,7 +1231,7 @@ def write_atomically(path: Path, data: bytes) -> None:
 
 
 def load_file(path: str | Path) -> Profile:
-    """Read a profile from ``.json`` or gzip-compressed JSON (0.1 files are upgraded)."""
+    """Read a profile from ``.json`` or gzip-compressed JSON, and upgrade a 0.1 file."""
     return load_bytes(Path(path).read_bytes())
 
 
@@ -1227,7 +1243,7 @@ def json_bytes(raw: bytes) -> Any:
     return parse_json(gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw)
 
 
-_REDO = {"profile": "pull or export it again", "counts": "save the counts again"}
+_REDO = {"profile": "Pull or export the profile again", "counts": "Save the counts again"}
 
 
 def read_json_file(
@@ -1240,20 +1256,20 @@ def read_json_file(
         return json_bytes(raw)
     except (ValueError, EOFError, zlib.error, gzip.BadGzipFile) as exc:
         if path.name.endswith((".json", ".json.gz")):
-            hint = f"the file is damaged or cut short; {_REDO[kind]}"
+            hint = f"the file is damaged or truncated. {_REDO[kind]}"
         else:
             hint = f"give a {kind} file (.json or .json.gz)"
         raise error(unreadable(str(path), exc), hint=hint) from None
 
 
 def json_schema() -> dict[str, Any]:
-    """JSON Schema of format 1.0 (structure only; cross-field rules live in the validator)."""
+    """JSON Schema of format 1.0, structure only. The validator holds the cross-field rules."""
     return Profile.model_json_schema()
 
 
 @dataclass(frozen=True)
 class Ref:
-    """A catalog reference: ``id``, ``id@YYYY-MM-DD`` or ``id@<ISO timestamp>``."""
+    """A ref: ``id``, ``id@YYYY-MM-DD`` or ``id@<ISO timestamp>``."""
 
     id: str
     date: date | None = None
@@ -1265,7 +1281,7 @@ _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def parse_ref(ref: str | Path) -> Path | Ref:
-    """A path (has a separator, a .json/.gz suffix, or exists) or a catalog :class:`Ref`."""
+    """A path or a :class:`Ref`. A path has a separator or a .json or .gz suffix, or exists."""
     if isinstance(ref, Path):
         return ref
     text = ref.strip()
@@ -1281,7 +1297,7 @@ def parse_ref(ref: str | Path) -> Path | Ref:
             return Ref(ident, date=date.fromisoformat(at))
         except ValueError:
             raise ValueError(
-                f"{ref!r}: {at} is not a calendar date; give one such as 2025-02-26"
+                f"{ref!r}: {at} is not a calendar date. Give one such as 2025-02-26"
             ) from None
     try:
         stamp = datetime.fromisoformat(at.upper())

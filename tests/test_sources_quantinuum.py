@@ -134,10 +134,10 @@ def test_bad_inputs_say_what_is_known() -> None:
         quantinuum.parse_cell("0.002")
     with pytest.raises(ValueError, match="H1-1, H1-2, H2-1, H2-2, REIMEI"):
         quantinuum.from_repository("H3-1")
-    with pytest.raises(ValueError, match="known: 2024_12_06, 2025_05_29, 2025_08_28"):
+    with pytest.raises(ValueError, match="Known dates: 2024_12_06, 2025_05_29, 2025_08_28"):
         quantinuum.from_repository("H2-2", "2025_01_01")
     with pytest.raises(
-        SourceDataError, match=r"Dates \(YYYY_MM_DD\) it has for H2-1: 2023_03_10, 2024_05_20$"
+        SourceDataError, match=r"these dates \(YYYY_MM_DD\) for H2-1: 2023_03_10, 2024_05_20$"
     ):
         quantinuum.from_spec_csv(CSV, machine="H2-1", date="2025_04_30")
 
@@ -368,7 +368,7 @@ def _files_with(name: str, path: tuple[str, ...], value: Any) -> dict[str, bytes
     return {**_files(), name: json.dumps(doc).encode()}
 
 
-_SHOTS = "expected a positive whole number"
+_SHOTS = "not a positive whole number"
 
 
 @pytest.mark.parametrize(
@@ -378,39 +378,39 @@ _SHOTS = "expected a positive whole number"
             "SQ_RB",
             ("shots",),
             1,
-            f"{_DATA}/SQ_RB.json: survival['0']['256']['3'] is 97;"
-            " expected a whole number of shots from 0 to 1",
+            f"{_DATA}/SQ_RB.json: survival['0']['256']['3'] is 97,"
+            " not a whole number of shots from 0 to 1",
         ),
-        ("TQ_RB", ("shots",), 0, f"{_DATA}/TQ_RB.json: shots is 0; {_SHOTS}"),
-        ("Memory_RB", ("shots",), True, f"{_DATA}/Memory_RB.json: shots is True; {_SHOTS}"),
-        ("SPAM", ("shots",), "10000", f"{_DATA}/SPAM.json: shots is '10000'; {_SHOTS}"),
+        ("TQ_RB", ("shots",), 0, f"{_DATA}/TQ_RB.json: shots is 0, {_SHOTS}"),
+        ("Memory_RB", ("shots",), True, f"{_DATA}/Memory_RB.json: shots is True, {_SHOTS}"),
+        ("SPAM", ("shots",), "10000", f"{_DATA}/SPAM.json: shots is '10000', {_SHOTS}"),
         (
             "TQ_RB",
             ("leakage_postselect", "(4, 5)", "128", "2"),
             101,
-            f"{_DATA}/TQ_RB.json: leakage_postselect['(4, 5)']['128']['2'] is 101;"
-            " expected a whole number of shots from 0 to 100",
+            f"{_DATA}/TQ_RB.json: leakage_postselect['(4, 5)']['128']['2'] is 101,"
+            " not a whole number of shots from 0 to 100",
         ),
         (
             "SQ_RB",
             ("survival", "7", "1024", "0"),
             97.5,
-            f"{_DATA}/SQ_RB.json: survival['7']['1024']['0'] is 97.5;"
-            " expected a whole number of shots from 0 to 100",
+            f"{_DATA}/SQ_RB.json: survival['7']['1024']['0'] is 97.5,"
+            " not a whole number of shots from 0 to 100",
         ),
         (
             "Memory_RB",
             ("survival", "55", "16", "7"),
             float("nan"),
-            f"{_DATA}/Memory_RB.json: survival['55']['16']['7'] is nan;"
-            " expected a whole number of shots from 0 to 40",
+            f"{_DATA}/Memory_RB.json: survival['55']['16']['7'] is nan,"
+            " not a whole number of shots from 0 to 40",
         ),
         (
             "SPAM",
             ("survival", "3", "1"),
             -1.0,
-            f"{_DATA}/SPAM.json: survival['3']['1'] is -1.0;"
-            " expected a whole number of shots from 0 to 10000",
+            f"{_DATA}/SPAM.json: survival['3']['1'] is -1.0,"
+            " not a whole number of shots from 0 to 10000",
         ),
     ],
     ids=[
@@ -466,8 +466,8 @@ def test_dataset_file_with_an_impossible_count_names_where(
             "TQ_RB",
             ("leakage_postselect", "(0, 1)", "x"),
             {"0": 50},
-            f"{_DATA}/TQ_RB.json: leakage_postselect['(0, 1)'] has the sequence length 'x';"
-            " expected a whole number",
+            f"{_DATA}/TQ_RB.json: leakage_postselect['(0, 1)'] has the sequence length 'x',"
+            " not a whole number",
         ),
     ],
     ids=[

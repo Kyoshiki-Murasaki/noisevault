@@ -50,7 +50,7 @@ def test_newest_record_with_its_own_fidelities_is_chosen(served) -> None:
     # filled it from the newer record. Its own one-record page shows it missing, so skip it.
     profile = ionq.pull("forte-1")
     assert profile.device.calibrated_at.isoformat() == "2026-09-27T00:00:00+00:00"
-    assert "skipped 2 newer record(s) without 1Q/2Q fidelities" in profile.provenance.notes
+    assert "skipped 2 newer records without 1Q/2Q fidelities" in profile.provenance.notes
     url = ionq._page_url("qpu.forte-1", limit=1, end="2026-09-27T00:00:00Z")
     assert profile.provenance.source_url == url
     assert profile.provenance.source_hash == "sha256:" + hashlib.sha256(served[url]).hexdigest()
@@ -109,7 +109,8 @@ def test_implausible_medians_are_skipped_and_named(served) -> None:
     assert profile.gates["r"].avg_infidelity == pytest.approx(0.0068)
     [note] = [n for n in profile.provenance.notes if "implausible" in n]
     assert (
-        "skipped 1 newer record(s)" in note and "corrupt: 2026-03-01 (1Q 0.79, 2Q 0.9861)" in note
+        "skipped 1 newer record with implausible" in note
+        and "corrupt: 2026-03-01 (1Q 0.79, 2Q 0.9861)" in note
     )
 
 
@@ -146,7 +147,10 @@ def test_a_dated_record_keeps_its_own_qubit_count(served) -> None:
     del record["qubits"]
     profile = ionq.to_profile(record, grown, source_url="u", source_hash="sha256:" + "0" * 64)
     assert profile.device.num_qubits == 8
-    assert any("qubit count (8)" in note for note in profile.provenance.notes)
+    assert (
+        "the record gives no qubit count, so NoiseVault uses the qubit count of the current"
+        " listing (8)"
+    ) in profile.provenance.notes
 
 
 @pytest.mark.parametrize(
@@ -176,7 +180,7 @@ def test_errors_say_what_to_do(served) -> None:
         ionq.pull("forte-1", at="2025-01-01")
     assert info.value.message == (
         "IonQ publishes no qpu.forte-1 characterization at or before 2025-01-01 with plausible"
-        " 1Q and 2Q fidelities of its own (0 record(s) checked)"
+        " 1Q and 2Q fidelities of its own (0 records checked)"
     )
     assert info.value.hint == "pass a later at= or none"
     # every harmony record lacks a 1Q fidelity, so no date can help
@@ -184,7 +188,7 @@ def test_errors_say_what_to_do(served) -> None:
         ionq.pull("harmony")
     assert info.value.message == (
         "IonQ publishes no qpu.harmony characterization with plausible 1Q and 2Q fidelities of"
-        " its own (2 record(s) checked)"
+        " its own (2 records checked)"
     )
     assert info.value.hint == "use another backend"
 
@@ -400,7 +404,7 @@ def test_a_listing_with_no_qpu_says_so(served, listing: list[dict[str, Any]]) ->
     with pytest.raises(SourceUnavailable) as info:
         ionq.pull("forte-1")
     assert (info.value.message, info.value.hint) == (
-        f"IonQ has no backend 'qpu.forte-1'; its listing ({_LISTING}) names no QPU",
+        f"IonQ has no backend 'qpu.forte-1'. The IonQ listing ({_LISTING}) names no QPU",
         "try again later",
     )
 

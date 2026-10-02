@@ -64,6 +64,19 @@ This file lists all notable changes to NoiseVault. Versions follow
   [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware) and
   [How nv compare fits the factors](docs/limitations.md#how-nv-compare-fits-the-factors).
 
+### Changed
+
+- **Messages and help text.** Error messages, warnings, hints and help text now follow one
+  writing standard, ASD-STE100 Simplified Technical English. Each concept has one term. Each
+  message names qubits in one form: `qubit 3`, `qubits 0-2` for a pair, and
+  `qubits 0-1, 1-2 and 2-3` for a list of pairs. Code that matches the text of a message must
+  match the new text. Examples:
+  - `cz has no calibration on (0, 2) and connectivity does not allow it` is now
+    `cz has no calibration on qubits 0-2, and the connectivity does not allow cz there`.
+  - `'ibm_fez@2025-13-40': 2025-13-40 is not a calendar date; give one such as 2025-02-26` is now
+    `'ibm_fez@2025-13-40': 2025-13-40 is not a calendar date. Give one such as 2025-02-26`.
+  - `nv list --help` says `for example trapped_ion` in place of `e.g. trapped_ion`.
+
 ### Fixed
 
 - **Revalidating a profile after reading its fingerprint.** `Profile.model_validate(profile)`, a
@@ -164,10 +177,10 @@ This file lists all notable changes to NoiseVault. Versions follow
     profiles are of one device. When the dates match, the warning gives the times.
   - For a `.json` or `.json.gz` file that is not valid JSON, the hint said to give a profile file
     with one of those names. For a damaged gzip file, the hint said to copy or pull the file
-    again. Both hints now say that the file is damaged or cut short and to pull or export it
-    again. A file with another name gets the hint to give a profile file. For a file that is not
-    UTF-8 text, the error said "not JSON (not UTF-8 text)". The error now names the first byte
-    that is not UTF-8 and its line, as in `bad.json is not UTF-8 text (byte 0xff on line 2)`.
+    again. Both hints now say that the file is damaged or truncated and to pull or export the
+    profile again. A file with another name gets the hint to give a profile file. For a file that
+    is not UTF-8 text, the error said "not JSON (not UTF-8 text)". The error now names the first
+    byte that is not UTF-8 and its line, as in `bad.json is not UTF-8 text (byte 0xff on line 2)`.
     For a file cut short inside a string, the error no longer reads
     "Unterminated string starting at at line 1".
   - When a vault copy replaced a bundled calibration, the error for a dated ref with no

@@ -104,9 +104,9 @@ def test_a_profile_from_legacy_rows_only_says_what_they_lack() -> None:
     assert _qubit(profile, 1).t1_us == pytest.approx(49.54)
     assert profile.device.processor == "Heron r1"
     assert (
-        "Every row behind this profile was recorded before 8 May 2026, when the archive began to"
-        " record units. Those rows hold only T1, T2, the readout errors and the sx and cz errors,"
-        " so this profile has no gate or readout durations and no other gates."
+        "The archive recorded every row behind this profile before 8 May 2026, when the archive"
+        " began to record units. Those rows hold only T1, T2, the readout errors and the sx and cz"
+        " errors. As a result, this profile has no gate or readout durations and no other gates."
     ) in profile.provenance.notes
 
 
@@ -134,7 +134,7 @@ def test_pair_directions_collapse_only_when_they_agree() -> None:
 
 
 def _stale(profile: nv.Profile) -> list[str]:
-    return [n for n in profile.provenance.notes if n.startswith("These values were calibrated")]
+    return [n for n in profile.provenance.notes if n.startswith("IBM calibrated these values")]
 
 
 def _rewritten(tmp_path: Path, rows: list[dict]) -> Path:
@@ -148,7 +148,7 @@ def test_a_note_names_values_calibrated_more_than_7_days_before_at() -> None:
     later = nv.from_calibration_archive(FIXTURE, "ibm_torino", at="2026-04-08T12:56:02Z")
     assert _stale(exactly) == []
     assert _stale(later) == [
-        "These values were calibrated more than 7 days before 2026-04-08T12:56:02Z, the oldest on"
+        "IBM calibrated these values more than 7 days before 2026-04-08T12:56:02Z, the oldest on"
         " 2026-04-01: T1 on qubits 0 and 1; T2 on qubits 0 and 1; cz on qubits 0-1; also readout"
         " and sx."
     ]
@@ -157,7 +157,7 @@ def test_a_note_names_values_calibrated_more_than_7_days_before_at() -> None:
 
 def test_the_note_lists_the_oldest_values_first() -> None:
     assert _stale(_fez(at="2026-03-01")) == [
-        "These values were calibrated more than 7 days before 2026-03-01T00:00:00Z, the oldest on"
+        "IBM calibrated these values more than 7 days before 2026-03-01T00:00:00Z, the oldest on"
         " 2026-01-29: cz on qubits 0-1, 1-2 and 2-3; readout on qubits 0, 1, 2 and 3; sx on qubits"
         " 0, 1, 2 and 3; also x, T1 and T2."
     ]
@@ -171,7 +171,7 @@ def test_without_at_the_note_counts_back_from_the_newest_calibration(tmp_path: P
     newest["calibrated_time"] = datetime(2026, 6, 8, 8, 0, 1, tzinfo=UTC)
     rows += [{**t1, "qubit_a": q} for q in range(4, 40)]
     assert _stale(_fez(path=_rewritten(tmp_path, rows))) == [
-        "These values were calibrated more than 7 days before the newest calibration, the oldest"
+        "IBM calibrated these values more than 7 days before the newest calibration, the oldest"
         " on 2026-06-01: T1 on qubits 1, 2, 3 and 36 more; T2 on qubits 0, 1 and 3; cz on qubits"
         " 0-1, 1-2 and 2-3; also id, prep, readout, rzz, sx and x."
     ]
@@ -246,7 +246,7 @@ def test_an_unknown_device_names_the_ones_the_file_holds() -> None:
         nv.from_calibration_archive(FIXTURE, "ibm_fes")
     assert (
         caught.value.message
-        == f"{FIXTURE.name} has no rows for ibm_fes; it holds ibm_fez, ibm_torino"
+        == f"{FIXTURE.name} has no rows for ibm_fes. The file has rows for ibm_fez, ibm_torino"
     )
     assert caught.value.hint == "did you mean 'ibm_fez'?"
 
@@ -258,7 +258,7 @@ def test_a_time_before_the_first_snapshot_is_refused() -> None:
         f"{FIXTURE.name} has no complete ibm_fez calibration before 2026-01-31T17:05:03Z,"
         " when the archive first recorded ibm_fez"
     )
-    assert caught.value.hint == "pass an at= time on or after that"
+    assert caught.value.hint == "pass an at= time on or after that time"
 
 
 LFS_POINTER = (
@@ -274,7 +274,7 @@ def test_a_file_that_is_not_parquet_points_to_the_download(tmp_path: Path, text:
     path.write_text(text)
     with pytest.raises(nv.SourceDataError) as caught:
         nv.from_calibration_archive(path, "ibm_fez")
-    assert caught.value.message.startswith(f"{path.name} cannot be read as parquet: ")
+    assert caught.value.message.startswith(f"{path.name} is not a readable parquet file: ")
     assert "hf download phanerozoic/qiskit-calibration-drift" in caught.value.hint
     assert "Git LFS" in caught.value.hint
 
@@ -324,7 +324,7 @@ _ON_QUBIT_0 = {
     "a T1 in minutes": (
         "T1",
         {"unit": "min"},
-        "T1 of qubit 0 has the unknown time unit 'min'; expected ns, us, µs, ms or s",
+        "T1 of qubit 0 has the unknown time unit 'min', not one of ns, us, µs, ms or s",
     ),
     "a readout error above 1": (
         "prob_meas0_prep1",
@@ -361,7 +361,7 @@ def test_a_newer_time_it_cannot_read_names_the_newest_rows(tmp_path: Path) -> No
     with pytest.raises(nv.SourceDataError) as info:
         _fez(at="2026-06-01T20:00:00Z", path=path)
     assert (info.value.message, info.value.hint) == (
-        f"the newest ibm_fez rows of {path.name}: T1 of qubit 0 has the unknown time unit 'min';"
-        " expected ns, us, µs, ms or s",
+        f"the newest ibm_fez rows of {path.name}: T1 of qubit 0 has the unknown time unit 'min',"
+        " not one of ns, us, µs, ms or s",
         None,
     )

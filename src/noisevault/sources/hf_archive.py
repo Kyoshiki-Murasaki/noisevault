@@ -98,8 +98,9 @@ def from_calibration_archive(
 ) -> Profile:
     """The calibration of ``device`` at ``at`` from a local copy of the dataset's parquet file.
 
-    Each property takes its newest row calibrated at or before ``at``; by default, its newest
-    row. ``at`` is a datetime, a date or an ISO 8601 string, read as UTC when it has no zone.
+    Each property takes its newest row calibrated at or before ``at``. With no ``at``, each
+    property takes its newest row. ``at`` is a datetime, a date or an ISO 8601 string. An ``at``
+    with no time zone is UTC.
     A provenance note names the values calibrated more than 7 days before ``at``.
     """
     path = Path(path)
@@ -108,7 +109,7 @@ def from_calibration_archive(
     if rows.num_rows == 0:
         held = sorted(calibration_archive_devices(path))
         raise SourceDataError(
-            f"{path.name} has no rows for {name}; it holds {', '.join(held)}",
+            f"{path.name} has no rows for {name}. The file has rows for {', '.join(held)}",
             hint=did_you_mean(name, held).strip() or None,
         )
     first = as_utc(_pyarrow().compute.min(rows["observed_time"]).as_py())
@@ -117,7 +118,7 @@ def from_calibration_archive(
         raise SourceDataError(
             f"{path.name} has no complete {name} calibration before {iso_z(first)},"
             f" when the archive first recorded {name}",
-            hint="pass an at= time on or after that",
+            hint="pass an at= time on or after that time",
         )
     picked = _newest(rows, stamp)
     origin = Origin(f"the {name} rows of {path.name}", hint=OLDER_HINT)
@@ -128,9 +129,10 @@ def from_calibration_archive(
     ]
     if all(row["unit"] is None for row in picked):
         notes.append(
-            "Every row behind this profile was recorded before 8 May 2026, when the archive began"
-            " to record units. Those rows hold only T1, T2, the readout errors and the sx and cz"
-            " errors, so this profile has no gate or readout durations and no other gates."
+            "The archive recorded every row behind this profile before 8 May 2026, when the"
+            " archive began to record units. Those rows hold only T1, T2, the readout errors and"
+            " the sx and cz errors. As a result, this profile has no gate or readout durations and"
+            " no other gates."
         )
     elif stamp is not None:
         newest = calibration_from_properties(
@@ -222,9 +224,9 @@ def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa
         raise
     except (arrow.ArrowException, OSError) as exc:
         raise SourceDataError(
-            f"{path.name} cannot be read as parquet: {str(exc).rstrip('.')}",
-            hint=f"get the data file with {DOWNLOAD}; a git clone without Git LFS gives a small"
-            " pointer file instead",
+            f"{path.name} is not a readable parquet file: {str(exc).rstrip('.')}",
+            hint=f"get the data file with {DOWNLOAD}. A git clone without Git LFS gives only a"
+            " small pointer file",
         ) from None
 
 
@@ -325,7 +327,7 @@ def _stale_note(
         named = [*named[:3], f"also {joined([label for _, label, _ in stale[3:]], 'and')}"]
     when = "the newest calibration" if at is None else iso_z(at)
     return (
-        f"These values were calibrated more than {_STALE_AFTER.days} days before {when}, the"
+        f"IBM calibrated these values more than {_STALE_AFTER.days} days before {when}, the"
         f" oldest on {stale[0][0].date().isoformat()}: {'; '.join(named)}."
     )
 

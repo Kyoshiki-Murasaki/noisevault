@@ -129,10 +129,21 @@ def test_rz_lookup_without_an_rz_definition_is_undefined() -> None:
 def test_bad_targets_and_disabled_qubits_are_unavailable() -> None:
     table = table_of(qubits=[{"index": 2, "disabled": True}])
     assert "acts on 2" in table.gate("cz", (0,)).reason
-    assert "distinct" in table.gate("cz", (1, 1)).reason
     assert "outside" in table.gate("sx", (5,)).reason
     assert "disabled" in table.gate("cz", (1, 2)).reason
     assert table.qubit(2).disabled
+
+
+def test_reasons_name_qubits_the_way_the_cli_does() -> None:
+    table = table_of()
+    assert (
+        table.gate("cz", (1, 1)).reason == "cz acts on qubits 1-1, but its qubits must be distinct"
+    )
+    assert table.gate("cz", (0, 2)).reason == (
+        "cz has no calibration on qubits 0-2, and the connectivity does not allow cz there"
+    )
+    no_native = "no calibrated 2-qubit native gate is usable on qubits 0-2"
+    assert table.typical(2, (0, 2)).reason == no_native
 
 
 def test_unavailable_says_why_as_data() -> None:

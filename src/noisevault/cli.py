@@ -2,7 +2,8 @@
 
 Every command prints plain results on stdout and ``error:``, ``hint:`` and ``warning:`` lines
 on stderr. Expected failures exit with status 1 and no traceback. ``--json`` output is for
-machines and never contains color. NO_COLOR and COLUMNS are read at each invocation.
+machines and never contains color. The command line reads NO_COLOR and COLUMNS at each
+invocation.
 """
 
 from __future__ import annotations
@@ -73,10 +74,10 @@ if TYPE_CHECKING:
     from .compare import SummaryLine
     from .counts import MeasuredCounts
 
-# Click's UsageError; typer exports only this subclass of it.
+# Click's UsageError. typer exports only this subclass of UsageError.
 _USAGE_ERROR = typer.BadParameter.__mro__[1]
 _CLICK_ERRORS = sys.modules[_USAGE_ERROR.__module__]
-# Raised by a bare `nv` once the help is printed; older click has no such class.
+# A bare `nv` raises this error after it prints the help. Older click has no such class.
 _NO_ARGS = getattr(_CLICK_ERRORS, "NoArgsIsHelpError", ())
 _STRING = get_click_type(annotation=str, parameter_info=typer.Argument())
 
@@ -122,7 +123,7 @@ class _Commands(TyperGroup):
             _usage_error(exc)
 
     def format_help(self, ctx: Any, formatter: Any) -> None:
-        # typer 0.27.0 joins the lines of an epilog= into one line, so the epilog is written here.
+        # typer 0.27.0 joins epilog= lines into one line, so this method writes the epilog.
         super().format_help(ctx, formatter)
         formatter.write(_START)
 
@@ -142,15 +143,15 @@ class _Commands(TyperGroup):
 
 
 _VALUE_HINTS = {
-    "--qubits": "qubit indices, e.g. --qubits 0,1,2",
-    "--tech": "a technology, e.g. --tech trapped_ion",
-    "--vendor": "a vendor, e.g. --vendor ibm",
-    "--framework": "one or more of qiskit,cirq,pennylane,stim, e.g. --framework cirq,stim",
-    "--top": "a count, e.g. --top 10",
-    "--at": "a date or time, e.g. --at 2025-02-26",
-    "--source": "ibm, ibm-account or ionq, e.g. --source ionq",
-    "--output": "a file name, e.g. --output fez.json",
-    "-o": "a file name, e.g. -o fez.json",
+    "--qubits": "qubit indices, for example --qubits 0,1,2",
+    "--tech": "a technology, for example --tech trapped_ion",
+    "--vendor": "a vendor, for example --vendor ibm",
+    "--framework": "one or more of qiskit,cirq,pennylane,stim, for example --framework cirq,stim",
+    "--top": "a count, for example --top 10",
+    "--at": "a date or time, for example --at 2025-02-26",
+    "--source": "ibm, ibm-account or ionq, for example --source ionq",
+    "--output": "a file name, for example --output fez.json",
+    "-o": "a file name, for example -o fez.json",
 }
 
 
@@ -233,8 +234,8 @@ _WORDS = {
     "crosstalk_measurement": "measurement crosstalk",
 }
 _REDISTRIBUTION = {
-    "yes": "may be redistributed",
-    "no": "may not be redistributed",
+    "yes": "redistribution allowed",
+    "no": "redistribution not allowed",
     "unknown": "redistribution unknown",
 }
 _FOREIGN_ERROR_HINTS: tuple[tuple[type[BaseException], str], ...] = (
@@ -281,7 +282,9 @@ def main(
 def list_profiles(
     tech: Annotated[
         str | None,
-        typer.Option("--tech", metavar="NAME", help="Only this technology, e.g. trapped_ion."),
+        typer.Option(
+            "--tech", metavar="NAME", help="Only this technology, for example trapped_ion."
+        ),
     ] = None,
     vendor: Annotated[
         str | None, typer.Option("--vendor", metavar="NAME", help="Only this vendor.")
@@ -437,7 +440,7 @@ def show(
     ref: Annotated[str, _argument("REF", _REF_HELP)],
     qubits: Annotated[
         str | None,
-        typer.Option("--qubits", metavar="LIST", help="Also list these qubits, e.g. 0,1,2."),
+        typer.Option("--qubits", metavar="LIST", help="Also list these qubits, for example 0,1,2."),
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
 ) -> None:
@@ -629,7 +632,7 @@ def _print_card(
     if fit and fit["p_value"] is not None and fit["p_value"] < POOR_FIT_P_VALUE:
         err.print(
             "warning: the unmodeled-error factors are a poor fit to their counts"
-            f" (p = {fit['p_value']:.2g}); no one pair of factors fits every circuit",
+            f" (p = {fit['p_value']:.2g}). No one pair of factors fits every circuit",
             markup=False,
         )
 
@@ -721,7 +724,7 @@ def _parse_qubits(text: str, profile: Profile) -> list[int]:
         indices = [int(part) for part in text.split(",") if part.strip()]
     except ValueError:
         raise ValueError(
-            f"--qubits {text!r}: give qubit indices separated by commas, e.g. 0,1,2"
+            f"--qubits {text!r}: give qubit indices separated by commas, for example 0,1,2"
         ) from None
     n = profile.device.num_qubits
     bad = [q for q in indices if not 0 <= q < n]
@@ -779,7 +782,9 @@ def _print_qubits(rows: list[dict[str, Any]]) -> None:
 
 @app.command()
 def pull(
-    device: Annotated[str, _argument("DEVICE", "Device to pull, e.g. ibm_fez or ionq_forte-1.")],
+    device: Annotated[
+        str, _argument("DEVICE", "Device to pull, for example ibm_fez or ionq_forte-1.")
+    ],
     at: Annotated[
         str | None,
         typer.Option(
@@ -791,7 +796,9 @@ def pull(
     source: Annotated[
         str | None,
         typer.Option(
-            "--source", metavar="NAME", help="ibm, ibm-account or ionq; default from the name."
+            "--source",
+            metavar="NAME",
+            help="ibm, ibm-account or ionq. The default comes from the name.",
         ),
     ] = None,
     output: Annotated[
@@ -799,7 +806,7 @@ def pull(
         typer.Option("--output", "-o", metavar="FILE", help="Save here instead of the vault."),
     ] = None,
 ) -> None:
-    """Fetch a live calibration and save it as a profile (network)."""
+    """Download a live calibration and save it as a profile (network)."""
     with _friendly():
         if output is not None:
             _check_writable(output)
@@ -944,7 +951,7 @@ def _loci_table(labels: tuple[str, ...]) -> Table:
 
 def _change(change: Any) -> str:
     if change.before is None or change.after is None:
-        # "worse" is undefined when one side has no value, so these stay uncolored
+        # "worse" has no meaning when one side has no value, so these changes get no color
         return "-" if change.before == change.after else "new" if change.before is None else "gone"
     text = fmt_relative(change.relative)
     if change.relative == 0:
@@ -1107,7 +1114,7 @@ def compare(
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
 ) -> None:
-    """Score a profile on counts from a device and fit how far its errors must scale."""
+    """Score a profile on counts from a device and fit its gate and readout factors."""
     with _friendly():
         profile = _load(ref, counts_hint=_PROFILE_FIRST)
         counts_file = Path(counts)
@@ -1159,7 +1166,7 @@ def _check_fitted_output(
     for read, what in ((counts, "counts file"), (profile_file, "profile file")):
         if output.exists() and read.exists() and os.path.samefile(output, read):
             raise NoiseVaultError(f"-o {output} is the {what} nv compare reads", hint=elsewhere)
-    vault = f"the vault holds the calibrations refs load; {elsewhere}"
+    vault = f"the vault holds the calibrations that refs load, so {elsewhere}"
     stores = (
         (catalog.vault_dir(), "your vault", vault),
         (Path(str(catalog.bundled_dir())), "NoiseVault's bundled profiles", elsewhere),
@@ -1311,7 +1318,7 @@ def _holds_counts(path: Path) -> bool:
     return isinstance(data, dict) and "nv_counts" in data
 
 
-# What reading a profile file can raise besides FileNotFoundError; ValidationError is a ValueError.
+# What reading a profile file can raise besides FileNotFoundError. ValidationError is a ValueError.
 _UNREADABLE = (ValueError, OSError)
 
 
@@ -1374,7 +1381,7 @@ def _error(exc: BaseException) -> NoReturn:
     _fail(_cli_terms(str(exc) or type(exc).__name__), hint)
 
 
-# Library messages name Python arguments; at the command line the same choice is a flag.
+# Library messages name Python arguments. At the command line, the same choice is a flag.
 _CLI_TERMS = (
     (re.compile(r"""source=(['"])([\w-]+)\1 or (['"])([\w-]+)\3"""), r"--source \2 or \4"),
     (re.compile(r"""source=(['"])([\w-]+)\1"""), r"--source \2"),
@@ -1431,8 +1438,8 @@ def _duration(ns: float | None) -> str:
 
 
 _PLAIN_ERRORS = {
-    "extra_forbidden": "not a format 1.0 key; put your own data under the top-level extensions key",
-    "missing": "missing; format 1.0 requires it",
+    "extra_forbidden": "not a format 1.0 key. Put your own data under the top-level extensions key",
+    "missing": "missing. Format 1.0 requires this key",
 }
 
 
@@ -1447,12 +1454,12 @@ def _validation_lines(exc: ValidationError) -> list[str]:
 
 
 def _soft_issues(profile: Profile) -> list[str]:
-    """Legal but noteworthy values: they change what a conversion produces."""
+    """Legal values to note, because they change what an export produces."""
     notes = []
     for i in range(profile.device.num_qubits):
         q = profile.table.qubit(i)
         if q.t2_clamped:
-            notes.append(f"qubit {i}: T2 exceeds 2*T1; conversions clamp it to 2*T1")
+            notes.append(f"qubit {i}: T2 exceeds 2*T1, so exports clamp T2 to 2*T1")
     for record in profile.calibrations:
         if record.scope == "cycle":
             notes.append(

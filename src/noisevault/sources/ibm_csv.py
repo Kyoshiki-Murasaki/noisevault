@@ -1,8 +1,8 @@
 """IBM calibration CSV files as downloaded from the IBM Quantum platform.
 
-The file has one row per qubit. Two-qubit errors and durations are packed into one cell per
-row, either as ``1_2:0.0106; 1_0:0.0053`` (explicit pairs, 2023 to early 2025 files) or as
-``1:0.0013;10:0.0011`` (partners of the row's qubit, files from mid-2025 on). Headers may carry
+The file has one row per qubit. IBM packs the two-qubit errors and durations of a row into one
+cell. Files from 2023 to early 2025 give explicit pairs, as ``1_2:0.0106; 1_0:0.0053``. Files
+from mid-2025 on give partners of the row's qubit, as ``1:0.0013;10:0.0011``. Headers can have
 trailing spaces and any time unit in parentheses.
 """
 
@@ -27,7 +27,7 @@ from .qiskit_backend import (
     to_profile,
 )
 
-# normalized header stem -> gate; a column "<stem> error" holds that gate's error
+# normalized header stem -> gate. A column "<stem> error" holds the error of that gate.
 _GATE_COLUMNS = {
     "id": "id",
     "√x (sx)": "sx",
@@ -55,7 +55,7 @@ _QUBIT_COLUMNS = {
     "gate length": "gate_length_2q",
     "operational": "operational",
 }
-_REDUNDANT = {"measure error", "frequency", "anharmonicity"}  # read and deliberately unused
+_REDUNDANT = {"measure error", "frequency", "anharmonicity"}  # read but not used
 _TIME_UNITS = {
     "t1": "us",
     "t2": "us",
@@ -68,8 +68,8 @@ _FALSE = {"false", "no", "0"}
 _HEADER = re.compile(r"^(?P<stem>.*?)\s*(?:\((?P<unit>[^()]*)\))?$")
 _UNITS = {"µs": "us", "μs": "us"}
 _SHOWN_HEADERS = 12  # an error message lists at most this many of the headers it found
-_SUPPORTED = "this reader imports only the 2023 to 2026 formats"
-_AS_DOWNLOADED = "import the CSV as you downloaded it, not a copy a spreadsheet saved"
+_SUPPORTED = "this importer reads only the 2023 to 2026 formats"
+_AS_DOWNLOADED = "import the CSV as you downloaded it, not a copy that a spreadsheet saved"
 _ZERO_PADDED_TWO_FIELDS = r"(?:\d+:0\d|0\d:[0-5]\d)(?:\.\d+)?"
 _THREE_FIELDS = r"\d+:[0-5]\d:[0-5]\d(?:\.\d+)?"
 _AM_PM = r"\d+(?::[0-5]\d){1,2}(?:\.\d+)?\s*[ap]m"
@@ -87,7 +87,7 @@ class _Column:
 
 
 def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: str | datetime) -> Profile:
-    """A profile from an IBM calibration CSV; ``device`` is e.g. ``"ibm_brisbane"``."""
+    """A profile from an IBM calibration CSV. ``device`` is a name such as ``"ibm_brisbane"``."""
     path = Path(path)
     raw = path.read_bytes()
     text = source_text(raw, path.name, _AS_DOWNLOADED)
@@ -144,14 +144,14 @@ def _columns(headers: list[str], name: str) -> tuple[dict[str, _Column], list[st
             if column.key in _TIME_UNITS and column.unit not in (None, "ns", "us", "ms", "s"):
                 raise SourceDataError(
                     f"{name}: {header.strip()!r} (column {position}) has the unknown time unit"
-                    f" {unit!r}; expected ns, us, µs, ms or s"
+                    f" {unit!r}, not one of ns, us, µs, ms or s"
                 )
         elif stem == "qubit":
             column = _Column(header, "qubit", None)
         elif full == "single-qubit pauli-x error":
             raise SourceDataError(
                 f"{name} is in IBM's CSV format from before 2023, which has a"
-                f" {header.strip()!r} column; {_SUPPORTED}"
+                f" {header.strip()!r} column, and {_SUPPORTED}"
             )
         else:
             if header.strip() and stem not in _REDUNDANT:
@@ -171,7 +171,7 @@ def _columns(headers: list[str], name: str) -> tuple[dict[str, _Column], list[st
         more = ", ..." if len(headers) > _SHOWN_HEADERS else ""
         found = (", ".join(shown) + more) or "none"
         raise SourceDataError(
-            f"{name} is not an IBM calibration CSV this reader knows: it has no"
+            f"{name} is not an IBM calibration CSV that this importer knows. The file has no"
             f" {' and no '.join(missing)} column (found: {found})",
             hint="download the calibration CSV from the device's page on the IBM Quantum platform",
         )
@@ -186,7 +186,7 @@ def _required(columns: Mapping[str, _Column]) -> dict[str, bool]:
         "readout error ('Readout assignment error' or 'Prob meas0 prep1' + 'Prob meas1 prep0')": (
             "readout_error" in columns or {"p0_given_1", "p1_given_0"} <= columns.keys()
         ),
-        "gate error (e.g. '√x (sx) error')": any(k.startswith("error:") for k in columns),
+        "gate error (such as '√x (sx) error')": any(k.startswith("error:") for k in columns),
     }
 
 
@@ -208,13 +208,13 @@ def _row(row: Mapping[str, str], columns: Mapping[str, _Column], name: str, line
     qubit = columns["qubit"].header.strip()
     if not text and line == 2:
         raise SourceDataError(
-            f"{where}, {qubit!r} is blank; IBM's CSVs from before 2023 left qubit 0 blank, and"
+            f"{where}, {qubit!r} is blank. IBM's CSVs from before 2023 left qubit 0 blank, and"
             f" {_SUPPORTED}"
         )
     if not text:
         raise SourceDataError(
             f"{where}, {qubit!r} is blank in a row with calibration values",
-            hint="give the row its qubit number or delete it",
+            hint="give the row its qubit number or delete the row",
         )
     try:
         index = _qubit(text)
@@ -261,7 +261,7 @@ def _number(text: str, where: str) -> float | None:
 
 
 def _qubit(text: str) -> int:
-    """A qubit number; a spreadsheet may have saved 3 as 3.0."""
+    """A qubit number. A spreadsheet can save 3 as 3.0."""
     number = float(text)
     if not number.is_integer() or number < 0:
         raise ValueError(text)
@@ -301,7 +301,7 @@ def _pairs(text: str, row_qubit: int, where: str) -> dict[tuple[int, int], float
             ) from None
         if found.setdefault(pair, number) != number:
             raise SourceDataError(
-                f"{where}: pair {pair} is given twice, as {found[pair]} and {number}"
+                f"{where}: pair {pair} occurs twice, as {found[pair]} and {number}"
             )
     return found
 
@@ -368,7 +368,7 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
             for pair, duration in durations.items():
                 if (key, pair) not in with_error_either_way:
                     add(Instruction(gate, pair, None, duration), row.where)
-    if not seen_rz:  # IBM's rz is always virtual; older files leave out its column
+    if not seen_rz:  # IBM's rz is always virtual. Older files leave out the rz column.
         for row in rows:
             add(Instruction("rz", (row.index,), 0.0, 0.0), row.where)
     return Calibration(
@@ -381,5 +381,5 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
 
 
 def bundled_profiles() -> list[Profile]:
-    """CSV files are the user's own downloads; none are bundled."""
+    """None, because CSV files are the user's own downloads."""
     return []

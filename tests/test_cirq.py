@@ -522,8 +522,8 @@ def test_grid_qubits_map_through_profile_coords() -> None:
     with pytest.raises(LayoutError, match=r"no qubit at coords \(5, 5\)") as caught:
         model.noisy_operation(cirq.X(cirq.GridQubit(5, 5)))
     assert caught.value.hint == (
-        "use the device's coords (e.g. GridQubit(0.0, 0.0), GridQubit(0.0, 1.0),"
-        " GridQubit(1.0, 0.0)) or pass layout={cirq.GridQubit(5, 5): <device qubit>, ...}"
+        "use the device's coords, for example GridQubit(0.0, 0.0), GridQubit(0.0, 1.0),"
+        " GridQubit(1.0, 0.0), or pass layout={cirq.GridQubit(5, 5): <device qubit>, ...}"
         " covering every circuit qubit"
     )
 
@@ -761,7 +761,7 @@ def test_phased_xz_charges_its_z_part_as_a_z_power_on_its_own(
     unresolved = cirq.PhasedXZGate(
         x_exponent=x, z_exponent=sympy.Symbol("t"), axis_phase_exponent=a
     )
-    with pytest.raises(ValueError, match="resolve its parameters before adding noise"):
+    with pytest.raises(ValueError, match="Resolve the parameters before you add noise"):
         cirq.Circuit(unresolved(q)).with_noise(to_cirq(profile, unknown_gates=unknown_gates))
 
 
@@ -829,7 +829,7 @@ def test_terminal_readout_flips_are_reported_as_part_of_the_state() -> None:
 
 def test_pauli_measurement_needs_z_basis_or_no_readout() -> None:
     op = cirq.measure_single_paulistring(cirq.X(cirq.LineQubit(0)), key="p")
-    with pytest.raises(ValueError, match="rotate into the Z basis"):
+    with pytest.raises(ValueError, match="Rotate into the Z basis"):
         to_cirq(_distinct()).noisy_operation(op)
     model = to_cirq(_distinct(), readout=False)
     assert _ops(model.noisy_operation(op)) == [op]
@@ -864,7 +864,7 @@ def test_parameterized_gates_must_be_resolved_when_their_name_depends_on_it() ->
     q = cirq.LineQubit.range(2)
     model = to_cirq(migrated(MANILA_V01), unknown_gates="error")
     for op in ((cirq.X**t)(q[0]), (cirq.CZ**t)(*q), cirq.ms(t)(*q), cirq.wait(q[0], nanos=t)):
-        with pytest.raises(ValueError, match="resolve its parameters before adding noise"):
+        with pytest.raises(ValueError, match="Resolve the parameters before you add noise"):
             cirq.Circuit(op).with_noise(model)
     # the simulator resolves first, so X**t at t=1 is the calibrated x
     circuit = cirq.Circuit((cirq.X**t)(q[0]), cirq.measure(q[0], key="m"))

@@ -47,8 +47,8 @@ SEPARABLE = 1e-6
 FD_STEP = 1e-3
 NOTE = (
     "Factors multiply the profile's error rates, so x2 means about twice the errors.",
-    "Fitted on these qubits, they absorb crosstalk, leakage, coherent error and",
-    "idle error beyond T1 and T2. Saved with -o, they apply to every qubit.",
+    "On these qubits, the factors absorb crosstalk, leakage, coherent error and idle",
+    "error beyond T1 and T2. The profile from -o applies the factors to every qubit.",
 )
 NEXT_READOUT = (
     "add a circuit with no gates, which only readout error moves.",
@@ -124,7 +124,7 @@ class Comparison:
 
     @property
     def dispersion(self) -> float:
-        """How far the deviance exceeds its degrees of freedom; 1 when it cannot be tested."""
+        """How far the deviance exceeds its degrees of freedom, or 1 if the fit is not testable."""
         return _dispersion(self.deviance, self.dof)
 
     @property
@@ -137,9 +137,9 @@ class Comparison:
         if isinstance(self.gates, NoEstimate):
             if isinstance(self.readout, NoEstimate):
                 raise NoiseVaultError(
-                    "gate and readout factors are not identified; nothing to save"
+                    "gate and readout factors are not identified, so there is nothing to save"
                 )
-            raise NoiseVaultError("the gate factor is not identified; nothing to save")
+            raise NoiseVaultError("the gate factor is not identified, so there is nothing to save")
         base = self.profile.uncorrected()
         block: dict[str, Any] = {"gates": _saved(self.gates)}
         if isinstance(self.readout, ErrorFactor):
@@ -329,8 +329,10 @@ class Comparison:
 
 
 def _wrap(text: str, width: int, indent: str = "") -> list[str]:
-    """``text`` in lines of at most ``width`` that break between words and keep each group in
-    parentheses whole, with ``indent`` before every line after the first."""
+    """``text`` in lines of at most ``width`` that break between words.
+
+    Each group in parentheses stays on one line. Every line after the first starts with ``indent``.
+    """
     lines: list[str] = []
     for word in _WORD.findall(text):
         if lines and len(lines[-1]) + 1 + len(word) <= width:
@@ -343,8 +345,9 @@ def _wrap(text: str, width: int, indent: str = "") -> list[str]:
 def compare(profile: Profile, counts: MeasuredCounts) -> Comparison:
     """Score ``profile`` on ``counts`` and fit its gate and readout factors.
 
-    Raises CountsError when the counts were not planned from this profile's calibration, ran
-    before it, or contain an op the profile does not calibrate on its qubits.
+    Raises CountsError when the counts come from a plan for a different calibration or ran
+    before the calibration. Raises CountsError also when the counts contain an op that the
+    profile does not calibrate on its qubits.
     """
     base = _bind(profile, counts)
     circuits = counts.circuits
@@ -723,7 +726,7 @@ def _bind(profile: Profile, counts: MeasuredCounts) -> Profile:
     planned, calibration = counts.profile.fingerprint, profile.calibration_fingerprint
     if planned != calibration:
         raise CountsError(
-            f"these counts were planned from nv:{planned[:12]}; this profile's calibration is"
+            f"these counts were planned from nv:{planned[:12]}, but this profile's calibration is"
             f" nv:{calibration[:12]}",
             hint=f"run `nv list` to find nv:{planned[:12]}",
         )

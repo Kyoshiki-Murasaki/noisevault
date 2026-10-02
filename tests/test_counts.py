@@ -172,7 +172,7 @@ _REFUSALS: dict[str, _Refusal] = {
     ),
     "init_qubits not a bool": _Refusal(
         _set("execution", "init_qubits", value=1),
-        "execution: init_qubits is 1; give true or false",
+        "execution: init_qubits is 1. Give true or false",
         None,
     ),
     "kerneled": _Refusal(
@@ -203,12 +203,13 @@ _REFUSALS: dict[str, _Refusal] = {
     ),
     "op on one qubit twice": _Refusal(
         _set("circuits", 0, "ops", 2, value=["cz", [1, 1], []]),
-        "circuits[0].ops[2]: cz acts on qubits 1-1; its targets must be distinct",
+        "circuits[0].ops[2]: cz acts on qubits 1-1, but its qubits must be distinct",
         None,
     ),
     "measure in ops": _Refusal(
         _set("circuits", 0, "ops", 3, value=["measure", [0], []]),
-        "circuits[0].ops[3]: ops cannot hold measure, because every circuit qubit is measured",
+        "circuits[0].ops[3]: ops cannot hold measure, because the device measures every"
+        " circuit qubit",
         "remove the measure",
     ),
     "gate outside the registry": _Refusal(
@@ -268,7 +269,7 @@ _REFUSALS: dict[str, _Refusal] = {
     ),
     "short fingerprint": _Refusal(
         _set("profile", "fingerprint", value="609c845ed934"),
-        "profile.fingerprint: not a full fingerprint; give all 64 hex digits",
+        "profile.fingerprint: not a full fingerprint. Give all 64 hex digits",
         None,
     ),
     "unknown key": _Refusal(
@@ -318,7 +319,7 @@ def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) ->
         errors[path] = caught.value
 
     assert errors[damaged].message.startswith(f"{damaged} is not JSON (expecting property name")
-    assert errors[damaged].hint == "the file is damaged or cut short; save the counts again"
+    assert errors[damaged].hint == "the file is damaged or truncated. Save the counts again"
     assert errors[cut].message == (
         f"{cut} is not JSON (unterminated string starting at line 1, column 32)"
     )
@@ -327,7 +328,7 @@ def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) ->
     assert errors[profile].message == f"{profile} is a profile, not a counts file"
     assert errors[profile].hint == "nv compare takes the profile first and the counts file second"
     assert errors[wrong].message.startswith(f"{wrong} is a damaged gzip file (")
-    assert errors[wrong].hint == "the file is damaged or cut short; save the counts again"
+    assert errors[wrong].hint == "the file is damaged or truncated. Save the counts again"
     assert all("\n" not in str(e) for e in errors.values())
 
 
@@ -345,7 +346,7 @@ def test_a_file_nested_deeper_than_the_parser_takes_is_one_counts_error_line(
     assert caught.value.message == (
         f"{deep} is not JSON (nested {depth} levels deep at line 1, column {depth})"
     )
-    assert caught.value.hint == "the file is damaged or cut short; save the counts again"
+    assert caught.value.hint == "the file is damaged or truncated. Save the counts again"
 
 
 def test_options_nested_past_64_levels_is_one_counts_error_line(tmp_path: Path) -> None:
@@ -527,14 +528,12 @@ def test_loaded_circuits_key_a_cache_as_the_planned_ones_do(tmp_path: Path, ref:
 def test_plan_refuses_a_profile_with_no_calibrated_native_on_the_chain() -> None:
     gates = {"rz": {"virtual": True}, "sx": {}}
     profile = Profile.model_validate(toy(gates=gates, calibrations=[]))
-    with pytest.raises(
-        NoiseVaultError, match=r"on qubits \[0\], so there is nothing to run$"
-    ) as info:
+    with pytest.raises(NoiseVaultError, match=r"on qubit 0, so there is nothing to run$") as info:
         plan(profile)
     assert info.value.hint is None
     with pytest.raises(NoiseVaultError) as info:
         plan(profile, layout=[1])
-    assert info.value.message.endswith("on qubits [1], so there is nothing to run")
+    assert info.value.message.endswith("on qubit 1, so there is nothing to run")
     assert info.value.hint == "pass layout= with other qubits"
 
 

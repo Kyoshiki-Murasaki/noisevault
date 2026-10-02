@@ -2,19 +2,24 @@
 # requires-python = ">=3.11"
 # dependencies = ["noisevault[ibm] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"]
 # ///
-"""Run the nv compare circuits on an IBM device and save the counts for nv compare.
+r"""Run the nv compare circuits on an IBM device and save the counts for nv compare.
 
-    python scripts/run_on_ibm.py ibm_kingston --shots 4000 -o kingston-0416.counts.json
+    uv run \
+      https://raw.githubusercontent.com/Kyoshiki-Murasaki/noisevault/main/scripts/run_on_ibm.py \
+      ibm_kingston --shots 4000 -o kingston-0416.counts.json
+
+uv installs the dependencies listed at the top of this file. In a clone with the ``ibm`` extra,
+run ``python scripts/run_on_ibm.py`` with the same arguments.
 
 The script pulls the device's calibration through your IBM Quantum account and plans the
 circuits with ``noisevault.counts.plan``. It checks every op and delay against the backend, shows
-IBM's usage estimate, and asks before it submits one SamplerV2 job. When the job has run, it
-writes a counts file bound to the calibration in effect at that time and prints the
-``nv compare`` command to run next. If the wait for the job is interrupted, run the same command
-again. It then collects the submitted job instead of submitting another.
+IBM's usage estimate, and asks before it submits one SamplerV2 job. When the job is done, the
+script writes a counts file and binds the counts to the calibration in effect at that time. Then
+the script prints the ``nv compare`` command to run next. If the wait for the job stops, run
+the same command again. The script then collects the submitted job and does not submit another.
 
-It needs the ``ibm`` extra and an IBM Quantum account, either saved with
-``QiskitRuntimeService.save_account`` or given as an API key in ``IBM_QUANTUM_TOKEN``.
+The script needs an IBM Quantum account. Save the account with
+``QiskitRuntimeService.save_account``, or put an API key in ``IBM_QUANTUM_TOKEN``.
 """
 
 from __future__ import annotations
@@ -210,7 +215,10 @@ def isa_circuit(circuit: PlannedCircuit, profile: Profile, target: Any) -> IsaCi
 
 
 def sampler_options(shots: int, rep_delay: float) -> dict[str, Any]:
-    """The client sends no unset option, and the server would choose its own default for it."""
+    """Every option the job sets.
+
+    The client does not send an unset option, so the server uses its own default for that option.
+    """
     options: dict[str, Any] = {"default_shots": shots}
     for path, value in {**SAMPLER_V2_OPTIONS, "execution.rep_delay": rep_delay}.items():
         *parents, leaf = path.split(".")
@@ -287,7 +295,7 @@ def bind(submitted: Submitted, ran: Ran, calibration: Calibration) -> Binding:
     except Exception as exc:
         return Binding(
             planned,
-            f"could not pull the calibration in effect when the job ran ({_reason(exc)}); the"
+            f"could not pull the calibration in effect when the job ran ({_reason(exc)}). The"
             f" counts bind to the planned calibration {planned.short_fingerprint}",
         )
     before, after = planned.device.calibrated_at, latest.device.calibrated_at
@@ -295,7 +303,7 @@ def bind(submitted: Submitted, ran: Ran, calibration: Calibration) -> Binding:
         return Binding(
             planned,
             f"the calibration IBM returned for the time the job ran, {latest.short_fingerprint},"
-            f" is older than the planned {planned.short_fingerprint}; the counts bind to the"
+            f" is older than the planned {planned.short_fingerprint}. The counts bind to the"
             " planned calibration",
         )
     problem = _unlike_the_plan(latest, submitted, ran)
@@ -304,7 +312,7 @@ def bind(submitted: Submitted, ran: Ran, calibration: Calibration) -> Binding:
     return Binding(
         planned,
         f"IBM recalibrated {planned.device.name} before the job ran"
-        f" ({latest.short_fingerprint}), and {problem}; the counts bind to the planned"
+        f" ({latest.short_fingerprint}), and {problem}. The counts bind to the planned"
         f" calibration {planned.short_fingerprint}",
         "run the script again for counts that match one calibration",
     )
@@ -403,7 +411,7 @@ def run(
         submitted.save(pending)
         print(f"submitted job {submitted.job_id} to {device}")
     print("waiting for it to run")
-    print("Ctrl-C stops waiting; run the same command again to collect the job")
+    print("Ctrl-C stops waiting. Run the same command again to collect the job")
     again = f"run the same command again to collect them, or delete {pending} to submit a new job"
     uncollected = f"could not collect the counts of job {submitted.job_id}"
     try:
@@ -419,7 +427,7 @@ def run(
             raise NoiseVaultError(f"{uncollected} ({_reason(exc)})", hint=again) from None
     except KeyboardInterrupt:
         raise NoiseVaultError(
-            f"stopped before the counts of job {submitted.job_id} were saved", hint=again
+            f"stopped before the script saved the counts of job {submitted.job_id}", hint=again
         ) from None
     pending.unlink()
     bound = binding.profile
@@ -429,7 +437,7 @@ def run(
             print(f"hint: {binding.hint}", file=sys.stderr)
     elif bound.fingerprint != submitted.profile.fingerprint:
         print(
-            f"IBM recalibrated {bound.device.name} before the job ran; the counts bind to the new"
+            f"IBM recalibrated {bound.device.name} before the job ran. The counts bind to the new"
             " calibration, which keeps every planned gate duration"
         )
     lines = [
@@ -508,7 +516,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         import qiskit_ibm_runtime  # noqa: F401
     except ImportError:
-        return _fail("scripts/run_on_ibm.py needs qiskit-ibm-runtime", install_hint("ibm"))
+        return _fail("run_on_ibm.py needs qiskit-ibm-runtime", install_hint("ibm"))
     try:
         _writable(args.output)
         service = _service()
@@ -532,7 +540,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python scripts/run_on_ibm.py",
+        prog="run_on_ibm.py",
         description="Run the nv compare circuits on an IBM device and save the counts.",
     )
     parser.add_argument("device", metavar="DEVICE", help="the IBM device, such as ibm_kingston")
@@ -549,7 +557,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="FILE",
         type=Path,
         required=True,
-        help="the counts file to write; it must not exist yet",
+        help="the counts file to write, which must not exist yet",
     )
     parser.add_argument("--yes", action="store_true", help="submit without asking")
     return parser
@@ -568,7 +576,8 @@ def _positive(text: str) -> int:
 def _writable(output: Path) -> None:
     if output.exists():
         raise NoiseVaultError(
-            f"{output} exists", hint="give -o a new file name; the script never replaces counts"
+            f"{output} exists",
+            hint="give -o a new file name. The script never replaces a counts file",
         )
     folder = output.parent
     if not folder.is_dir():
@@ -588,7 +597,7 @@ def _ask(prompt: str) -> bool:
     if not sys.stdin.isatty():
         raise NoiseVaultError(
             "cannot ask before submitting, because standard input is not a terminal",
-            hint="pass --yes to submit without asking",
+            hint="give --yes to submit without asking",
         )
     try:
         return input(prompt).strip().lower() in ("y", "yes")

@@ -296,7 +296,10 @@ def test_invalid_coherence_takes_the_median_and_names_the_value(
     profile = nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     qubit = profile.table.qubit(0)
     assert (qubit.t1_ns if label == "T1" else qubit.t2_ns) == pytest.approx(median_ns)
-    note = f"Qubit 0 reported {label} = {shown} us; treated as missing, the device median applies."
+    note = (
+        f"Qubit 0 reported {label} = {shown} us. NoiseVault treats the value as missing, so the"
+        " device median applies."
+    )
     assert note in profile.provenance.notes
     assert not any(f"have no {label}" in n for n in profile.provenance.notes)
 
@@ -381,7 +384,7 @@ def test_a_file_that_is_not_utf8_names_the_line_and_the_byte(
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     assert str(info.value) == (
         f"resaved.csv is not UTF-8 text ({shown}); import the CSV as you downloaded it, not a"
-        " copy a spreadsheet saved"
+        " copy that a spreadsheet saved"
     )
 
 
@@ -497,7 +500,7 @@ def test_an_unknown_time_unit_names_its_column(tmp_path: Path) -> None:
     with pytest.raises(nv.SourceDataError) as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     assert str(info.value) == (
-        f"{path.name}: 'T1 (hours)' (column 2) has the unknown time unit 'hours'; expected ns,"
+        f"{path.name}: 'T1 (hours)' (column 2) has the unknown time unit 'hours', not one of ns,"
         " us, µs, ms or s"
     )
 
@@ -546,7 +549,7 @@ def test_a_row_with_values_but_no_qubit_names_its_line(tmp_path: Path) -> None:
     assert info.value.message == (
         "averages.csv line 6, 'Qubit' is blank in a row with calibration values"
     )
-    assert info.value.hint == "give the row its qubit number or delete it"
+    assert info.value.hint == "give the row its qubit number or delete the row"
 
 
 @pytest.mark.parametrize(
@@ -581,7 +584,10 @@ def test_a_pair_a_spreadsheet_turned_into_a_time_is_refused(
         f"{path.name} line 2, {column!r}: {item!r} looks like a time that a spreadsheet made from"
         " a 'partner:value' cell, so the value is lost"
     )
-    assert info.value.hint == "import the CSV as you downloaded it, not a copy a spreadsheet saved"
+    assert (
+        info.value.hint
+        == "import the CSV as you downloaded it, not a copy that a spreadsheet saved"
+    )
 
 
 def test_a_gate_length_that_could_be_minutes_still_imports(tmp_path: Path) -> None:
@@ -591,7 +597,7 @@ def test_a_gate_length_that_could_be_minutes_still_imports(tmp_path: Path) -> No
     assert profile.table.gate("cz", (0, 1)).duration_ns == 56
 
 
-_SUPPORTED = "this reader imports only the 2023 to 2026 formats"
+_SUPPORTED = "this importer reads only the 2023 to 2026 formats"
 
 
 @pytest.mark.parametrize(
@@ -606,7 +612,7 @@ _SUPPORTED = "this reader imports only the 2023 to 2026 formats"
                 "Q1,54,102,5.2,-0.3,0.01,0.02,0.01,3022,3e-4,3e-4,3e-4,1_0:0.01,1_0:377",
             ],
             "old.csv is in IBM's CSV format from before 2023, which has a 'Single-qubit Pauli-X"
-            f" error' column; {_SUPPORTED}",
+            f" error' column, and {_SUPPORTED}",
         ),
         (
             [
@@ -615,7 +621,7 @@ _SUPPORTED = "this reader imports only the 2023 to 2026 formats"
                 ',4.83,136.7,200.5,0.03,0.00027,"cx0_1: 6.7e-3 "',
                 '1,4.62,179.5,110.9,0.021,0.00014,"cx1_2: 9.3e-3 , cx1_0: 6.7e-3 "',
             ],
-            "old.csv line 2, 'Qubit' is blank; IBM's CSVs from before 2023 left qubit 0 blank,"
+            "old.csv line 2, 'Qubit' is blank. IBM's CSVs from before 2023 left qubit 0 blank,"
             f" and {_SUPPORTED}",
         ),
     ],

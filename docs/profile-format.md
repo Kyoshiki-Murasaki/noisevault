@@ -452,7 +452,7 @@ The fit record requires every field, `p_value` included. The qubits are distinct
 device.
 
 `calibration` binds the factors to the calibration that the fit used. A change to any physics
-outside `unmodeled_error`, such as a gate error or a T1, fails validation with "drop
+outside `unmodeled_error`, such as a gate error or a T1, fails validation with "Drop
 unmodeled_error or refit with nv compare". Provenance and extensions can change.
 
 ### Fingerprint, display and compatibility

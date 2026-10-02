@@ -55,7 +55,7 @@ def normalize_times(data: Any, fields: tuple[TimeField, ...]) -> Any:
         if not given:
             continue
         if len(given) > 1:
-            raise ValueError(f"{field.stem} is given twice ({' and '.join(given)}); keep one")
+            raise ValueError(f"{field.stem} appears twice ({' and '.join(given)}). Keep one")
         key = given[0]
         value = out.pop(key)
         if isinstance(value, bool) or not isinstance(value, int | float):

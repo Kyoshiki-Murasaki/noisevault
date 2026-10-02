@@ -1,19 +1,20 @@
 """Quantinuum H-series machines from Quantinuum's published hardware-specification data.
 
-Quantinuum publishes the benchmarking data behind its product data sheets, with ``qtm_spec``,
-the analysis code that turns it into the published numbers, under Apache-2.0 at
-https://github.com/Quantinuum/quantinuum-hardware-specifications. This module repeats that
-analysis's point estimates (``qtm_spec.combined_analysis.extract_parameters``):
+Quantinuum publishes the benchmarking data behind its product data sheets under Apache-2.0 at
+https://github.com/Quantinuum/quantinuum-hardware-specifications. The repository also has
+``qtm_spec``, the analysis code that turns the data into the published numbers. This module
+repeats the point estimates of that analysis (``qtm_spec.combined_analysis.extract_parameters``):
 
-- 1Q error: the randomized-benchmarking decay pooled over all gate zones, as the average
-  infidelity per native U1q gate (one per single-qubit Clifford), plus leakage per gate / 2.
-- 2Q error: the same for two-qubit Cliffords, converted to the average infidelity per native
-  ZZ (ZZMax) gate with 1.5 ZZ gates per Clifford, plus leakage per gate / 4.
+- 1Q error: the randomized-benchmarking decay pooled over all gate zones. The decay becomes
+  the average infidelity per native U1q gate (one per single-qubit Clifford), plus leakage per
+  gate / 2.
+- 2Q error: the same for two-qubit Cliffords. The decay becomes the average infidelity per
+  native ZZ (ZZMax) gate with 1.5 ZZ gates per Clifford, plus leakage per gate / 4.
 - SPAM: the fraction of wrong outcomes for each prepared state, averaged over qubits.
 - memory error per qubit at depth 1: informational only, kept in ``benchmarks``.
 
-The emulator parameters (``p1``, ``p2``, ...) are fault probabilities of a different model and
-are never used.
+The emulator parameters (``p1``, ``p2``, ...) are fault probabilities of a different model.
+This module does not use them.
 """
 
 from __future__ import annotations
@@ -40,8 +41,8 @@ COMMIT = "59e68bb55bd616694dc8fa37a435e2a68fe1cb6b"  # pinned so a rebuild gives
 _RAW = f"https://raw.githubusercontent.com/Quantinuum/quantinuum-hardware-specifications/{COMMIT}"
 _SPEC_SHEET = f"download notebooks/Spec sheet parameters.csv from {REPOSITORY}"
 
-# Every dataset at COMMIT and the machine's qubit count on that date. The data is keyed by gate
-# zone, not qubit, so the counts come from Quantinuum's announcements: H1 machines have 20
+# Every dataset at COMMIT and the machine's qubit count on that date. The data has a key per gate
+# zone, not per qubit, so the counts come from Quantinuum's announcements: H1 machines have 20
 # qubits in five zones since June 2022 (H1-2's 2022 data still has the three zones of the
 # 12-qubit design), H2-1 went from 32 to 56 qubits in May 2024, and REIMEI is an H1-class
 # machine with 20 qubits.
@@ -83,7 +84,7 @@ class SpecValues:
     date: str  # YYYY_MM_DD, the repository's folder name
     one_qubit: Estimate  # average infidelity per U1q gate
     two_qubit: Estimate  # average infidelity per ZZ gate
-    one_qubit_leakage: Estimate | None  # leakage per gate; None when not measured
+    one_qubit_leakage: Estimate | None  # leakage per gate, or None if not measured
     two_qubit_leakage: Estimate | None
     spam: tuple[float, float] | Estimate  # (P(1|0), P(0|1)) per prepared state, or combined
     memory: Estimate | None
@@ -104,7 +105,7 @@ def from_repository(machine: str, date: str | None = None) -> Profile:
     if (machine, date) not in QUBITS:
         known = ", ".join(sorted(d for m, d in QUBITS if m == machine))
         raise ValueError(
-            f"no {machine} dataset dated {date!r} at the pinned commit; known: {known}"
+            f"no {machine} dataset dated {date!r} at the pinned commit. Known dates: {known}"
         )
     files = {name: _get(f"{_RAW}/{_file_path(machine, date, name)}") for name in FILES}
     return from_data(machine, date, files)
@@ -168,8 +169,8 @@ def from_spec_csv(
     if len(dated) != 1:
         known = ", ".join(sorted({row["Date"] for row in rows})) or "none"
         raise SourceDataError(
-            f"{path} has {len(dated)} rows for {machine} dated {date}; expected one."
-            f" Dates (YYYY_MM_DD) it has for {machine}: {known}"
+            f"{path} has {len(dated)} rows for {machine} dated {date}, not one. The file has"
+            f" these dates (YYYY_MM_DD) for {machine}: {known}"
         )
     rows = dated
     values = _csv_values(machine, date, rows[0])
@@ -182,14 +183,14 @@ def from_spec_csv(
         source_hash="sha256:" + hashlib.sha256(raw).hexdigest(),
         extra={},
         notes=(
-            "values and stderr are the CSV's rounded spec-sheet figures; its 'Transport 1Q"
+            "values and stderr are the CSV's rounded spec-sheet figures. The CSV's 'Transport 1Q"
             " error' column holds the memory error (qtm_spec writes Memory_RB there)",
         ),
     )
 
 
 def _date(date: str) -> str:
-    """The repository's ``YYYY_MM_DD``; ISO ``YYYY-MM-DD`` is accepted too."""
+    """The repository's ``YYYY_MM_DD``. This function also accepts ISO ``YYYY-MM-DD``."""
     return date.strip().replace("-", "_")
 
 
@@ -258,9 +259,7 @@ def _zones(data: Mapping[str, Any], curve: str, where: str) -> dict[str, Mapping
         at = f"{where}: {curve}[{zone!r}]"
         for m in _object(by_length, at, "sequence lengths"):
             if not m.isdecimal():
-                raise SourceDataError(
-                    f"{at} has the sequence length {m!r}; expected a whole number"
-                )
+                raise SourceDataError(f"{at} has the sequence length {m!r}, not a whole number")
         zones[at] = by_length
     return zones
 
@@ -283,15 +282,13 @@ def _pooled(
 def _shots(data: Mapping[str, Any], where: str) -> int:
     shots = _key(data, "shots", where)
     if not (_whole(shots) and shots > 0):
-        raise SourceDataError(f"{where}: shots is {shots!r}; expected a positive whole number")
+        raise SourceDataError(f"{where}: shots is {shots!r}, not a positive whole number")
     return int(shots)
 
 
 def _count(n: Any, shots: int, where: str) -> int:
     if not (_whole(n) and 0 <= n <= shots):
-        raise SourceDataError(
-            f"{where} is {n!r}; expected a whole number of shots from 0 to {shots}"
-        )
+        raise SourceDataError(f"{where} is {n!r}, not a whole number of shots from 0 to {shots}")
     return int(n)
 
 
@@ -304,9 +301,9 @@ def _whole(value: Any) -> bool:
 def decay_rate(lengths: np.ndarray, means: np.ndarray, *, asymptote: float) -> float:
     """``r`` of the least-squares fit ``means = A r**m + asymptote`` with A and r in [0, 1].
 
-    qtm_spec fits this with scipy's bounded ``curve_fit``. For a fixed r the best A is linear,
-    so the fit reduces to a one-dimensional search over r: a log-spaced grid toward 1, then a
-    golden-section refinement around the best grid point.
+    qtm_spec does this fit with scipy's bounded ``curve_fit``. For a fixed r the best A is linear,
+    so the fit becomes a one-dimensional search over r. The search uses a log-spaced grid toward
+    1, then a golden-section refinement around the best grid point.
     """
     y = means - asymptote
 
@@ -338,7 +335,7 @@ def _spam(data: Mapping[str, Any], where: str) -> tuple[float, float]:
     for state in ("0", "1"):
         found = [_count(_key(row, state, at), shots, f"{at}[{state!r}]") for at, row in rows]
         wrong.append(1 - float(np.mean(found)) / shots)
-    # counts over shots are short decimals; drop the binary round-off of 1 - x
+    # counts over shots are short decimals, so drop the binary round-off of 1 - x
     return float(f"{wrong[0]:.12g}"), float(f"{wrong[1]:.12g}")
 
 
@@ -346,15 +343,13 @@ _CELL = re.compile(r"^(\d+)(?:\.(\d+))?\((\d+)\)E([+-]?\d+)$")
 
 
 def parse_cell(cell: str) -> Estimate | None:
-    """``'2.15(8)E-03'`` -> Estimate(2.15e-3, 8e-5); an empty cell -> None."""
+    """``'2.15(8)E-03'`` -> Estimate(2.15e-3, 8e-5), and an empty cell -> None."""
     cell = cell.strip()
     if not cell:
         return None
     match = _CELL.match(cell)
     if match is None:
-        raise SourceDataError(
-            f"cannot read spec-sheet cell {cell!r}; expected a form like 2.15(8)E-03"
-        )
+        raise SourceDataError(f"spec-sheet cell {cell!r} is not in a form such as 2.15(8)E-03")
     whole, frac, unc, exp = match.groups()
     scale = 10.0 ** int(exp)
     digits = len(frac or "")
@@ -400,8 +395,8 @@ def to_profile(
     num_qubits: int | None = None,
     hint: str | None = None,
 ) -> Profile:
-    """The profile of ``values``; a value the format refuses is a SourceDataError naming
-    ``source``, with ``hint`` as its next step.
+    """The profile of ``values``. A value that the format refuses raises a SourceDataError that
+    names ``source``, with ``hint`` as its next step.
     """
     machine, date = values.machine, values.date
     qubits = num_qubits or QUBITS.get((machine, date))
@@ -507,7 +502,7 @@ def _machine(name: str) -> str:
     wanted = name.strip().upper().removeprefix("QUANTINUUM_").removeprefix("QUANTINUUM ")
     if wanted not in {m for m, _ in QUBITS}:
         known = ", ".join(sorted({m for m, _ in QUBITS}))
-        raise ValueError(f"unknown Quantinuum machine {name!r}; known: {known}")
+        raise ValueError(f"unknown Quantinuum machine {name!r}. Known machines: {known}")
     return wanted
 
 

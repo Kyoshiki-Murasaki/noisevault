@@ -81,7 +81,7 @@ def test_validate_unreadable_input_is_a_friendly_error(tmp_path: Path, damage: s
     else:
         assert result.stderr.startswith(f"error: {path} is a damaged gzip file (")
         assert result.stderr.endswith(
-            ")\nhint: the file is damaged or cut short; pull or export it again\n"
+            ")\nhint: the file is damaged or truncated. Pull or export the profile again\n"
         )
     assert "Traceback" not in result.output and "Aborted" not in result.output
 
@@ -97,13 +97,13 @@ def test_a_file_that_is_not_utf8_names_the_byte_and_the_line(tmp_path: Path) -> 
         assert result.exit_code == 1
         assert result.stderr == (
             f"error: {profile} is not UTF-8 text (byte 0xe9 on line 2)\n"
-            "hint: the file is damaged or cut short; pull or export it again\n"
+            "hint: the file is damaged or truncated. Pull or export the profile again\n"
         )
     result = runner.invoke(app, ["compare", "ibm_fez@2025-02-26", str(counts)])
     assert result.exit_code == 1
     assert result.stderr == (
         f"error: {counts} is not UTF-8 text (byte 0xe9 on line 2)\n"
-        "hint: the file is damaged or cut short; save the counts again\n"
+        "hint: the file is damaged or truncated. Save the counts again\n"
     )
 
 
@@ -137,8 +137,8 @@ def test_validate_says_what_an_unknown_or_a_missing_key_means(tmp_path: Path) ->
     result = runner.invoke(app, ["validate", str(path)])
     assert result.exit_code == 1
     assert result.stderr.splitlines() == [
-        "error: device: missing; format 1.0 requires it",
-        "error: unknown_field: not a format 1.0 key; put your own data under the top-level"
+        "error: device: missing. Format 1.0 requires this key",
+        "error: unknown_field: not a format 1.0 key. Put your own data under the top-level"
         " extensions key",
     ]
 
@@ -295,12 +295,12 @@ def test_no_color_removes_color_codes() -> None:
         (["show", "ibm_fezz"], "did you mean 'ibm_fez'?", None),
         (
             ["show", "ibm_fez@2020-01-01"],
-            "no ibm_fez profile calibrated on 2020-01-01 UTC;"
-            " you have ibm_fez@2025-02-26T20:16:25Z",
-            "run nv pull ibm_fez --at 2020-01-01T23:59:59Z to fetch the calibration in effect at"
-            " the end of that day, then load the ref it prints",
+            "no ibm_fez profile calibrated on 2020-01-01 UTC."
+            " You have ibm_fez@2025-02-26T20:16:25Z",
+            "run nv pull ibm_fez --at 2020-01-01T23:59:59Z to download the calibration in effect"
+            " at the end of that day. Then load the ref that nv pull prints",
         ),
-        (["show", "quantinuum_h1-1@2020-01-01"], "you have quantinuum_h1-1@2025-05-02", None),
+        (["show", "quantinuum_h1-1@2020-01-01"], "You have quantinuum_h1-1@2025-05-02", None),
         (
             ["show", "nosuch"],
             "no profile with id 'nosuch'",
@@ -432,7 +432,7 @@ def test_show_prints_a_card() -> None:
         "virtual",
         "176 (7 disabled)",
         "median T1 144.9 us",
-        "Apache-2.0, may be redistributed",
+        "Apache-2.0, redistribution allowed",
         profile.fingerprint,
     ):
         assert text in out
@@ -583,7 +583,7 @@ def test_show_writes_schema_tokens_as_words_and_json_keeps_them(tmp_path: Path) 
 
     h1 = rows("quantinuum_h1-1")
     assert h1["device"] == "Quantinuum, System Model H1, trapped ion, 20 qubits"
-    assert h1["license"] == "Apache-2.0, may be redistributed"
+    assert h1["license"] == "Apache-2.0, redistribution allowed"
     weber = rows("google_weber")
     assert weber["device"] == "Google, Sycamore, superconducting, 53 qubits"
     assert weber["not modeled"] == "coherent over-rotation on sqrt_iswap (86 records)"
@@ -602,7 +602,7 @@ def test_show_writes_schema_tokens_as_words_and_json_keeps_them(tmp_path: Path) 
     pulled = rows(str(path))
     assert pulled["device"] == "IonQ, superconducting, 3 qubits"
     assert pulled["provenance"] == "vendor model, public API, IonQ API"
-    assert pulled["license"] == "IonQ EULA, may not be redistributed"
+    assert pulled["license"] == "IonQ EULA, redistribution not allowed"
     del data["provenance"]["license"], data["provenance"]["redistributable"]
     path.write_text(json.dumps(data))
     assert rows(str(path))["license"] == "unknown, redistribution unknown"
@@ -693,8 +693,8 @@ def test_show_states_the_calibration_and_adds_a_row_for_unmodeled_error(tmp_path
     poor = show(fitted(0.003)[1])
     assert "on qubits 148-149-150-151, run 2026-04-16 (p = 0.003, a poor fit)" in poor.stdout
     assert poor.stderr == (
-        "warning: the unmodeled-error factors are a poor fit to their counts (p = 0.003);"
-        " no one pair of factors fits every circuit\n"
+        "warning: the unmodeled-error factors are a poor fit to their counts (p = 0.003)."
+        " No one pair of factors fits every circuit\n"
     )
 
 
@@ -991,7 +991,7 @@ def _ionq_without_qubit_counts() -> dict[str, Any]:
             "ibm_fez",
             _ibm_qubit_0("T1", unit="min"),
             f"IBM's public endpoint ({_IBM_PROPERTIES}): T1 of qubit 0 has the unknown time unit"
-            " 'min'; expected ns, us, µs, ms or s",
+            " 'min', not one of ns, us, µs, ms or s",
             _OLDER,
         ),
         (
@@ -1011,7 +1011,7 @@ def _ionq_without_qubit_counts() -> dict[str, Any]:
         (
             "ionq_forte-1",
             {_IONQ_LISTING: []},
-            f"IonQ has no backend 'qpu.forte-1'; its listing ({_IONQ_LISTING}) names no QPU",
+            f"IonQ has no backend 'qpu.forte-1'. The IonQ listing ({_IONQ_LISTING}) names no QPU",
             "try again later",
         ),
     ],
@@ -1096,7 +1096,7 @@ def test_diff_prints_tables_and_json() -> None:
         "ibm_kyiv@2025-02-26T16:02Z -> ibm_brisbane@2025-02-26T19:33Z  (3 hours later)\n"
     )
     assert "largest changes by qubit" in out and "largest changes by pair" in out
-    assert "warning: these are different devices" in result.stderr
+    assert "warning: the two profiles are from different devices" in result.stderr
     data = json.loads(runner.invoke(app, ["diff", "ibm_kyiv", "ibm_brisbane", "--json"]).stdout)
     assert data == nv.load("ibm_kyiv").diff(nv.load("ibm_brisbane")).to_dict()
 
@@ -1118,7 +1118,7 @@ def test_every_device_median_leaves_out_a_disabled_qubit(tmp_path: Path) -> None
     shown = json.loads(runner.invoke(app, ["show", str(before), "--json"]).stdout)
     assert (shown["median_t1_us"], shown["median_readout_error"]) == (280, 0.012)
     summary = profile.summary().splitlines()
-    assert summary[-2:] == ["  median T1 280 us", "  median readout error 0.012"]
+    assert summary[-2:] == ["  median T1 280.0 us", "  median readout error 0.012"]
     drift = json.loads(runner.invoke(app, ["diff", str(before), str(after), "--json"]).stdout)
     medians = {m["metric"]: (m["before"], m["after"]) for m in drift["medians"]}
     assert medians["t1_us"] == (280, 280) and medians["readout_error"] == (0.012, 0.012)
@@ -1137,8 +1137,8 @@ def test_diff_of_two_devices_on_one_day_shows_the_times_and_only_the_device_warn
     assert narrow.stdout.splitlines()[:2] == [title, "  (23 minutes earlier)"]
     for result in (wide, narrow):
         assert result.stderr == (
-            "warning: these are different devices (ibm_fez and ibm_marrakesh); qubits and pairs"
-            " are matched by index\n"
+            "warning: the two profiles are from different devices (ibm_fez and ibm_marrakesh), so"
+            " the diff matches qubits and pairs by index\n"
         )
 
 
@@ -1149,7 +1149,7 @@ def test_check_prints_a_table_per_framework() -> None:
     rows = {line.split()[0]: line.split() for line in result.stdout.splitlines() if line}
     assert rows["cirq"][1] == "pass" and rows["pennylane"][1] == "pass"
     assert "qiskit" not in rows
-    assert "not a measure of how well the model matches the hardware" in " ".join(
+    assert "A pass does not measure how well the model matches the hardware" in " ".join(
         result.stdout.split()
     )
 
@@ -1470,7 +1470,7 @@ def test_check_states_what_a_pass_means_only_after_a_pass() -> None:
 # bad input never prints a traceback -----------------------------------------------------------
 
 _PROFILE_FILE = "give a profile file (.json or .json.gz)"
-_DAMAGED_FILE = "the file is damaged or cut short; pull or export it again"
+_DAMAGED_FILE = "the file is damaged or truncated. Pull or export the profile again"
 _TOY_XX_COUNTS = Path(__file__).parent / "fixtures/compare/toy-xx.counts.json"
 _NESTED_64 = "[" * 64 + "]" * 64
 
@@ -1557,7 +1557,7 @@ def test_every_command_says_a_counts_file_is_not_a_profile(tmp_path: Path, comma
     assert result.stderr == f"error: {path} is a counts file, not a profile\nhint: {hint}\n"
 
 
-_COUNTS_DAMAGED_FILE = "the file is damaged or cut short; save the counts again"
+_COUNTS_DAMAGED_FILE = "the file is damaged or truncated. Save the counts again"
 _DAMAGED_COUNTS = {
     "not-json": _Damage("{not json", "is not JSON (expecting property name", _COUNTS_DAMAGED_FILE),
     "empty": _Damage("", "is not JSON (expecting value", _COUNTS_DAMAGED_FILE),
@@ -1630,7 +1630,7 @@ def test_a_cut_profile_file_is_called_damaged_and_another_file_type_is_named(
     ("args", "error"),
     [
         (["show", "ibm_fez@"], "after @ give a date (2025-02-26)"),
-        (["show", "ibm_fez@2025-13-40"], "2025-13-40 is not a calendar date; give one such as"),
+        (["show", "ibm_fez@2025-13-40"], "2025-13-40 is not a calendar date. Give one such as"),
         (["diff", "ibm_fez", "ibm_fez@"], "after @ give a date (2025-02-26)"),
         (["list", "--tech", "superconductin"], "did you mean 'superconducting'?"),
         (["list", "--vendor", "ibmm"], "did you mean 'ibm'?"),
@@ -1895,7 +1895,7 @@ def test_diff_of_one_device_on_one_day_names_the_times_in_its_age_warning(vault:
     )
     assert result.stderr == (
         "warning: quantinuum_h1-1@2025-05-02T09:15Z is older than"
-        " quantinuum_h1-1@2025-05-02T14:30Z; before and after follow argument order, not time\n"
+        " quantinuum_h1-1@2025-05-02T14:30Z. Before and after follow the argument order, not time\n"
     )
 
 
@@ -1935,16 +1935,17 @@ def test_diff_lists_added_qubits_as_ranges() -> None:
         (
             ["show", "ibm_fez", "--qubits"],
             "error: option '--qubits' requires an argument\n"
-            "hint: give qubit indices, e.g. --qubits 0,1,2\n",
+            "hint: give qubit indices, for example --qubits 0,1,2\n",
         ),
         (
             ["list", "--tech"],
             "error: option '--tech' requires an argument\n"
-            "hint: give a technology, e.g. --tech trapped_ion\n",
+            "hint: give a technology, for example --tech trapped_ion\n",
         ),
         (
             ["pull", "ibm_fez", "-o"],
-            "error: option '-o' requires an argument\nhint: give a file name, e.g. -o fez.json\n",
+            "error: option '-o' requires an argument\n"
+            "hint: give a file name, for example -o fez.json\n",
         ),
     ],
 )
@@ -1986,7 +1987,9 @@ def test_usage_lines_name_arguments_in_capitals_and_options_by_their_value(
     assert re.search(rf"^ Usage: nv {command} \[OPTIONS\] {arguments} *$", text, re.M), text
     assert "<str>" not in text and "<path>" not in text and "{" not in text
     if command == "show":
-        assert re.search(r"^│ --qubits +LIST +Also list these qubits, e\.g\. 0,1,2\.", text, re.M)
+        assert re.search(
+            r"^│ --qubits +LIST +Also list these qubits, for example 0,1,2\.", text, re.M
+        )
     if command == "pull":
         assert re.search(r"^│ --output +-o +FILE +Save here instead of the vault\.", text, re.M)
     if command == "compare":
@@ -2261,7 +2264,7 @@ def test_compare_exit_codes(tmp_path: Path, monkeypatch) -> None:
             "hint: give the profile the counts were planned from",
         ],
         ("edited.json", "run.counts.json"): [
-            "error: these counts were planned from nv:609c845ed934; this profile's calibration"
+            "error: these counts were planned from nv:609c845ed934, but this profile's calibration"
             f" is nv:{_calibration_short(tmp_path / 'edited.json')}",
             "hint: run nv list to find nv:609c845ed934",
         ],
@@ -2278,7 +2281,10 @@ def test_compare_exit_codes(tmp_path: Path, monkeypatch) -> None:
     unsaved = _compare([ref, counts, "-o", str(tmp_path / "fitted.json")], cwd, monkeypatch)
     assert unsaved.exit_code == 1
     assert _unstyled(unsaved.stdout) == (FITS / "not-identified.txt").read_text(encoding="utf-8")
-    assert unsaved.stderr == "error: gate and readout factors are not identified; nothing to save\n"
+    assert (
+        unsaved.stderr
+        == "error: gate and readout factors are not identified, so there is nothing to save\n"
+    )
     assert not (tmp_path / "fitted.json").exists()
 
 
@@ -2369,7 +2375,10 @@ def test_compare_json_says_written_only_after_the_save(tmp_path: Path, monkeypat
     unsaved = _compare([ref, xx, "--json", "-o", str(target)], cwd, monkeypatch)
     assert unsaved.exit_code == 1 and not target.exists()
     assert "written" not in _strict_json(unsaved.stdout)
-    assert unsaved.stderr == "error: gate and readout factors are not identified; nothing to save\n"
+    assert (
+        unsaved.stderr
+        == "error: gate and readout factors are not identified, so there is nothing to save\n"
+    )
 
 
 def test_compare_json_without_written_when_the_folder_turns_read_only(

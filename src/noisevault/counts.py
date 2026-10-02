@@ -1,11 +1,11 @@
-"""The counts file: a run on a device, bound to one profile, its qubits and the exact ops it ran.
+"""The counts file: one run on a device, bound to one profile, its qubits and the exact ops.
 
 :func:`plan` gives the circuits to run, :func:`simulate` draws counts for them from a profile,
-and :func:`load_counts` reads a counts file. ``nv compare`` scores a profile on the result. The
-models are the file, as :class:`~noisevault.Profile` is: frozen, extra keys refused, canonical
-after validation. Counts keys are stored with classical bit 0 on the left and zero entries
-dropped, so the same run gives the same bytes and the same ``sha256`` whichever bit order the
-file was written in.
+and :func:`load_counts` reads a counts file. ``nv compare`` scores a profile on the result.
+The models define the file, as :class:`~noisevault.Profile` does. The models are frozen, refuse
+extra keys and are canonical after validation. Validation writes each counts key with
+classical bit 0 on the left and drops zero entries. Thus the same run gives the same bytes and
+the same ``sha256`` in either bit order.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ _OP_EXAMPLE = '["rz", [0], [1.5708]]'
 _KEY_HINT = "write each key in 0 and 1, one bit per circuit qubit"
 _DELAY_HINT = 'give the idle time in nanoseconds, 0 or more, such as ["delay", [0], [68.0]]'
 _NOT_OPS = {
-    "measure": "every circuit qubit is measured once, after the last op",
+    "measure": "the device measures every circuit qubit once, after the last op",
     "reset": "every shot starts with each qubit in 0",
 }
 _OP_NAMES = sorted(["delay", *(n for n, g in gates.GATES.items() if g.unitary is not None)])
@@ -127,7 +127,7 @@ def _check_gate(op: Op) -> None:
         raise CountsError(f"{op.name} acts on {plural(info.arity, 'qubit')}, not {len(op.qubits)}")
     if len(set(op.qubits)) != len(op.qubits):
         raise CountsError(
-            f"{op.name} acts on {qubit_loci(op.qubits)}; its targets must be distinct"
+            f"{op.name} acts on {qubit_loci(op.qubits)}, but its qubits must be distinct"
         )
     if len(op.params) != len(info.params):
         names = f" ({', '.join(info.params)})" if info.params else ""
@@ -156,7 +156,7 @@ _RUN_RULES = (
         "transpiled",
         None,
         False,
-        "the device may have run other ops than the listed ones",
+        "the device may have run ops other than the listed ones",
         "as planned, without transpiling them",
     ),
     _RunRule(
@@ -235,7 +235,7 @@ class Execution(_Model):
                 continue
             value = data[rule.flag]
             if not isinstance(value, bool):
-                raise CountsError(f"{rule.flag} is {_shown(value)}; give true or false")
+                raise CountsError(f"{rule.flag} is {_shown(value)}. Give true or false")
             if value != rule.required:
                 raise CountsError(
                     f"{rule.flag} is {_shown(value)}, so {rule.consequence}",
@@ -274,8 +274,10 @@ def _option(options: Mapping[str, Any], path: str) -> tuple[str, Any] | None:
 
 
 class PlannedCircuit(_Model):
-    """A circuit on physical qubits. Circuit qubit i is ``qubits[i]`` and is measured into
-    classical bit i, after every op, all qubits together."""
+    """A circuit on physical qubits. Circuit qubit i is ``qubits[i]``.
+
+    After every op, the device measures all qubits together, circuit qubit i into classical bit i.
+    """
 
     name: str
     qubits: Annotated[tuple[QubitIndex, ...], Field(min_length=1, max_length=MAX_QUBITS)]
@@ -335,9 +337,11 @@ class MeasuredCircuit(PlannedCircuit):
         return self
 
     def vector(self) -> np.ndarray:
-        """A fresh int64 array of 2**n counts, big-endian: circuit qubit 0 is the most
-        significant bit, the reference's order. Fresh on each call, so the model stays
-        immutable and its hash stays true."""
+        """A new int64 array of 2**n counts, big-endian, as in the reference model.
+
+        Circuit qubit 0 is the most significant bit. Each call makes a new array, so the model
+        stays immutable and its ``sha256`` stays correct.
+        """
         width = len(self.qubits)
         keys = (outcome_bits(index, width) for index in range(2**width))
         return np.array([self.counts.get(key, 0) for key in keys], dtype=np.int64)
@@ -345,7 +349,9 @@ class MeasuredCircuit(PlannedCircuit):
 
 class MeasuredCounts(_Model):
     """A counts file. ``run_at`` is when the device started the first circuit. ``bit_order``
-    "qiskit" puts classical bit 0 rightmost in a key; after validation it is "clbit0_left"."""
+    "qiskit" puts classical bit 0 rightmost in a key. After validation, ``bit_order`` is
+    "clbit0_left".
+    """
 
     nv_counts: Literal["1.0"]
     source: CountsSource
@@ -407,7 +413,7 @@ class MeasuredCounts(_Model):
     def model_copy(
         self, *, update: Mapping[str, Any] | None = None, deep: bool = False
     ) -> MeasuredCounts:
-        """A copy; with ``update`` the result is validated and hashed like a new file."""
+        """A copy. With ``update``, NoiseVault validates and hashes the result like a new file."""
         if update:
             return type(self).model_validate({**self.to_dict(), **update})
         return super().model_copy(deep=deep)
@@ -425,7 +431,7 @@ class MeasuredCounts(_Model):
 _PLAIN_ERRORS = {
     "missing": "missing; format 1.0 requires it",
     "extra_forbidden": "not a counts format 1.0 key",
-    "string_pattern_mismatch": "not a full fingerprint; give all 64 hex digits",
+    "string_pattern_mismatch": "not a full fingerprint. Give all 64 hex digits",
 }
 
 
@@ -433,7 +439,7 @@ def load_counts(path: str | Path) -> MeasuredCounts:
     """Read a counts file (``.json`` or gzip-compressed JSON).
 
     Every refusal is a :class:`~noisevault.CountsError` with a one-line message that starts with
-    the path and a ``hint`` that says what to do. A file that cannot be read raises OSError.
+    the path and a ``hint`` that says what to do. A file that NoiseVault cannot read raises OSError.
     """
     path = Path(path)
     data = read_json_file(path, "counts", CountsError)
@@ -482,13 +488,13 @@ def _first_issue(exc: ValidationError) -> tuple[str, str | None]:
 def plan(
     profile: Profile, layout: Mapping[Hashable, int] | Sequence[int] | None = None
 ) -> tuple[PlannedCircuit, ...]:
-    """The circuits a hardware run executes: the ``nv check`` circuits on the ``nv check``
-    chain, scheduled as soon as possible, with every wait written as an explicit delay.
+    """The circuits that a hardware run executes.
 
-    Each qubit is padded with a delay to the circuit's end, so every gap is filled and any
-    backend scheduling policy gives the same timeline. Durations come from the calibration as
-    stated; a virtual gate or a missing duration takes 0 ns. A profile with unmodeled-error
-    factors plans the run of its calibration.
+    These are the ``nv check`` circuits on the ``nv check`` chain, scheduled as soon as possible.
+    An explicit delay holds every wait. A delay pads each qubit to the end of the circuit, so no
+    gap stays empty and every backend scheduling policy gives the same timeline. Durations come
+    from the calibration as stated. A virtual gate or a missing duration takes 0 ns.
+    A profile with unmodeled-error factors plans the run of its calibration.
     """
     base = profile.uncorrected()
     chain, circuits = check.plan_circuits(base, layout, purpose="run")

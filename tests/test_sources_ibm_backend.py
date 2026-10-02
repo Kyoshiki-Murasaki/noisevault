@@ -227,8 +227,8 @@ def test_backend_without_properties_uses_the_symmetric_measure_error() -> None:
 def test_matches_aer_from_backend_noise_model(class_name: str) -> None:
     """The profile reproduces Aer's own NoiseModel.from_backend, applied exactly.
 
-    The Aer model is evolved with qiskit.quantum_info rather than AerSimulator, whose
-    density-matrix execution itself departs from its model by about 1e-9.
+    The test evolves the Aer model with qiskit.quantum_info, not with AerSimulator. The
+    density-matrix execution of AerSimulator departs from its model by about 1e-9.
     """
     require("qiskit_aer")
     from qiskit.quantum_info import DensityMatrix, Operator, SuperOp
@@ -450,7 +450,7 @@ _UNREADABLE_ON_QUBIT_0 = {
     "a T1 in minutes": (
         "T1",
         {"unit": "min"},
-        "T1 of qubit 0 has the unknown time unit 'min'; expected ns, us, µs, ms or s",
+        "T1 of qubit 0 has the unknown time unit 'min', not one of ns, us, µs, ms or s",
     ),
     "a readout error above 1": (
         "prob_meas0_prep1",

@@ -2,9 +2,9 @@
 
 IonQ publishes one record per characterization with device-wide medians only: 1Q, 2Q and SPAM
 fidelity, gate and readout times, T1 and T2. Every qubit and pair of the profile gets those
-medians, and each interpretation of an unstated metric is written into the profile. IonQ's
-EULA restricts redistribution, so nothing is bundled: profiles are pulled onto the user's
-machine.
+medians. The importer writes each interpretation of an unstated metric into the profile. IonQ's
+EULA restricts redistribution, so NoiseVault has no bundled IonQ profiles. Users pull IonQ
+profiles onto their own machines.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Annotated, Any
 from pydantic import AfterValidator, BaseModel, Field, TypeAdapter
 
 from .. import __version__
-from ..errors import SourceUnavailable, did_you_mean
+from ..errors import SourceUnavailable, did_you_mean, plural
 from ..profile import Profile, iso_z
 from . import OFFLINE_HINT, OLDER_HINT, Origin, checked_by, read_reply
 
@@ -33,11 +33,11 @@ _SENDER = "IonQ's API"
 _TRY_LATER = "try again later"
 # IonQ's history holds medians no trapped-ion device produces (1Q 0.69, 2Q 0.75, SPAM 0.73)
 # next to normal ones, and chance-level SPAM placeholders (0.5, 0.501) from before SPAM was
-# measured. Medians below these floors are read as corrupt, not as data.
+# measured. The importer reads medians below these floors as corrupt, not as data.
 _FLOORS = {"1q": 0.99, "2q": 0.9, "spam": 0.9}
 _NO_FIDELITIES = "without 1Q/2Q fidelities"
 _IMPLAUSIBLE = "with implausible medians on "
-# IonQ native two-qubit gate -> canonical name; IonQ's zz takes any angle, like rzz.
+# IonQ native two-qubit gate -> canonical name. IonQ's zz takes any angle, like rzz.
 _TWO_QUBIT = {"zz": "rzz", "ms": "ms"}
 _FIDELITY_ASSUMPTION = "IonQ does not state the fidelity metric; read as average gate fidelity"
 
@@ -75,10 +75,11 @@ def bundled_profiles() -> list[Profile]:
 def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
     """The newest usable characterization of ``device`` at or before ``at`` (default: now).
 
-    ``device`` may be ``ionq_forte-1``, ``forte-1`` or ``qpu.forte-1``. ``at`` is a datetime,
-    a date or an ISO 8601 string; a date or a naive time is read as UTC. Records without 1Q and
-    2Q fidelities (IonQ backfills some) or with implausible ones (see :data:`_FLOORS`) are
-    skipped for the next older one, and the reason is written to the provenance notes.
+    ``device`` can be ``ionq_forte-1``, ``forte-1`` or ``qpu.forte-1``. ``at`` is a datetime,
+    a date or an ISO 8601 string. ``pull`` reads a date or a naive time as UTC. ``pull`` skips
+    a record without 1Q and 2Q fidelities (IonQ backfills some) or with implausible ones (see
+    :data:`_FLOORS`), and uses the next older record. The provenance notes give the reason for
+    each skip.
     """
     backend = backend_name(device)
     listing = _listing(backend)
@@ -108,7 +109,7 @@ def to_profile(
 ) -> Profile:
     """A profile from one characterization record and the backend's entry in the listing.
 
-    ``skipped`` holds why each newer record was passed over.
+    ``skipped`` holds the reason that the importer skipped each newer record.
     """
     backend = record["backend"]
     name = backend.removeprefix("qpu.")
@@ -132,7 +133,8 @@ def to_profile(
     if not natives:
         raise SourceUnavailable(
             f"IonQ lists no known two-qubit native gate for {backend}"
-            f" ({listing.get('supported_native_gates')}); expected one of {', '.join(_TWO_QUBIT)}"
+            f" ({listing.get('supported_native_gates')}). NoiseVault expects one of"
+            f" {', '.join(_TWO_QUBIT)}"
         )
     two_qubit = _TWO_QUBIT[natives[0]]
     two_assumption = _FIDELITY_ASSUMPTION
@@ -140,18 +142,19 @@ def to_profile(
         two_assumption += "; IonQ's native zz gate takes any angle, and this error is used for all"
     notes = [
         "IonQ publishes device medians only: every qubit and pair gets the same values",
-        "SPAM fidelity is combined state preparation and measurement; 1 - fidelity is used as"
-        " a symmetric readout error and prep is left unknown",
-        "t1, t2 and gate times are device-level values IonQ gives with no measurement"
-        " statement (they are the same on every record of a backend), so read them as nominal",
-        "a stderr of 0, as IonQ reports on every record, is a placeholder and is dropped",
+        "SPAM fidelity combines state preparation and measurement. NoiseVault uses 1 - fidelity"
+        " as a symmetric readout error and leaves prep unknown",
+        "t1, t2 and gate times are device-level values that IonQ gives with no measurement"
+        " statement. The values are the same on every record of a backend, so NoiseVault reads"
+        " the values as nominal",
+        "NoiseVault drops a stderr of 0, which IonQ reports on every record as a placeholder",
         f"the two-qubit native ({natives[0]} -> {two_qubit}) comes from IonQ's current backend"
         " listing, also for older records",
     ]
     if not record.get("qubits"):
         notes.append(
-            "the record gives no qubit count, so the current listing's qubit count"
-            f" ({num_qubits}) is used"
+            "the record gives no qubit count, so NoiseVault uses the qubit count of the current"
+            f" listing ({num_qubits})"
         )
     notes += _skip_notes(skipped)
     spam = _fidelity(fidelity, "spam")
@@ -161,7 +164,7 @@ def to_profile(
     elif _median(fidelity, "spam") is not None:
         notes.append(
             f"SPAM fidelity median {_median(fidelity, 'spam')} is below {_FLOORS['spam']}"
-            " (a chance-level placeholder or corrupt), so readout error is left unknown"
+            " (a chance-level placeholder or corrupt), so NoiseVault leaves readout error unknown"
         )
     idle = {
         key: _clean(seconds * 1e6)
@@ -237,7 +240,7 @@ def _median(fidelity: Mapping[str, Any], key: str) -> float | None:
 
 
 def _fidelity(fidelity: Mapping[str, Any], key: str) -> tuple[float, float | None] | None:
-    """(median, stderr) when the median is plausible data; nulls and placeholders are None."""
+    """(median, stderr) when the median is plausible data, or None for nulls and placeholders."""
     median = _median(fidelity, key)
     if median is None or median < _FLOORS[key]:
         return None
@@ -248,12 +251,12 @@ def _fidelity(fidelity: Mapping[str, Any], key: str) -> tuple[float, float | Non
 def _skip_notes(skipped: Sequence[str]) -> list[str]:
     missing = sum(reason == _NO_FIDELITIES for reason in skipped)
     implausible = [reason for reason in skipped if reason != _NO_FIDELITIES]
-    notes = [f"skipped {missing} newer record(s) {_NO_FIDELITIES}"] if missing else []
+    notes = [f"skipped {plural(missing, 'newer record')} {_NO_FIDELITIES}"] if missing else []
     if implausible:
         dated = [reason.removeprefix(_IMPLAUSIBLE) for reason in implausible]
         shown = "; ".join(dated[:3]) + ("; ..." if len(dated) > 3 else "")
         notes.append(
-            f"skipped {len(implausible)} newer record(s) with implausible fidelity medians"
+            f"skipped {plural(len(implausible), 'newer record')} with implausible fidelity medians"
             f" (1Q below {_FLOORS['1q']}, 2Q below {_FLOORS['2q']}, or a 1Q error above the 2Q"
             f" error), read as corrupt: {shown}"
         )
@@ -294,10 +297,12 @@ def _listing(backend: str) -> Mapping[str, Any]:
     qpus = sorted(e["backend"] for e in entries if e["backend"].startswith("qpu."))
     if not qpus:
         raise SourceUnavailable(
-            f"IonQ has no backend {backend!r}; its listing ({url}) names no QPU", hint=_TRY_LATER
+            f"IonQ has no backend {backend!r}. The IonQ listing ({url}) names no QPU",
+            hint=_TRY_LATER,
         )
     raise SourceUnavailable(
-        f"IonQ has no backend {backend!r}; {did_you_mean(backend, qpus)}it lists {', '.join(qpus)}"
+        f"IonQ has no backend {backend!r}: {did_you_mean(backend, qpus)}IonQ lists"
+        f" {', '.join(qpus)}"
     )
 
 
@@ -306,10 +311,10 @@ def _newest_usable(
 ) -> tuple[dict[str, Any], bytes, str, list[str]]:
     """The newest record at or before ``at`` with plausible 1Q and 2Q fidelities of its own.
 
-    Returns the record, the bytes and URL of the one-record page it was read from, and the
-    :func:`_rejection` of each newer record skipped. A page of several records fills a record's
-    null fields from the next newer record on the page (seen on qpu.aria-1), so a record is
-    judged on the page that holds it alone, which is also the page cited.
+    Returns the record, the bytes and URL of its one-record page, and the :func:`_rejection` of
+    each newer record that the search skipped. A page of several records fills the null fields of
+    a record from the next newer record on the page (seen on qpu.aria-1). So the search judges
+    each record on the page that holds only that record. The profile cites that page.
     """
     end = None if at is None else iso_z(_utc(at))
     skipped: list[str] = []
@@ -322,7 +327,7 @@ def _newest_usable(
         )
         records = body.get("characterizations") or []
         for listed in records:
-            # a record rejected on the filled page is rejected alone too, so skip it unprobed
+            # a record that fails on the filled page also fails alone, so skip it without a probe
             reason = _rejection(listed)
             if reason is None and probes < _MAX_PROBES:
                 probes += 1
@@ -345,7 +350,7 @@ def _newest_usable(
         if not records or page >= int(body.get("pages") or 0):
             raise SourceUnavailable(
                 f"IonQ publishes no {backend} characterization{_before(at)} with plausible 1Q and"
-                f" 2Q fidelities of its own ({len(skipped)} record(s) checked)",
+                f" 2Q fidelities of its own ({plural(len(skipped), 'record')} checked)",
                 hint="use another backend" if at is None else "pass a later at= or none",
             )
         page += 1

@@ -1,20 +1,22 @@
 """Qiskit export: an AerSimulator with a device Target, a physical-qubit noise model and a report.
 
-``to_qiskit(profile)`` returns a :class:`NoiseVaultSimulator`. Its Target lists every native
-gate on every allowed locus with the error and duration the simulator applies, so
-``transpile(circuit, sim)`` routes around disabled gates and places circuits noise-aware. Its
-NoiseModel is keyed on physical qubits and the Target's instruction names, with the channels
-the shared conversion rules assign (so noise follows the qubits a circuit actually lands on).
+``to_qiskit(profile)`` returns a :class:`NoiseVaultSimulator`. The simulator Target lists every
+native gate on every allowed locus, with the error and duration that the simulator applies.
+So ``transpile(circuit, sim)`` routes around disabled gates and uses the gate errors to place
+circuits. The simulator NoiseModel keys noise on physical qubits and on the instruction names
+of the Target. The NoiseModel applies the channels that :func:`resolve_op` assigns, so noise
+follows the qubits that a circuit lands on.
 
-Two profile natives have no Qiskit instruction of their own and are exported under the
-parametric gate that contains them: ``zz`` (exp(-i pi/4 ZZ)) as ``rzz`` and ``ms`` (IonQ
-Molmer-Sorensen, MS(0, 0) = RXX(pi/2)) as ``rxx``. Aer keys noise on instruction names, so the
-alias gets the native's noise at any angle; the report says so. When the profile also defines
-the Qiskit gate itself, that definition wins.
+Two profile natives have no Qiskit instruction of their own. The export uses the parametric
+gate that contains each native. ``zz`` (exp(-i pi/4 ZZ)) becomes ``rzz``, and ``ms`` (IonQ
+Molmer-Sorensen, MS(0, 0) = RXX(pi/2)) becomes ``rxx``. Aer keys noise on instruction names, so the
+alias gets the noise of the native at any angle. The report records this. When the profile
+also defines the Qiskit gate itself, the export uses that definition.
 
-Google's ``sqrt_iswap`` has no Qiskit gate either, and no parametric one transpile can target,
-so it is exported as :class:`SqrtISwapGate`. Importing this module adds a cx -> sqrt_iswap rule
-to Qiskit's session equivalence library, which is how ``transpile`` reaches that gate.
+Google's ``sqrt_iswap`` has no Qiskit gate either, and no parametric gate that transpile can
+target. So the export uses :class:`SqrtISwapGate`. Importing this module adds a
+cx -> sqrt_iswap rule to the session equivalence library of Qiskit. With this rule,
+``transpile`` reaches ``sqrt_iswap``.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ..errors import NoiseVaultError, install_hint
+from ..errors import NoiseVaultError, install_hint, qubit_loci
 
 try:
     import qiskit
@@ -115,7 +117,7 @@ _DIRECTIVES = (
     SetUnitary,
 )
 _TRANSPILE_FIX = (
-    "transpile it for this simulator first: from qiskit import transpile;"
+    "transpile the circuit for this simulator first: from qiskit import transpile;"
     " sim.run(transpile(circuit, sim))"
 )
 _PAULI = {
@@ -226,7 +228,7 @@ class NoiseVaultSimulator(AerSimulator):
             qargs = tuple(circuit.find_bit(q).index for q in instruction.qubits)
             if not target.instruction_supported(op.name, qargs):
                 raise CircuitNotNativeError(
-                    f"circuit {circuit.name!r}: {op.name} on qubits {list(qargs)} is not"
+                    f"circuit {circuit.name!r}: {op.name} on {qubit_loci(qargs)} is not"
                     f" available on {self.profile.id} ({self._why(op.name, qargs)})",
                     hint=_TRANSPILE_FIX,
                 )
@@ -235,7 +237,7 @@ class NoiseVaultSimulator(AerSimulator):
         target = self.target
         if name not in target.operation_names:
             natives = sorted(set(target.operation_names) - {"measure", "reset", "delay"})
-            return f"not a native instruction; natives are {', '.join(natives)}"
+            return f"not a native instruction. The natives are {', '.join(natives)}"
         if any(self.profile.table.qubit(q).disabled for q in qargs):
             return "a qubit there is disabled in the profile"
         return f"the device does not provide {name} on that locus"
@@ -255,47 +257,48 @@ def _width_hint(circuit: QuantumCircuit, width: int) -> str:
         needed = len(acted_on)
         if needed <= width:
             return (
-                f"transpile also counts its idle qubits, so build it on at most {width} qubits and"
-                " run sim.run(transpile(circuit, sim))"
+                f"transpile also counts idle qubits, so build the circuit on at most {width}"
+                " qubits. Then run sim.run(transpile(circuit, sim))"
             )
         return (
-            f"it needs {needed} qubits, so run it on a profile with at least {needed} qubits (nv"
-            " list shows how many each profile has)"
+            f"the circuit needs {needed} qubits, so run the circuit on a profile with at least"
+            f" {needed} qubits (nv list shows how many each profile has)"
         )
     needed = len(circuit.layout.initial_index_layout(filter_ancillas=True))
     if needed <= width:
         return (
-            f"it was transpiled for a backend with {circuit.num_qubits} qubits, so transpile your"
-            " original circuit for this simulator instead: sim.run(transpile(original, sim))"
+            f"the circuit is transpiled for a backend with {circuit.num_qubits} qubits, so"
+            " transpile the original circuit for this simulator instead:"
+            " sim.run(transpile(original, sim))"
         )
     return (
-        f"it was transpiled for a backend with {circuit.num_qubits} qubits from a circuit with"
-        f" {needed}, so transpile that circuit for a profile with at least {needed} qubits (nv list"
-        " shows how many each profile has)"
+        f"the circuit is transpiled for a backend with {circuit.num_qubits} qubits from a"
+        f" circuit with {needed}. Transpile the original circuit for a profile with at least"
+        f" {needed} qubits (nv list shows how many each profile has)"
     )
 
 
 def to_qiskit(
     profile: Profile, *, unknown_gates: UnknownGates = "typical", readout: bool = True
 ) -> NoiseVaultSimulator:
-    """A noisy AerSimulator for ``profile``; transpile circuits for it before ``run``.
+    """A noisy AerSimulator for ``profile``. Transpile circuits for the simulator before ``run``.
 
-    The Target leaves out disabled qubits and gates the way Qiskit models faulty ones. Qiskit's
-    ``optimization_level=0`` still puts circuit qubit i on physical qubit i, and levels 1-3 do
-    not check that a chosen qubit has the 1-qubit gates a circuit needs. On a profile with
-    disabled parts, transpile with ``initial_layout=list(profile.suggest_layout(n).values())``:
-    it picks connected qubits that each have every 1-qubit native usable anywhere on the
-    device, and warns when no chain of ``n`` such qubits exists.
+    The Target leaves out disabled qubits and gates, the way Qiskit models faulty ones. Qiskit's
+    ``optimization_level=0`` still puts circuit qubit i on physical qubit i. Levels 1-3 do not
+    check that a chosen qubit has the 1-qubit gates that a circuit needs. On a profile with
+    disabled parts, transpile with ``initial_layout=list(profile.suggest_layout(n).values())``.
+    ``suggest_layout`` picks connected qubits that each have every 1-qubit native usable
+    anywhere on the device. ``suggest_layout`` warns when no chain of ``n`` such qubits exists.
 
-    ``unknown_gates`` applies to natives with no error metric on a locus: ``"typical"``
-    (default) gives them the typical native's noise (reported and warned), ``"error"`` leaves
-    those loci out of the Target so transpile never uses them. ``readout=False`` leaves
-    measurements noiseless. Raises UnsupportedDevice when no one- or no two-qubit native is
-    left for Qiskit to compile to.
+    ``unknown_gates`` applies to natives with no error metric on a locus. ``"typical"``
+    (default) gives them the noise of the typical native, with a report entry and a warning.
+    ``"error"`` leaves those loci out of the Target, so transpile never uses them.
+    ``readout=False`` leaves measurements noiseless. Raises UnsupportedDevice when Qiskit has no
+    one-qubit or no two-qubit native left to compile to.
     """
     if not isinstance(readout, bool):
         raise ValueError(
-            f"readout={readout!r}: pass True or False; Qiskit readout is exact"
+            f"readout={readout!r}: pass True or False. Qiskit readout is exact"
             " (per-qubit P(1|0) and P(0|1))"
         )
     if unknown_gates not in ("typical", "error"):
@@ -316,7 +319,7 @@ def to_qiskit(
     for name, why in omitted.items():
         report.omit(f"native {name}: {why}")
     _require_natives(profile, placements, omitted, enabled)
-    report.events.clear()  # locus bookkeeping; events count applications as circuits run
+    report.events.clear()  # locus bookkeeping. Events count applications as circuits run
     target = _target(profile, placements, enabled)
     noise_model = _noise_model(table, placements, enabled, target, readout)
     _report_fixed(table, enabled, readout, report)
@@ -341,10 +344,10 @@ def _exports(profile: Profile, report: Report, omitted: dict[str, str]) -> list[
         arity = table.arity(canonical)
         gate = _qiskit_gate(canonical)
         if gate is None or arity is None or arity > 2:
-            omitted[canonical] = "no Qiskit instruction for it in this export"
+            omitted[canonical] = "the Qiskit export has no instruction for this native"
             continue
         if gate.name in by_name:
-            omitted[canonical] = f"the profile's {gate.name} is exported instead"
+            omitted[canonical] = f"the export uses the profile's {gate.name} instead"
             continue
         if canonical in ALIASES:
             report.approximate(
@@ -356,7 +359,7 @@ def _exports(profile: Profile, report: Report, omitted: dict[str, str]) -> list[
             report.approximate(
                 "gate count of transpiled circuits",
                 "transpile reaches sqrt_iswap only through cx, two sqrt_iswap per cx",
-                "a general two-qubit block can take 6 sqrt_iswap where 3 suffice; build"
+                "a general two-qubit block can take 6 sqrt_iswap where 3 are sufficient. Build"
                 " circuits in sqrt_iswap directly, or use profile.to_cirq() to compile for Google",
             )
         by_name[gate.name] = Export(canonical, gate)
@@ -393,7 +396,7 @@ def _placements(
     report: Report,
     omitted: dict[str, str],
 ) -> list[Placement]:
-    """Every native on every locus that gets noise; uncalibrated loci drop out in error mode."""
+    """Every native on every locus that gets noise. Uncalibrated loci drop out in error mode."""
     loci = _loci(table, enabled)
     memo: dict[tuple, Placement] = {}
     out = []
@@ -412,11 +415,10 @@ def _placements(
                 continue
             out.append(_placement(table, export, qargs, found, unknown_gates, report, memo))
         if uncalibrated:
-            shown = [qargs[0] if len(qargs) == 1 else qargs for qargs in uncalibrated]
             omitted[export.canonical] = (
-                f"no error metric on qubits {_span(shown)} and unknown_gates='error', so"
-                " transpile does not use it there (unknown_gates='typical' gives it the"
-                " typical native's noise)"
+                f"no error metric on {qubit_loci(*uncalibrated)}, and unknown_gates='error', so"
+                " transpile does not use this native there (unknown_gates='typical' gives those"
+                " loci the typical native's noise)"
             )
         elif unavailable and len(unavailable) == len(candidates):
             omitted[export.canonical] = unavailable[0]
@@ -434,8 +436,8 @@ def _placement(
 ) -> Placement:
     """resolve_op on one locus, reusing the channels of a locus with identical physics.
 
-    All-to-all devices have n(n-1) ordered pairs per native, mostly with the same noise; building
-    each pair's channels is what made large exports slow.
+    All-to-all devices have n(n-1) ordered pairs per native, most with the same noise. Building
+    the channels of each pair made large exports slow.
     """
     source = found if found.state != "uncalibrated" else table.typical(len(qargs), qargs)
     key = None
@@ -491,14 +493,14 @@ def _require_natives(
         refusal = f"{profile.id} has no {word}-qubit native gate this Qiskit export can compile to"
         if not loci:
             raise UnsupportedDevice(
-                f"{refusal}. Its connectivity allows no pair of enabled qubits, so"
+                f"{refusal}. The profile connectivity allows no pair of enabled qubits, so"
                 f" profile.to_cirq() cannot run a {word}-qubit gate either"
             )
         why = "; ".join(f"{n}: {omitted.get(n, 'disabled on every locus')}" for n in defined)
         if any(table.allowed(n, qargs) for n in defined for qargs in loci):
             raise UnsupportedDevice(
                 f"{refusal} ({why})",
-                hint="simulate it with profile.to_cirq() instead, or give the profile a"
+                hint="simulate the profile with profile.to_cirq() instead, or give the profile a"
                 f" calibrated {word}-qubit native that Qiskit provides",
             )
         unit = "enabled qubit" if arity == 1 else "pair of enabled qubits"
@@ -513,7 +515,7 @@ def _loci(table: NoiseTable, enabled: Sequence[int]) -> dict[int, Sequence[tuple
 
 
 def _pairs(table: NoiseTable, enabled: Sequence[int]) -> list[tuple[int, int]]:
-    """Ordered pairs that may carry a 2-qubit gate; the table decides which really do."""
+    """Ordered pairs that can carry a 2-qubit gate. The table decides which pairs do."""
     if table.all_to_all:
         return list(permutations(enabled, 2))
     usable = set(enabled)
@@ -618,7 +620,7 @@ def gate_error(
     """One QuantumError on ``qargs`` (Qiskit order) applying ``channels`` in order.
 
     Pauli mixtures become separate noise circuits, so Aer samples them instead of applying
-    Kraus operators; any other channel is one Kraus instruction in every circuit.
+    Kraus operators. Any other channel is one Kraus instruction in every circuit.
     """
     position = {q: i for i, q in enumerate(qargs)}
     key = tuple(
@@ -717,7 +719,7 @@ def _delay_ns(op: Delay, q: int) -> float:
         raise CircuitNotNativeError(
             f"delay on qubit {q} has duration {op.duration} {op.unit}",
             hint="the profile has no sample time, so give delays a time unit (s, ms, us, ns, ps),"
-            " e.g. qc.delay(100, q, unit='ns')",
+            " for example qc.delay(100, q, unit='ns')",
         )
     return float(op.duration) * _TIME_UNITS_NS[op.unit]
 
@@ -725,9 +727,10 @@ def _delay_ns(op: Delay, q: int) -> float:
 def _aer_unitary_passes(target: Target) -> list[LocalNoisePass]:
     """Natives no Aer method executes by name run as labelled unitaries, which keep their noise.
 
-    Only for gates outside every method (iswap): Aer 0.17 mis-simulates labelled unitaries
-    whose matrix is a non-symmetric permutation with phases (ecr, cy), so gates a method merely
-    lacks are left for Aer to reject with its own message.
+    The pass applies only to gates outside every method (iswap). Aer 0.17 simulates some
+    labelled unitaries incorrectly: those whose matrix is a non-symmetric permutation with
+    phases (ecr, cy). So the pass leaves a gate that one method lacks to Aer, which rejects the
+    gate with its own message.
     """
     supported = {*AerSimulator().configuration().basis_gates, "measure", "reset", "delay"}
     missing = tuple(
@@ -758,13 +761,13 @@ def _report_fixed(table: NoiseTable, enabled: Sequence[int], readout: bool, repo
     elif len(no_readout) < len(qubits):
         report.mark_exact("readout: P(1|0) and P(0|1) per qubit, as given (Aer ReadoutError)")
     if readout and no_readout:
-        report.mark_unknown(f"readout error of qubits {_span(no_readout)}")
+        report.mark_unknown(f"readout error of {qubit_loci(*((q,) for q in no_readout))}")
     no_prep = [q.index for q in qubits if q.prep_error is None]
     if len(no_prep) < len(qubits):
         report.mark_exact("reset: bit flip with the preparation error after each reset")
         report.approximate("initial state", "ideal |0>", "preparation error applies after reset")
     if no_prep:
-        report.mark_unknown(f"preparation (reset) error of qubits {_span(no_prep)}")
+        report.mark_unknown(f"preparation (reset) error of {qubit_loci(*((q,) for q in no_prep))}")
     if not all(q.relaxation_unknown for q in qubits):
         report.mark_exact("delay: thermal relaxation and dephasing over its duration")
     for q in qubits:
@@ -774,8 +777,3 @@ def _report_fixed(table: NoiseTable, enabled: Sequence[int], readout: bool, repo
         "idle time outside explicit delays (insert delays with"
         " transpile(circuit, sim, scheduling_method='alap'))"
     )
-
-
-def _span(indices: Sequence[object]) -> str:
-    shown = ", ".join(map(str, indices[:8]))
-    return f"[{shown}]" if len(indices) <= 8 else f"[{shown}, ...] ({len(indices)} qubits)"

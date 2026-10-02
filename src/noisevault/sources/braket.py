@@ -1,8 +1,8 @@
 """Amazon Braket standardized device properties that a user saved from their own account.
 
-Save them with ``AwsDevice(arn).properties.json()`` (the whole capabilities document, which
-also carries the qubit count, native gates and connectivity) or just its ``standardized`` part.
-Standardized v1 and v2 give per-qubit T1, T2 and fidelities and per-pair gate fidelities; v3
+Save them with ``AwsDevice(arn).properties.json()``, or save only its ``standardized`` part.
+The whole capabilities document also has the qubit count, native gates and connectivity.
+Standardized v1 and v2 give per-qubit T1, T2 and fidelities and per-pair gate fidelities. v3
 gives device-level values. Braket's terms restrict redistribution, so profiles stay local.
 """
 
@@ -31,7 +31,7 @@ _TECHNOLOGY = {
     "aqt": "trapped_ion",
 }
 # Braket gate names, lowercased, to the canonical gate with the same matrix (up to global
-# phase); other names are kept as they are. GPI and GPI2 are r at theta pi and pi/2.
+# phase). Other names stay as they are. GPI and GPI2 are r at theta pi and pi/2.
 _GATES = {
     "ccnot": "ccx",
     "cnot": "cx",
@@ -48,7 +48,7 @@ _GATES = {
     "yy": "ryy",
     "zz": "rzz",
 }
-# fidelityType.name -> (method, measured); for a locus with several, the first listed wins
+# fidelityType.name -> (method, measured). For a locus with several types, the first one wins.
 _RB_TYPES: Mapping[int, Mapping[str, tuple[str, str | None]]] = {
     1: {
         "RANDOMIZED_BENCHMARKING": ("rb", None),
@@ -66,8 +66,8 @@ _V3_KEYS = {  # arity -> (device-level fidelity list, duration)
     2: ("twoQubitGateFidelity", "twoQubitGateDuration"),
 }
 _ASSUMPTION = (
-    "Braket gives a fidelity; 1 - fidelity is read as the average gate infidelity, as the Braket"
-    " SDK's local emulator does"
+    "Braket gives a fidelity. NoiseVault reads 1 - fidelity as the average gate infidelity, as the"
+    " Braket SDK's local emulator does"
 )
 _SAVE = "save AwsDevice(arn).properties.json() and pass that file"
 
@@ -132,7 +132,7 @@ class _DeviceLevel(BaseModel):
 
 
 def bundled_profiles() -> list[Profile]:
-    """None: Braket's terms restrict redistribution; import your own saved file instead."""
+    """None, because Braket's terms restrict redistribution. Import your own saved file."""
     return []
 
 
@@ -141,7 +141,7 @@ def from_braket(
 ) -> Profile:
     """A profile from saved Braket device properties (a JSON file path or the parsed dict).
 
-    ``device`` names the profile; by default it is the file name without its suffix.
+    ``device`` names the profile. The default name is the file name without its suffix.
     """
     data: Any
     if isinstance(path_or_dict, Mapping):
@@ -177,7 +177,7 @@ def from_braket(
     paradigm = caps.get("paradigm") or {}
     notes = [
         f"source_hash is over {hashed}",
-        "Z rotations are taken as virtual (rz); Braket does not say",
+        "Braket does not say if Z rotations are virtual, so NoiseVault takes them as virtual (rz)",
         "readout is 1 - the READOUT fidelity, the same for both prepared states",
     ]
     physics = build(std, paradigm, notes)
@@ -213,8 +213,8 @@ def _calibrated_at(
 ) -> datetime | None:
     """The characterization time (standardized v3) or else when Braket refreshed the service.
 
-    Braket's schema accepts a timestamp without a time zone, and pydantic writes it back so;
-    such a value is read as UTC.
+    Braket's schema accepts a timestamp without a time zone, and pydantic writes the timestamp
+    back without one. NoiseVault reads such a value as UTC.
     """
     std_at, service_at = std.get("updatedAt"), (caps.get("service") or {}).get("updatedAt")
     where, value = ("standardized", std_at) if std_at else ("service", service_at)
@@ -223,7 +223,7 @@ def _calibrated_at(
     when = value if isinstance(value, datetime) else datetime.fromisoformat(value)
     notes.append(f"calibrated_at is the {where} updatedAt, when Braket last refreshed it")
     if when.tzinfo is None:
-        notes.append(f"the {where} updatedAt had no time zone; read as UTC")
+        notes.append(f"the {where} updatedAt had no time zone, so NoiseVault reads it as UTC")
         when = when.replace(tzinfo=UTC)
     return when
 
@@ -265,9 +265,9 @@ def _per_element(
             records.append(_record(gate, [index[q] for q in pair], best, 2))
     _note_skipped(skipped, notes)
     notes += [
-        "the one-qubit fidelity is given per qubit, not per gate; it is applied to every"
-        f" one-qubit native ({', '.join(one_natives)})",
-        "T2 is Braket's T2; whether it is an echo or Ramsey value is not stated",
+        "Braket gives the one-qubit fidelity per qubit, not per gate, so NoiseVault applies it to"
+        f" every one-qubit native gate ({', '.join(one_natives)})",
+        "T2 is Braket's T2, and Braket does not say if T2 is an echo or a Ramsey value",
     ]
     return {
         "num_qubits": num_qubits,
@@ -307,7 +307,7 @@ def _device_level(
         best = _preferred(props.get("oneQubitFidelity") or [], 1, skipped)
         records += [_record(g, [index[label]], best, 1) for g in one_natives if best]
     _note_skipped(skipped, notes)
-    notes.append("v3 values are device-wide; every qubit and pair gets them")
+    notes.append("v3 values are device-wide, so every qubit and pair gets the same values")
     readout = std.get("readoutFidelity") or []
     readout_spec = None
     if readout:
@@ -335,7 +335,7 @@ def _layout(
     """Braket qubit ids -> profile indices, the qubit count and the connectivity.
 
     When every id is an integer the id is the index, so a Braket circuit's qubit numbers are the
-    profile's physical qubits; indices with no id (IQM counts from 1) are disabled by the caller.
+    profile's physical qubits. The caller disables indices with no id (IQM counts from 1).
     """
     connectivity = paradigm.get("connectivity") or {}
     graph: Mapping[str, list[str]] | None = connectivity.get("connectivityGraph")
@@ -354,8 +354,8 @@ def _layout(
         return index, num_qubits, "all_to_all"
     if not edges_by_id:
         notes.append(
-            "no qubit pair is connected; Braket's connectivity graph has no edges and is not"
-            " fully connected"
+            "no qubit pair is connected, because Braket's connectivity graph has no edges and is"
+            " not fully connected"
         )
     edges = {tuple(sorted((index[a], index[b]))) for a, b in edges_by_id}
     return index, num_qubits, {"edges": sorted(edges), "directed": False}
@@ -387,12 +387,14 @@ def _definitions(
             natives[info.arity].append(info.name)
     if left_out:
         notes.append(
-            "native gates that are not a known one- or two-qubit gate were left out:"
+            "NoiseVault left out the native gates that are not a known one- or two-qubit gate:"
             f" {sorted(left_out)}"
         )
     if not natives[1]:
         natives[1] = ["r"]
-        notes.append("no one-qubit native gate is listed, so the one-qubit fidelity goes to r")
+        notes.append(
+            "the device lists no one-qubit native gate, so the one-qubit fidelity goes to r"
+        )
     defs: dict[str, dict[str, Any]] = {"rz": {"virtual": True}}
     defs |= {g: {"assumption": _ASSUMPTION} for g in natives[1]}
     defs |= {g: {"qubits": 2, "assumption": _ASSUMPTION} for g in natives[2]}
@@ -404,7 +406,7 @@ def _preferred(
 ) -> tuple[Mapping[str, Any], str] | None:
     """The entry of the most preferred known fidelity type, with that type.
 
-    Readout entries are not gate fidelities. A v3 entry may carry no type; it is read as RB.
+    Readout entries are not gate fidelities. A v3 entry with no type counts as RB.
     """
     ranked = []
     order = list(_RB_TYPES[arity])
@@ -426,8 +428,8 @@ def _preferred(
 def _directions(entry: Mapping[str, Any], key: str, gate: str) -> list[tuple[str, str]]:
     """The (control, target) orders a two-qubit entry calibrates.
 
-    Braket reads an entry without a direction as bidirectional; a symmetric gate needs only one
-    record for that.
+    Braket reads an entry without a direction as bidirectional. A symmetric gate needs only one
+    record for such an entry.
     """
     direction = entry.get("direction")
     if direction:
@@ -455,7 +457,9 @@ def _record(
 
 def _note_skipped(skipped: set[str], notes: list[str]) -> None:
     if skipped:
-        notes.append(f"fidelity types with no known meaning were skipped: {sorted(skipped)}")
+        notes.append(
+            f"NoiseVault skipped the fidelity types with no known meaning: {sorted(skipped)}"
+        )
 
 
 def _error(fidelity: float) -> float:

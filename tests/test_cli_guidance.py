@@ -94,7 +94,8 @@ def _unlisted(monkeypatch: pytest.MonkeyPatch) -> None:
         (
             _unlisted,
             ["pull", "ibm_torino"],
-            "ibm_torino is not listed on the public endpoint (it lists ibm_fez); it may be retired",
+            "ibm_torino is not listed on the public endpoint (the endpoint lists ibm_fez);"
+            " the device may be retired",
             "ibm_torino is bundled, so nv show ibm_torino loads it offline",
         ),
     ],
@@ -107,7 +108,7 @@ def test_a_failed_pull_puts_its_next_step_on_a_hint_line(
 
 
 _NO_GOOGLE_SOURCE = (
-    "error: unknown source '{source}'; no source serves google devices\n"
+    "error: unknown source '{source}'. No source serves google devices\n"
     "hint: run nv list --vendor google to see the google profiles you can load offline\n"
 )
 
@@ -179,7 +180,7 @@ def test_list_and_doctor_name_a_dangling_vault_link_in_one_line(vault: Path) -> 
     (vault / "gone.json.gz").symlink_to(vault.parent / "moved.json.gz")
     expected = (
         f"warning: skipped {vault / 'gone.json.gz'}: it links to"
-        f" {vault.parent / 'moved.json.gz'}, which does not exist; remove the link\n"
+        f" {vault.parent / 'moved.json.gz'}, which does not exist. Remove the link\n"
     )
     listed = runner.invoke(app, ["list"], env={"COLUMNS": "200"})
     assert listed.exit_code == 0 and "* ibm_manila" in listed.stdout

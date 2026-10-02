@@ -1,6 +1,7 @@
 """NoiseVault: real device noise, pinned and portable.
 
-Importing this package loads no quantum framework; each export imports its framework on use.
+Importing this package loads no quantum framework. Each export imports its framework when you
+use the export.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ _LAZY_MODULES = {"stim": "noisevault.frameworks.stim"}
 
 
 def from_qiskit_backend(backend: Any) -> Profile:
-    """A profile from a Qiskit BackendV2 (its Target), e.g. a qiskit-ibm-runtime fake backend."""
+    """A profile from a Qiskit BackendV2 (its Target), such as a qiskit-ibm-runtime fake backend."""
     from .sources.qiskit_backend import from_qiskit_backend as convert
 
     return convert(backend)
@@ -56,8 +57,8 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: Any) -> Profil
 def from_braket(path_or_dict: str | Path | dict[str, Any], *, device: str | None = None) -> Profile:
     """A profile from saved Amazon Braket standardized device properties.
 
-    Braket properties do not name the device, so pass ``device`` (e.g. ``"garnet"``) to name the
-    profile; by default it is the file name without its suffix.
+    Braket properties do not name the device, so pass ``device`` (for example ``"garnet"``) to
+    name the profile. By default, the name is the file name without its suffix.
     """
     from .sources.braket import from_braket as convert
 
@@ -76,7 +77,8 @@ def from_calibration_archive(
 ) -> Profile:
     """A profile from a local copy of the dataset phanerozoic/qiskit-calibration-drift.
 
-    Each property takes its newest calibration at or before ``at``; by default, the newest.
+    Each property takes its newest calibration at or before ``at``. With no ``at``, each property
+    takes its newest calibration.
     Install ``noisevault[hf]`` for pyarrow.
     """
     from .sources.hf_archive import from_calibration_archive as convert

@@ -1,15 +1,17 @@
 """Conformance check: every framework export against the NoiseVault reference on small circuits.
 
-``check(profile)`` builds a few circuits from the profile's own native gates on a well
-calibrated chain of qubits, computes their outcome probabilities (readout included) with the
-framework-free reference simulator, and runs the same circuits through each installed export
-with that framework's own simulator and readout mechanism. Qiskit, Cirq and PennyLane are
-compared exactly; Stim is sampled and compared against the Pauli-twirled reference, which is
-the model it implements, with exact readout and, on the widest circuit and the
-measurement-only one, also through the export's default symmetrized readout.
+``check(profile)`` builds a few circuits from the native gates of the profile on a well
+calibrated chain of qubits. The framework-free reference simulator computes the outcome
+probabilities of these circuits, readout included. The check then runs the same circuits
+through each installed export, with the simulator and readout mechanism of that framework.
+
+The check compares Qiskit, Cirq and PennyLane exactly. The check samples Stim and compares
+the samples against the Pauli-twirled reference, which is the model that Stim implements.
+The Stim samples use exact readout. On the widest circuit and the measurement-only circuit, the
+check also samples through the default symmetrized readout of the Stim export.
 
 A pass certifies that the exports implement the same noise model as the reference on these
-circuits. It says nothing about how closely that model matches the hardware.
+circuits. A pass says nothing about how closely that model matches the hardware.
 """
 
 from __future__ import annotations
@@ -26,7 +28,13 @@ import numpy as np
 from . import gates
 from .channels import pauli_kraus, pauli_twirl, readout_matrix
 from .conversion import resolve_op
-from .errors import LayoutError, NoiseApproximationWarning, NoiseVaultError, install_hint
+from .errors import (
+    LayoutError,
+    NoiseApproximationWarning,
+    NoiseVaultError,
+    install_hint,
+    qubit_loci,
+)
 from .layout import normalize_layout
 from .reference import Op, _apply, charged_as
 from .reference import probabilities as reference_probabilities
@@ -42,7 +50,7 @@ SIGMAS = 5.0
 MAX_QUBITS = 4
 NOTE = (
     "A pass means each export implements the same noise model as the NoiseVault reference on"
-    " these circuits. It is not a measure of how well the model matches the hardware."
+    " these circuits. A pass does not measure how well the model matches the hardware."
 )
 _EXTRAS = {"qiskit": "qiskit", "cirq": "cirq", "pennylane": "pennylane", "stim": "stim"}
 # Gate angles for check circuits: pi/2 unless listed. r keeps a phase off 0 so Cirq does not
@@ -54,7 +62,7 @@ _ANGLES: dict[str, tuple[float, ...]] = {
     "ms": (0.0, 0.0),
 }
 # Rotations that at pi/2 equal a fixed native, whose noise the exports then charge when the
-# profile defines it; the check runs them at pi/4 instead (see _two_qubit_ops).
+# profile defines that native. So the check runs these rotations at pi/4 (see _two_qubit_ops).
 _FIXED_AT_HALF_PI = {"rzz": "zz", "rxx": "ms", "ryy": "ms"}
 # Fixed z-family gates, which a profile without their own calibration charges as p, else rz.
 _FIXED_PHASES = ("s", "z", "sdg", "t", "tdg")
@@ -85,8 +93,8 @@ class CircuitCheck:
 class NotRun:
     """A planned check circuit, or part of one, that a framework did not run.
 
-    ``ran_without`` names the gates a reduced version of the circuit left out; it is empty when
-    the circuit did not run at all.
+    ``ran_without`` names the gates that a reduced version of the circuit left out.
+    ``ran_without`` is empty when the circuit did not run at all.
     """
 
     circuit: str
@@ -169,10 +177,10 @@ class CheckResult:
         return bool(self.frameworks) and all(f.passed for f in self.frameworks)
 
     def summary(self) -> str:
-        chain = "-".join(str(self.layout[i]) for i in range(len(self.layout)))
+        qubits = qubit_loci([self.layout[i] for i in range(len(self.layout))])
         lines = [
             f"check {self.profile_id} nv:{self.fingerprint[:12]}: {len(self.circuits)} circuits"
-            f" on qubits {chain}"
+            f" on {qubits}"
         ]
         for f in self.frameworks:
             verdict = "pass" if f.passed else "FAIL"
@@ -219,14 +227,14 @@ def check(
 ) -> CheckResult:
     """Run the check circuits through every installed export (or ``frameworks``).
 
-    ``layout`` gives the chain of physical qubits to use (1 to 4 qubits, neighbors connected);
-    by default ``profile.suggest_layout(n)`` for the largest such ``n`` with a check circuit on
-    its chain. ``shots`` and ``seed`` apply to sampled frameworks (Stim).
+    ``layout`` gives the chain of physical qubits to use: 1 to 4 qubits, with connected
+    neighbors. The default is ``profile.suggest_layout(n)`` for the largest ``n`` that has a
+    check circuit on its chain. ``shots`` and ``seed`` apply to sampled frameworks (Stim).
     """
     names = list(FRAMEWORKS if frameworks is None else frameworks)
     unknown = [n for n in names if n not in FRAMEWORKS]
     if unknown:
-        raise ValueError(f"unknown framework {unknown[0]!r}; choose from {', '.join(FRAMEWORKS)}")
+        raise ValueError(f"unknown framework {unknown[0]!r}. Choose from {', '.join(FRAMEWORKS)}")
     validate_shots(shots)
     chain, circuits = plan_circuits(profile, layout, purpose="check")
     expected = _Expected(profile, chain)
@@ -273,8 +281,8 @@ def plan_circuits(
     chain, circuits = _chain_and_circuits(profile, layout)
     if not circuits:
         raise NoiseVaultError(
-            f"{profile.id} has no calibrated native gate with a known unitary on qubits {chain},"
-            f" so there is nothing to {purpose}",
+            f"{profile.id} has no calibrated native gate with a known unitary on"
+            f" {qubit_loci(chain)}, so there is nothing to {purpose}",
             hint=None if layout is None else "pass layout= with other qubits",
         )
     return chain, circuits
@@ -318,11 +326,14 @@ def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int]) -> 
 def build_circuits(
     profile: Profile, chain: Sequence[int], expressible: Callable[[Op], bool] = lambda op: True
 ) -> tuple[Circuit, ...]:
-    """Check circuits from the calibrated natives on ``chain`` (circuit qubit i is ``chain[i]``)
-    that ``expressible`` accepts: an entangling chain, a mirror circuit, a single-qubit
-    sequence, every 2-qubit native on one pair when there are several, a fixed phase gate the
-    profile charges as ``p``, and a measurement-only circuit, whose outcomes only readout
-    error moves off ``0...0``."""
+    """Check circuits from the calibrated natives on ``chain`` that ``expressible`` accepts.
+
+    Circuit qubit i is ``chain[i]``. The circuits are an entangling chain, a mirror circuit, a
+    single-qubit sequence, and every 2-qubit native on one pair when there are several. The
+    list also has a fixed phase gate that the profile charges as ``p``, and a measurement-only
+    circuit. Only readout error moves the outcomes of the measurement-only circuit off
+    ``0...0``.
+    """
     table = profile.table
     n = len(chain)
     ones = [
@@ -378,8 +389,11 @@ def build_circuits(
 
 
 def _fixed_phase(profile: Profile, qubit: int) -> Op | None:
-    """A fixed z-family gate the profile leaves to its ``p`` calibration, which every export
-    must then charge ahead of ``rz``; None when ``p`` is not calibrated on ``qubit``."""
+    """A fixed z-family gate that the profile leaves to its ``p`` calibration.
+
+    Every export must then charge the ``p`` noise for this gate, ahead of the ``rz`` noise.
+    Returns None when ``p`` has no calibration on ``qubit``.
+    """
     if not _calibrated(profile.table.gate("p", (qubit,))):
         return None
     name = next((g for g in _FIXED_PHASES if g not in profile.gates), None)
@@ -572,7 +586,7 @@ def _run(
         reasons = dict.fromkeys(part for n in not_run for part in n.reason.split("; "))
         return " ".join(f"{reason[:1].upper()}{reason[1:]}." for reason in reasons)
     # The widest circuit's outcomes can be uniform, which readout error leaves unchanged, so
-    # the measurement-only circuit is sampled through the framework's measurement as well.
+    # the check also samples the measurement-only circuit through the framework's measurement.
     widest = max((c for c in circuits if c.ops), key=lambda c: c.num_qubits)
     measured_names = []
     for circuit in (widest, *(c for c in circuits if not c.ops)):
@@ -589,7 +603,7 @@ def _run(
         return len({str(item) for r in reports for item in getattr(r, attr)})
 
     if runner.sampled:
-        method = f"sampled {shots} shots vs the twirled reference"
+        method = f"sampled {shots} shots against the twirled reference"
         if names:
             method += f", and {names} with the export's default symmetrized readout"
         method += f", {SIGMAS:g} sigma"
@@ -667,7 +681,7 @@ class _Qiskit(_Runner):
             return f"Qiskit has no {op.name} gate"
         qargs = tuple(self.chain[q] for q in op.qubits)
         if not self.sim.target.instruction_supported(gate.name, qargs):
-            return f"the Qiskit export has no {gate.name} on qubits {list(qargs)}"
+            return f"the Qiskit export has no {gate.name} on {qubit_loci(qargs)}"
         return None
 
     def _circuit(self, circuit: Circuit, clbits: int = 0) -> Any:
@@ -761,8 +775,8 @@ class _Cirq(_Runner):
             for op in circuit.ops
         ]
         noisy = cirq.Circuit([*ops, cirq.measure(*measured, key="m")]).with_noise(self.model)
-        # Nothing after the measurement can change its outcome, so the state just before it,
-        # readout channels included, gives the exact outcome probabilities.
+        # Nothing after the measurement can change its outcome, so the state before the
+        # measurement, readout channels included, gives the exact outcome probabilities.
         end = next(i for i, m in enumerate(noisy) if any(cirq.is_measurement(op) for op in m))
         quantum = noisy[:end]
         simulator = cirq.DensityMatrixSimulator(dtype=np.complex128)
@@ -838,8 +852,11 @@ class _Stim(_Runner):
         ]
 
     def _instruction(self, op: Op) -> str | None:
-        """A Stim gate equal to ``op`` that the export charges ``op.name``'s noise, or that is
-        ``op`` itself when the profile leaves ``op`` to another gate's calibration."""
+        """A Stim gate equal to ``op``, or None.
+
+        The export must charge the noise of ``op.name`` for the Stim gate. Or the Stim gate
+        must be ``op`` itself, when the profile leaves ``op`` to the calibration of another gate.
+        """
         defined = self.profile.gates
         return next(
             (

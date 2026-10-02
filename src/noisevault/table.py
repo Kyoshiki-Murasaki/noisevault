@@ -1,7 +1,7 @@
 """The resolved layer: the noise one qubit or one gate application gets under the format rules.
 
-Built lazily from a Profile and cached per lookup. All-to-all connectivity is never expanded
-into pairs unless :meth:`NoiseTable.edges` is called.
+A NoiseTable reads its Profile only when a lookup needs it and keeps each result. It expands
+all-to-all connectivity into pairs only in :meth:`NoiseTable.edges`.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 Origin = Literal["record", "reversed_record", "default"]
 # Why a lookup found no noise: the gate is not in the profile, the pair is not connected, the
-# targets do not fit the gate, a target qubit is disabled, or no native gate fits (typical).
+# qubits do not fit the gate, one of the qubits is disabled, or no native gate fits (typical).
 UnavailableKind = Literal["undefined", "not_connected", "bad_target", "qubit_disabled", "no_native"]
 
 
@@ -39,7 +39,7 @@ class QubitNoise:
 
     @property
     def t2_clamped(self) -> bool:
-        """The stated T2 exceeds 2*T1, the physical limit, so conversions clamp it to 2*T1."""
+        """The stated T2 exceeds 2*T1, the physical limit, so exports clamp it to 2*T1."""
         return self.t1_ns is not None and self.t2_ns is not None and self.t2_ns > 2 * self.t1_ns
 
     @property
@@ -53,7 +53,7 @@ class GateNoise:
     qubits: tuple[int, ...]
     state: GateState
     avg_infidelity: float | None  # None unless state is "calibrated"
-    pauli: tuple[float, ...] | None  # only for a pauli spec; labels relative to ``qubits``
+    pauli: tuple[float, ...] | None  # only for a pauli spec, with labels relative to ``qubits``
     duration_ns: float | None
     origin: Origin
     spec: GateSpec  # merged spec with its qualifiers
@@ -187,11 +187,11 @@ class NoiseTable:
             "typical",
             qubits,
             "no_native",
-            f"no calibrated {arity}-qubit native gate is usable on {qubits}",
+            f"no calibrated {arity}-qubit native gate is usable on {qubit_loci(qubits)}",
         )
 
     def edges(self) -> list[tuple[int, int]]:
-        """Connectivity pairs; for all-to-all every pair (a < b), built only on request."""
+        """Connectivity pairs. On all-to-all devices, every pair (a < b), built only on request."""
         if self.all_to_all:
             return list(combinations(range(self.num_qubits), 2))
         return sorted(self._edges)
@@ -247,7 +247,10 @@ class NoiseTable:
                 return flipped
         if self._connected(qubits):
             return self._noise(name, qubits, spec, "default")
-        reason = f"{name} has no calibration on {qubits} and connectivity does not allow it"
+        reason = (
+            f"{name} has no calibration on {qubit_loci(qubits)}, and the connectivity does not"
+            f" allow {name} there"
+        )
         return Unavailable(name, qubits, "not_connected", reason)
 
     def _free_z(self, name: str, qubits: tuple[int, ...]) -> GateNoise | None:
@@ -267,7 +270,10 @@ class NoiseTable:
         if len(qubits) != arity:
             return "bad_target", f"{name} acts on {arity} qubits, got {len(qubits)}"
         if len(set(qubits)) != len(qubits):
-            return "bad_target", f"targets of {name} must be distinct, got {qubits}"
+            return (
+                "bad_target",
+                f"{name} acts on {qubit_loci(qubits)}, but its qubits must be distinct",
+            )
         for q in qubits:
             if not 0 <= q < self.num_qubits:
                 return "bad_target", f"qubit {q} is outside 0..{self.num_qubits - 1}"

@@ -4,14 +4,15 @@ Kraus operators are big-endian over their ``wires`` (the first wire is the most 
 tensor factor). Superoperators use column stacking, vec(K rho K^dagger) = (conj(K) (x) K) vec(rho),
 which is also Qiskit's ``SuperOp`` convention.
 
-A gate with a stated average infidelity gets depolarizing noise followed by zero-temperature
-thermal relaxation over its duration; the depolarizing strength is solved so the composed
-channel has the stated infidelity (Aer's residual rule). When no depolarizing strength reaches
-it (relaxation alone already exceeds it, or the strongest depolarizing noise on top of
-relaxation falls short), the nearest channel is kept and :attr:`GateChannels.inexact` is true,
-so the report records the stated and achieved errors. A missing T2 means T2 = 2 T1
-(no pure dephasing); T2 above 2 T1 is clamped to 2 T1. A ``pauli`` spec is the whole channel,
-so no relaxation is added to it.
+A gate with a stated average infidelity gets depolarizing noise, then zero-temperature thermal
+relaxation over its duration. NoiseVault solves for the depolarizing strength that gives the
+composed channel the stated infidelity (Aer's residual rule). Sometimes no depolarizing
+strength gives the stated infidelity. Relaxation alone can be more than the stated infidelity,
+or the strongest depolarizing noise with relaxation can be less. Then NoiseVault keeps the
+nearest channel and :attr:`GateChannels.inexact` is true, so the report records the stated and
+achieved errors. A missing T2 means T2 = 2 T1 (no pure dephasing). NoiseVault clamps a T2
+above 2 T1 to 2 T1. A ``pauli`` spec is the whole channel, so NoiseVault adds no relaxation
+to it.
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ class GateChannels:
     requested: float | None  # stated average infidelity
     achieved: float  # average infidelity of the composed channel
     relaxation: float  # average infidelity of relaxation alone
-    t2_clamped: tuple[int, ...]  # qubits whose T2 was clamped to 2 T1
+    t2_clamped: tuple[int, ...]  # qubits whose T2 NoiseVault clamped to 2 T1
 
     @property
     def inexact(self) -> bool:
@@ -62,7 +63,7 @@ class GateChannels:
 
 
 def gate_channels(gate: GateNoise, qubits: Sequence[QubitNoise]) -> GateChannels:
-    """Channels for ``gate``; ``qubits`` are the resolved qubits in ``gate.qubits`` order."""
+    """Channels for ``gate``. ``qubits`` are the resolved qubits in ``gate.qubits`` order."""
     if [q.index for q in qubits] != list(gate.qubits):
         raise ValueError(f"qubits {[q.index for q in qubits]} do not match {gate.qubits}")
     if gate.state == "disabled":

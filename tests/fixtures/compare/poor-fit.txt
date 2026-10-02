@@ -15,5 +15,5 @@ fit             beyond shot noise (p = 0.0025)
                 no one pair of factors fits every circuit
 
 Factors multiply the profile's error rates, so x2 means about twice the errors.
-Fitted on these qubits, they absorb crosstalk, leakage, coherent error and
-idle error beyond T1 and T2. Saved with -o, they apply to every qubit.
+On these qubits, the factors absorb crosstalk, leakage, coherent error and idle
+error beyond T1 and T2. The profile from -o applies the factors to every qubit.

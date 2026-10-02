@@ -74,10 +74,10 @@ print(sim.report.summary())
 # approximated: cz error: the stated error already includes single-qubit gate error ...
 # approximated: T2 of qubit 87: clamped to 2*T1 (the stated T2 exceeds 2*T1)
 # omitted: idle time outside explicit delays ...
-# unknown (no noise applied): preparation (reset) error of qubits [0, 1, 2, ...
+# unknown (no noise applied): preparation (reset) error of qubits 0, 1, 2 and 153 more
 # clamped: 82 gates noisier than stated because relaxation alone exceeds the stated error ...
 # used: cz took the calibration recorded for the opposite qubit order once
-# Calibration-derived models approximate the hardware; they are not a digital twin.
+# Calibration-derived models approximate the hardware. They are not a digital twin.
 ```
 
 The report says what this noise model reproduces, approximates, clamps or leaves out. Save
@@ -167,7 +167,7 @@ stim       pass    1.3e-03    5.6e-03  4 of 4    20000 shots, 5 sigma
 ```
 
 A pass means each export implements the same noise model as the NoiseVault reference on these
-circuits. It is not a measure of how well the model matches the hardware. Calibration-derived
+circuits. A pass does not measure how well the model matches the hardware. Calibration-derived
 models approximate the hardware. They are not a digital twin. [Limitations](docs/limitations.md)
 lists what no export models.
 
@@ -208,8 +208,8 @@ readout errors  x1.34 (95% interval 1.16 to 1.53)
 fit             within shot noise on every circuit (p = 0.66)
 
 Factors multiply the profile's error rates, so x2 means about twice the errors.
-Fitted on these qubits, they absorb crosstalk, leakage, coherent error and
-idle error beyond T1 and T2. Saved with -o, they apply to every qubit.
+On these qubits, the factors absorb crosstalk, leakage, coherent error and idle
+error beyond T1 and T2. The profile from -o applies the factors to every qubit.
 ```
 
 Both intervals contain the factors that the simulation used. `nv compare` needs no framework. To

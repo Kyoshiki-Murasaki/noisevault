@@ -15,7 +15,7 @@ natives                   median avg    median
 coherence     median T1 144.9 us, median T2 88.0 us
 readout       median error 7.57e-03 (P(1|0) 3.91e-03, P(0|1) 1.15e-02)
 provenance    measured, SDK snapshot, qiskit-ibm-runtime 0.49.0 FakeFez
-license       Apache-2.0, may be redistributed
+license       Apache-2.0, redistribution allowed
 attribution   IBM Quantum, via qiskit-ibm-runtime
 fingerprint   06404cefa54f939f8a9da03a4ea9014486ce11015d56184d93913acd7ce3f3ce</desc>
 <style>
@@ -97,7 +97,7 @@ fingerprint   06404cefa54f939f8a9da03a4ea9014486ce11015d56184d93913acd7ce3f3ce</
 </text><text class="nv-r3" x="0" y="312.8" textLength="146.4" clip-path="url(#nv-line-12)">coherence&#160;&#160;&#160;</text><text class="nv-r2" x="170.8" y="312.8" textLength="451.4" clip-path="url(#nv-line-12)">median&#160;T1&#160;144.9&#160;us,&#160;median&#160;T2&#160;88.0&#160;us</text><text class="nv-r2" x="976" y="312.8" textLength="12.2" clip-path="url(#nv-line-12)">
 </text><text class="nv-r3" x="0" y="337.2" textLength="146.4" clip-path="url(#nv-line-13)">readout&#160;&#160;&#160;&#160;&#160;</text><text class="nv-r2" x="170.8" y="337.2" textLength="683.2" clip-path="url(#nv-line-13)">median&#160;error&#160;7.57e-03&#160;(P(1|0)&#160;3.91e-03,&#160;P(0|1)&#160;1.15e-02)</text><text class="nv-r2" x="976" y="337.2" textLength="12.2" clip-path="url(#nv-line-13)">
 </text><text class="nv-r3" x="0" y="361.6" textLength="146.4" clip-path="url(#nv-line-14)">provenance&#160;&#160;</text><text class="nv-r2" x="170.8" y="361.6" textLength="695.4" clip-path="url(#nv-line-14)">measured,&#160;SDK&#160;snapshot,&#160;qiskit-ibm-runtime&#160;0.49.0&#160;FakeFez</text><text class="nv-r2" x="976" y="361.6" textLength="12.2" clip-path="url(#nv-line-14)">
-</text><text class="nv-r3" x="0" y="386" textLength="146.4" clip-path="url(#nv-line-15)">license&#160;&#160;&#160;&#160;&#160;</text><text class="nv-r2" x="170.8" y="386" textLength="390.4" clip-path="url(#nv-line-15)">Apache-2.0,&#160;may&#160;be&#160;redistributed</text><text class="nv-r2" x="976" y="386" textLength="12.2" clip-path="url(#nv-line-15)">
+</text><text class="nv-r3" x="0" y="386" textLength="146.4" clip-path="url(#nv-line-15)">license&#160;&#160;&#160;&#160;&#160;</text><text class="nv-r2" x="170.8" y="386" textLength="414.8" clip-path="url(#nv-line-15)">Apache-2.0,&#160;redistribution&#160;allowed</text><text class="nv-r2" x="976" y="386" textLength="12.2" clip-path="url(#nv-line-15)">
 </text><text class="nv-r3" x="0" y="410.4" textLength="146.4" clip-path="url(#nv-line-16)">attribution&#160;</text><text class="nv-r2" x="170.8" y="410.4" textLength="427" clip-path="url(#nv-line-16)">IBM&#160;Quantum,&#160;via&#160;qiskit-ibm-runtime</text><text class="nv-r2" x="976" y="410.4" textLength="12.2" clip-path="url(#nv-line-16)">
 </text><text class="nv-r3" x="0" y="434.8" textLength="146.4" clip-path="url(#nv-line-17)">fingerprint&#160;</text><text class="nv-r2" x="170.8" y="434.8" textLength="780.8" clip-path="url(#nv-line-17)">06404cefa54f939f8a9da03a4ea9014486ce11015d56184d93913acd7ce3f3ce</text><text class="nv-r2" x="976" y="434.8" textLength="12.2" clip-path="url(#nv-line-17)">
 </text>

@@ -68,7 +68,7 @@ def test_standardized_only_file_uses_directions_and_pair_keys() -> None:
     assert profile.table.qubit(2).disabled
     notes = " ".join(profile.provenance.notes)
     assert "PURITY_BENCHMARKING" in notes
-    assert "no one-qubit native gate is listed" in notes
+    assert "the device lists no one-qubit native gate" in notes
 
 
 def test_v3_device_level_values() -> None:
@@ -132,8 +132,8 @@ def test_v3_without_qubit_ids_numbers_the_qubits_from_zero() -> None:
 
 
 _EDGELESS = (
-    "no qubit pair is connected; Braket's connectivity graph has no edges and is not"
-    " fully connected"
+    "no qubit pair is connected, because Braket's connectivity graph has no edges and is"
+    " not fully connected"
 )
 
 
@@ -155,7 +155,9 @@ def test_a_graph_with_no_edges_connects_no_pair(path: Path, graph: dict[str, lis
 
 def test_v3_with_no_edges_refuses_a_two_qubit_gate() -> None:
     profile = from_braket(_with_graph(IONQ, {"0": [], "1": [], "2": [], "3": []}), device="none")
-    with pytest.raises(nv.MissingCalibrationError, match="connectivity does not allow it"):
+    with pytest.raises(
+        nv.MissingCalibrationError, match="the connectivity does not allow ms there"
+    ):
         probabilities(profile, [Op("ms", (0, 1), (0.0, 0.0))], 2, layout=[0, 1])
 
 
@@ -197,7 +199,10 @@ def test_timestamp_without_time_zone_is_read_as_utc() -> None:
     saved = IqmDeviceCapabilities.parse_raw(json.dumps(data)).json()  # as AwsDevice saves it
     profile = from_braket(json.loads(saved), device="garnet")
     assert profile.device.calibrated_at.isoformat() == "2020-06-16T19:28:02.869136+00:00"
-    assert "the service updatedAt had no time zone; read as UTC" in profile.provenance.notes
+    assert (
+        "the service updatedAt had no time zone, so NoiseVault reads it as UTC"
+        in profile.provenance.notes
+    )
 
 
 def test_provenance_hashes_what_was_read() -> None:
@@ -534,7 +539,7 @@ def test_one_qubit_natives_get_their_canonical_gate(native: str, gate: str) -> N
 def test_natives_with_no_equivalent_are_named_in_a_note() -> None:
     profile = from_braket(_ionq_natives(["GPI", "GPI2", "MS", "XY", "CPhaseShift"]), device="odd")
     assert sorted(profile.gates) == ["ms", "r", "rz"]
-    left_out = "native gates that are not a known one- or two-qubit gate were left out:"
+    left_out = "NoiseVault left out the native gates that are not a known one- or two-qubit gate:"
     assert f"{left_out} ['cphaseshift', 'xy']" in profile.provenance.notes
 
 

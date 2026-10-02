@@ -15,12 +15,12 @@ _KINDS = {  # 0.1 provider -> (data_kind, source_kind)
     "demo": ("hypothetical", "hand_written"),
 }
 # 0.1 raw_hash values (canonical JSON of configuration + properties) checked against the snapshot
-# qiskit-ibm-runtime ships (FakeManilaV2 in 0.49.0); any other qiskit_fake file may hold
+# that qiskit-ibm-runtime ships (FakeManilaV2 in 0.49.0). Any other qiskit_fake file can hold
 # refreshed IBM service data.
 _PACKAGE_SNAPSHOTS = {"sha256:f79216df928d9dba24b98d2f65f3bbf4b918c46e61e7a6455f0c8218ae4179a0"}
 _UNVERIFIED_FAKE = (
-    "The 0.1 file did not prove its data was the snapshot qiskit-ibm-runtime ships (a refreshed"
-    " fake holds IBM Quantum service data), so no license is claimed."
+    "The 0.1 file did not prove that its data was the snapshot qiskit-ibm-runtime ships. A"
+    " refreshed fake holds IBM Quantum service data, so NoiseVault claims no license."
 )
 
 
@@ -28,7 +28,7 @@ def is_v01(data: Any) -> bool:
     return isinstance(data, dict) and data.get("schema_version") == "0.1"
 
 
-# Fields the upgrade reads, and the JSON type each must have; None means any type.
+# Fields that the upgrade reads, and the JSON type of each. None means any type.
 _FIELDS: dict[str, type | None] = {
     "provider": str,
     "backend_name": str,

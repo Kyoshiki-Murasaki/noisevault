@@ -77,7 +77,7 @@ def test_toy_profile_is_valid() -> None:
         ("idle", {"t2_us": -5}, "must be positive"),
         ("idle", {"t1_us": float("nan")}, "finite"),
         ("idle", {"t1_us": float("inf")}, "finite"),
-        ("idle", {"t1_us": 100, "t1_ms": 0.1}, "given twice"),
+        ("idle", {"t1_us": 100, "t1_ms": 0.1}, "appears twice"),
         ("idle", {"t1_us": "100"}, "must be a number"),
         ("qubits", [{"index": 3}], "outside 0..2"),
         ("qubits", [{"index": 1}, {"index": 1}], "listed twice"),
@@ -110,7 +110,7 @@ def test_section_rules(section: str, value, match: str) -> None:
         ({"gate": "cz", "qubits": [1, 3], "avg_infidelity": 1e-2}, "outside 0..2"),
         ({"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.9}, "2-qubit gate"),
         ({"gate": "rz", "qubits": [0], "avg_infidelity": 1e-4}, "virtual gate"),
-        ({"gate": "sx", "qubits": [0], "duration_us": 0.1, "duration_ns": 100}, "given twice"),
+        ({"gate": "sx", "qubits": [0], "duration_us": 0.1, "duration_ns": 100}, "appears twice"),
         ({"gate": "sx", "qubits": [0], "duration_ns": -1}, "must not be negative"),
     ],
 )
@@ -776,7 +776,7 @@ def test_parse_ref(tmp_path: Path) -> None:
     [
         ("ibm_fez@", "after @ give a date (2025-02-26) or a timestamp with timezone"),
         ("ibm_fez@  ", "after @ give a date"),
-        ("ibm_fez@2025-13-40", "2025-13-40 is not a calendar date; give one such as 2025-02-26"),
+        ("ibm_fez@2025-13-40", "2025-13-40 is not a calendar date. Give one such as 2025-02-26"),
     ],
 )
 def test_an_incomplete_or_impossible_date_is_refused(ref: str, message: str) -> None:
@@ -973,7 +973,7 @@ def test_summary_keeps_a_reverse_order_that_resolves_differently(reverse: dict, 
                 {"index": 2, "t1_us": 260, "readout": {"p1_given_0": 0.01, "p0_given_1": 0.018}},
                 {"index": 3, "t1_us": 240, "readout": {"error": 0.016}, "disabled": True},
             ],
-            ["median T1 280 us", "median readout error 0.012"],
+            ["median T1 280.0 us", "median readout error 0.012"],
         ),
         (
             [{"index": 3, "t1_us": 240, "readout": {"error": 0.016}, "disabled": True}],
@@ -1071,7 +1071,7 @@ def test_a_calibration_edit_under_a_fit_is_refused_in_one_line() -> None:
     assert _first_error(data) == (
         f"Value error, unmodeled_error.fit.calibration: fitted to calibration"
         f" {base.short_fingerprint}, but this profile's calibration is"
-        f" {edited.short_fingerprint}; drop unmodeled_error or refit with nv compare"
+        f" {edited.short_fingerprint}. Drop unmodeled_error or refit with nv compare"
     )
     relabeled = {**fitted.to_dict(), "provenance": {"source": "elsewhere"}, "extensions": {"a": 1}}
     assert Profile.model_validate(relabeled).unmodeled_error == fitted.unmodeled_error
@@ -1120,7 +1120,7 @@ def test_an_error_factor_with_an_illegal_interval_is_refused(factor: dict, messa
         (
             {"readout": {"factor": 1.58, "low": 1.32, "high": 1.84}},
             False,
-            "readout: an interval needs the fit it came from; add fit, or drop low, high and bound",
+            "readout: an interval needs the fit it came from. Add fit, or drop low, high and bound",
         ),
     ],
 )

@@ -1,9 +1,9 @@
 """The gate registry: one row per canonical gate name.
 
 Unitaries are big-endian: ``qubits[0]`` is the most significant tensor factor. Framework
-columns are plain identifiers so this module imports no framework; adapters match on them.
-Profiles may define gates missing from the registry (their arity then comes from the
-profile).
+columns are plain identifiers, so this module imports no framework. The exports match on these
+identifiers. Profiles can define gates that the registry does not have, and then the arity of
+such a gate comes from the profile.
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ class GateInfo:
     params: tuple[str, ...] = ()
     symmetric: bool = False
     family: Literal["z"] | None = None  # free when the profile's rz is virtual
-    multi_entangler: bool = False  # needs several native entanglers: never gets typical noise
+    multi_entangler: bool = False  # needs several native entanglers, so never gets typical noise
     unitary: Unitary | None = None  # None for non-unitary operations
     qiskit: str | None = None
     qiskit_class: str | None = None
-    cirq: str | None = None  # Cirq gate class name; adapters also match exponents
+    cirq: str | None = None  # Cirq gate class name. The Cirq export also matches exponents.
     pennylane: str | None = None
     stim: tuple[str, ...] = ()
 
@@ -73,7 +73,7 @@ def _r(theta: float, phi: float) -> np.ndarray:
 
 
 def _ms(phi0: float = 0.0, phi1: float = 0.0) -> np.ndarray:
-    """IonQ Molmer-Sorensen gate with phases in radians; MS(0, 0) = RXX(pi/2)."""
+    """IonQ Molmer-Sorensen gate with phases in radians. MS(0, 0) = RXX(pi/2)."""
     a, b = np.exp(-1j * (phi0 + phi1)), np.exp(-1j * (phi0 - phi1))
     m = np.array([[1, 0, 0, -1j * a], [0, 1, -1j * b, 0], [0, -1j / b, 1, 0], [-1j / a, 0, 0, 1]])
     return _SQ2 * m
@@ -186,6 +186,6 @@ def unitary(name: str, params: tuple[float, ...] = ()) -> np.ndarray:
 
 
 def is_symmetric(name: str) -> bool:
-    """Registry default for whether a gate's calibration is shared by both operand orders."""
+    """Registry default: True when both operand orders of a gate share one calibration."""
     info = GATES.get(name)
     return info.symmetric if info else False

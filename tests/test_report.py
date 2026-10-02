@@ -31,7 +31,7 @@ def test_effects_that_must_be_modeled_refuse_conversion(allow: str) -> None:
     )
     with pytest.raises(UnsupportedEffect, match="atom_loss") as caught:
         report.record_effects(profile.effects)
-    assert caught.value.hint == "set allow to 'omit' to convert without it"
+    assert caught.value.hint == "set allow to 'omit' to export without the effect"
 
 
 def test_warn_once_per_key() -> None:
@@ -74,7 +74,8 @@ def test_summary_states_each_count_as_a_sentence() -> None:
         "used: cx took the typical native gate's noise 40 times;"
         " h took the typical native gate's noise once;"
         " cz took the calibration recorded for the opposite qubit order 20 times;"
-        " the circuit's own BitFlipChannel was kept as written, with no noise added, 2 times;"
+        " the export kept the circuit's own BitFlipChannel as written, with no noise added,"
+        " 2 times;"
         " future event: q3 5 times"
     ]
     assert "=" not in used[0]
@@ -89,12 +90,12 @@ def test_clamps_are_counted_as_one_gate_or_several_gates() -> None:
     report.clamped.append(Clamp("sx", (0,), 0.01, 0.002))
     lines = report.summary().splitlines()
     assert (
-        "clamped: 2 gates noisier than stated because relaxation alone exceeds the stated error;"
-        " largest cz[1, 2] 0.003 -> 0.0041" in lines
+        "clamped: 2 gates noisier than stated because relaxation alone exceeds the stated error."
+        " The largest is cz on qubits 1-2, 0.003 -> 0.0041" in lines
     )
     assert (
-        "clamped: 1 gate less noisy than stated because the strongest depolarizing noise on top"
-        " of relaxation falls short; largest sx[0] 0.01 -> 0.002" in lines
+        "clamped: 1 gate less noisy than stated because relaxation plus the strongest depolarizing"
+        " noise stays below the stated error. The largest is sx on qubit 0, 0.01 -> 0.002" in lines
     )
 
 
@@ -135,7 +136,7 @@ def test_included_errors_are_named_in_plain_words() -> None:
         "approximated: x error: the stated error already includes single-qubit gate error"
         " (explicit single-qubit gates in the circuit add their own error on top)",
         "approximated: x error: the stated error already includes leakage"
-        " (applied as depolarizing noise; no population leaves the qubit)",
+        " (applied as depolarizing noise, so no population leaves the qubit)",
         "approximated: x error: the stated error already includes state preparation and"
         " measurement error (readout and preparation noise, where applied, add their own error"
         " on top)",

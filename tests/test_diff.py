@@ -146,23 +146,23 @@ def test_added_and_removed_qubits_and_other_devices_are_flagged() -> None:
     result = diff(_profile(), bigger)
     assert result.qubits_added == (3, 4) and result.qubits_removed == ()
     assert diff(bigger, _profile()).qubits_removed == (3, 4)
-    assert "different devices (test_toy and test_other)" in result.warnings[0]
+    assert "from different devices (test_toy and test_other)" in result.warnings[0]
     assert diff(bigger, _profile()).warnings == (
-        "these are different devices (test_other and test_toy); qubits and pairs are matched"
-        " by index",
+        "the two profiles are from different devices (test_other and test_toy), so the diff"
+        " matches qubits and pairs by index",
     )
 
 
 def test_an_older_second_calibration_of_one_device_is_flagged_with_its_time() -> None:
     older = _later(device={"calibrated_at": "2024-12-31T06:00:00Z"})
     assert diff(_profile(), older).warnings == (
-        "test_toy@2024-12-31 is older than test_toy@2025-01-01; before and after follow"
+        "test_toy@2024-12-31 is older than test_toy@2025-01-01. Before and after follow the"
         " argument order, not time",
     )
     same_day = _later(device={"calibrated_at": "2025-01-01T06:00:00Z"})
     assert diff(same_day, _profile()).warnings == (
-        "test_toy@2025-01-01T00:00Z is older than test_toy@2025-01-01T06:00Z; before and after"
-        " follow argument order, not time",
+        "test_toy@2025-01-01T00:00Z is older than test_toy@2025-01-01T06:00Z. Before and after"
+        " follow the argument order, not time",
     )
     assert diff(_profile(), same_day).warnings == ()
 
@@ -194,7 +194,10 @@ def test_text_and_dict_output() -> None:
     }
     text = str(result)
     assert text.splitlines()[0].startswith("ibm_kyiv@2025-02-26 -> ibm_brisbane@2025-02-26")
-    assert "largest changes by qubit:" in text and "warning: these are different devices" in text
+    assert (
+        "largest changes by qubit:" in text
+        and "warning: the two profiles are from different devices" in text
+    )
 
 
 def test_negative_top_is_refused() -> None:

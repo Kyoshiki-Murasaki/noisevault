@@ -39,15 +39,15 @@ class MissingCalibrationError(NoiseVaultError):
 
 
 class UnsupportedEffect(NoiseVaultError):
-    """A profile effect demands a treatment the target framework cannot provide."""
+    """A profile effect needs a treatment that the export framework does not support."""
 
 
 class AmbiguousRef(NoiseVaultError, LookupError):
-    """A profile reference matches more than one profile."""
+    """A ref matches more than one profile."""
 
 
 class ProfileNotFound(NoiseVaultError, LookupError):
-    """No profile matches a reference."""
+    """No profile matches a ref."""
 
 
 class FingerprintMismatch(NoiseVaultError, ValueError):
@@ -55,15 +55,15 @@ class FingerprintMismatch(NoiseVaultError, ValueError):
 
 
 class SourceUnavailable(NoiseVaultError):
-    """A calibration source cannot be reached or is not installed."""
+    """A calibration source is not reachable or is not installed."""
 
 
 class SourceDataError(NoiseVaultError, ValueError):
-    """A source importer cannot read the calibration data it was given."""
+    """A source importer cannot read the calibration data that it received."""
 
 
 class CountsError(NoiseVaultError, ValueError):
-    """A counts file is malformed, or its run is one ``nv compare`` cannot score.
+    """A counts file is not valid, or ``nv compare`` cannot score its run.
 
     The message is one line that starts with the file or the field, and ``hint`` says what to do.
     """
@@ -137,16 +137,16 @@ class NoiseVaultWarning(UserWarning):
 
 
 class NoiseApproximationWarning(NoiseVaultWarning):
-    """A conversion used an approximation the caller should know about."""
+    """An export used an approximation that the caller must know about."""
 
 
 class MigrationWarning(NoiseVaultWarning):
-    """A file in an older format was upgraded in memory."""
+    """NoiseVault upgraded a file in an older format in memory."""
 
 
 REPOSITORY = "https://github.com/Kyoshiki-Murasaki/noisevault"
 
 
 def install_hint(extra: str) -> str:
-    """The pip command that adds an optional extra, e.g. ``install_hint("cirq")``."""
+    """The pip command that adds an optional extra, for example ``install_hint("cirq")``."""
     return f'pip install "noisevault[{extra}] @ git+{REPOSITORY}"'

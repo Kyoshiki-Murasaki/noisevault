@@ -137,7 +137,7 @@ def test_device_the_account_cannot_see(calls: list[Any]) -> None:
     [
         (
             None,
-            "IBM returned no calibration for ibm_manila; retired devices have none",
+            "IBM returned no calibration for ibm_manila. Retired devices have no calibration",
             "run nv list to see every profile you can load offline",
         ),
         (
@@ -193,7 +193,7 @@ _ON_QUBIT_0 = {
     "a T1 in minutes": (
         "T1",
         {"unit": "min"},
-        "T1 of qubit 0 has the unknown time unit 'min'; expected ns, us, µs, ms or s",
+        "T1 of qubit 0 has the unknown time unit 'min', not one of ns, us, µs, ms or s",
     ),
     "a readout error above 1": (
         "prob_meas0_prep1",

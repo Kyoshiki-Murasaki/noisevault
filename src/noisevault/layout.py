@@ -24,8 +24,8 @@ _BEAMS = (32, 128, 512)
 
 @dataclass(frozen=True, order=True)
 class _Cost:
-    """A chain's score: qubits missing a 1-qubit native the device has first, then qubits with
-    no usable 1-qubit gate, then qubits with unknown readout, then the summed error."""
+    """A chain's score, in order: qubits missing a 1-qubit native of the device, qubits with no
+    usable 1-qubit gate, qubits with unknown readout, summed error."""
 
     incomplete: int
     no_gate: int
@@ -60,9 +60,9 @@ def normalize_layout(
     """Map every circuit qubit label to a usable physical qubit, or raise LayoutError.
 
     With no ``layout``, labels that ``index_of`` turns into integers map to themselves
-    (integers by default; adapters pass their own rule, e.g. for Cirq ``LineQubit``). A sequence
-    layout maps label ``i`` to ``layout[i]``. The result must be complete and injective and use
-    in-range, enabled qubits.
+    (integers by default). An export can pass its own rule, for example for Cirq ``LineQubit``.
+    A sequence layout maps label ``i`` to ``layout[i]``. The result must be complete and
+    injective, and use in-range, enabled qubits.
     """
     labels = list(dict.fromkeys(labels))
     table = profile.table
@@ -115,26 +115,28 @@ def normalize_layout(
 def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
     """A connected chain of ``n`` well-calibrated qubits as ``{0: p0, 1: p1, ...}``.
 
-    Deterministic beam search minimizing the summed average infidelity of the typical 1-qubit
-    gate, mean readout error and typical 2-qubit gate along the chain. A pair with no usable
-    2-qubit gate is never a link; a pair with one is, whether connectivity lists it or only a
-    calibration record does.
+    A deterministic beam search finds the chain. The search minimizes the summed average
+    infidelity of the typical 1-qubit gate, mean readout error and typical 2-qubit gate along
+    the chain. Two qubits can be consecutive in the chain if and only if the pair has a usable
+    2-qubit gate. The pair counts when connectivity lists it, and also when only a calibration
+    record lists it.
 
-    Every qubit in the chain has every 1-qubit native the device has, when such a chain exists.
-    Those natives are the unitary 1-qubit gates other than the identity that are usable on at
-    least one qubit, after calibration records: a gate disabled by default counts when a record
-    enables it somewhere, and a gate disabled everywhere does not. A qubit missing one of them
-    is incomplete, even when its other gates could make the missing one in principle (an IBM
-    qubit without x alone), so the chain carries the same basis as the rest of the device and a
-    transpiler that compiles for the device compiles for the chain. When no chain of complete
-    qubits exists, the chain uses as few incomplete ones as it can and a NoiseVaultWarning names
-    them and their missing gates.
+    When such a chain exists, every qubit in the chain has every 1-qubit native that the device
+    has. Those natives are the unitary 1-qubit gates, other than the identity, that are usable
+    on at least one qubit after calibration records apply. A gate disabled by default counts
+    when a record enables it on one qubit or more. A gate disabled everywhere does not count.
+    A qubit without one of those natives is incomplete, even when its other gates could make the
+    missing gate (an IBM qubit without x alone). Thus the chain has the same basis as the rest
+    of the device. A transpiler that compiles for the device then also compiles for the chain.
+    When no chain of complete qubits exists, the chain uses as few incomplete qubits as possible.
+    A NoiseVaultWarning names those qubits and their missing gates.
 
-    Missing calibration ranks next: a chain with fewer qubits lacking a calibrated 1-qubit gate
-    always wins, then one with fewer unknown readout errors, whatever the calibrated errors. On
-    an all-to-all device it takes the ``n`` qubits with the lowest 1-qubit and readout cost
-    when every consecutive pair among them is usable, and otherwise searches as on any other
-    device. It is a starting point for small experiments, not a circuit placer.
+    Missing calibration ranks next, whatever the calibrated errors. A chain with fewer qubits
+    without a calibrated 1-qubit gate always wins. Next, a chain with fewer unknown readout
+    errors wins. On an all-to-all device, the search takes the ``n`` qubits with the lowest
+    1-qubit and readout cost when every consecutive pair is usable. If not, the search
+    works as on any other device. The result is a starting point for small experiments, not a
+    circuit placer.
     """
     table = profile.table
     if not 1 <= n <= table.num_qubits:
@@ -169,8 +171,8 @@ def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
     if short:
         warn_from_caller(
             f"{profile.id} has no connected chain of {n} qubits that each have every 1-qubit"
-            f" native the device has, so this one includes qubit{'s' if len(short) > 1 else ''}"
-            f" {', '.join(short)}; a transpiler may fail to place 1-qubit gates there",
+            f" native the device has, so this chain includes qubit{'s' if len(short) > 1 else ''}"
+            f" {', '.join(short)}. A transpiler can fail to place 1-qubit gates on those qubits",
             NoiseVaultWarning,
         )
     return dict(enumerate(path))

@@ -2,7 +2,7 @@
   "$defs": {
     "CalibrationRecord": {
       "additionalProperties": false,
-      "description": "Calibration of one gate on specific qubits; overrides the definition field by field.",
+      "description": "Calibration of one gate on specific qubits.\n\nA record overrides the definition field by field.",
       "properties": {
         "gate": {
           "title": "Gate",
@@ -265,7 +265,7 @@
     },
     "CountsFit": {
       "additionalProperties": false,
-      "description": "The counts the factors were fitted to. Every field is required, ``p_value`` included.",
+      "description": "The counts that the fit used. Every field is required, ``p_value`` included.",
       "properties": {
         "counts": {
           "pattern": "^sha256:[0-9a-f]{64}$",
@@ -402,7 +402,7 @@
     },
     "Effect": {
       "additionalProperties": false,
-      "description": "Physics the format records but no adapter implements yet (always reported omitted).",
+      "description": "Physics that the format records but no export implements yet.\n\nThe report always lists an effect as omitted.",
       "properties": {
         "type": {
           "enum": [
@@ -542,7 +542,7 @@
     },
     "ErrorFactor": {
       "additionalProperties": false,
-      "description": "One factor on the profile's own error rates, with its 95% interval when fitted.\n\n``bound`` says the interval reached an end of the fit's domain, so only one side is a\nconfidence limit: \"lower\" keeps ``high`` only (printed \"at most\"), \"upper\" keeps ``low``\nonly (printed \"at least\"). A hand-written factor has no interval and no bound.",
+      "description": "One factor on the profile's own error rates, with its 95% interval when fitted.\n\n``bound`` says that the interval reached an end of the fit's domain, so only one side is a\nlimit. \"lower\" keeps only ``high``, printed \"at most\". \"upper\" keeps only ``low``, printed\n\"at least\". A hand-written factor has no interval and no bound.",
       "properties": {
         "factor": {
           "minimum": 0,
@@ -1079,7 +1079,7 @@
     },
     "QubitRecord": {
       "additionalProperties": false,
-      "description": "Per-qubit values; idle fields override ``idle`` one by one, readout and prep as a whole.",
+      "description": "Per-qubit values.\n\nIdle fields override ``idle`` one by one, and readout and prep as a whole.",
       "properties": {
         "index": {
           "minimum": 0,

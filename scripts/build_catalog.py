@@ -1,7 +1,8 @@
 """Rebuild the bundled profiles in src/noisevault/data/profiles/ and the NOTICE data section.
 
-Deterministic: the same installed source packages give byte-identical files (gzip with a fixed
-header, sorted keys, names ``<id>@<YYYY-MM-DD>.json.gz``). Run from the repository root:
+The build is deterministic. The same installed source packages give byte-identical files (gzip
+with a fixed header, sorted keys, names ``<id>@<YYYY-MM-DD>.json.gz``). Run from the repository
+root:
 
     python scripts/build_catalog.py           # rewrite the bundle and NOTICE
     python scripts/build_catalog.py --check   # exit 1 if the committed bundle is out of date
@@ -26,7 +27,7 @@ from noisevault.profile import Profile, canonical_json, gzip_reproducibly  # noq
 DATA = ROOT / "src" / "noisevault" / "data" / "profiles"
 NOTICE = ROOT / "NOTICE"
 SOURCES = ("qiskit_backend", "quantinuum", "google")
-# Copyright lines of upstream projects whose data is bundled, by repository URL.
+# Copyright lines of the upstream projects that NoiseVault bundles data from, by repository URL.
 COPYRIGHT = {
     "https://github.com/Qiskit/qiskit-ibm-runtime": "Copyright 2021 IBM and its contributors.",
     "https://github.com/Quantinuum/quantinuum-hardware-specifications": (
@@ -61,8 +62,8 @@ def collect(load: Callable[[str], list[Profile]]) -> list[Profile]:
         out += found
     for profile in out:
         if profile.provenance.redistributable != "yes":
-            raise SystemExit(f"{profile.id} is not redistributable; it cannot be bundled")
-    # Bundled data is pinned by package version or source commit, not by download time, so a
+            raise SystemExit(f"{profile.id} is not redistributable, so NoiseVault cannot bundle it")
+    # The package version or source commit pins bundled data, not the download time, so a
     # rebuild from the same sources must produce the same bytes.
     out = [_without_retrieval_time(p) for p in out]
     return sorted(out, key=lambda p: (p.id, p.device.calibrated_at is None, p.device.calibrated_at))
@@ -85,7 +86,7 @@ def file_name(profile: Profile) -> str:
 
 
 def write_bundle(profiles: list[Profile], folder: Path) -> dict[str, bytes]:
-    """Write every profile and index.json into ``folder``; returns name -> bytes written."""
+    """Write every profile and index.json into ``folder``, and return each file name's bytes."""
     files: dict[str, bytes] = {}
     entries = []
     for profile in profiles:

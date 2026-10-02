@@ -526,7 +526,7 @@ def test_target_carries_errors_and_durations_per_locus(manila: Profile) -> None:
 
 
 _TRANSPILE_FIRST = (
-    "transpile it for this simulator first: from qiskit import transpile;"
+    "transpile the circuit for this simulator first: from qiskit import transpile;"
     " sim.run(transpile(circuit, sim))"
 )
 
@@ -534,7 +534,7 @@ _TRANSPILE_FIRST = (
 def test_run_rejects_an_untranspiled_circuit_with_the_fix(manila: Profile) -> None:
     sim = quiet_export(manila)
     with pytest.raises(
-        CircuitNotNativeError, match=r"h on qubits \[0\].*transpile\(circuit, sim\)"
+        CircuitNotNativeError, match=r"h on qubit 0 is not.*transpile\(circuit, sim\)"
     ) as caught:
         sim.run(ghz(2))
     assert caught.value.hint == _TRANSPILE_FIRST
@@ -543,7 +543,7 @@ def test_run_rejects_an_untranspiled_circuit_with_the_fix(manila: Profile) -> No
     with pytest.raises(CircuitNotNativeError) as caught:
         sim.run(wrong_pair)
     assert caught.value.message == (
-        "circuit 'wrong_pair': cx on qubits [0, 2] is not available on ibm_manila (the device"
+        "circuit 'wrong_pair': cx on qubits 0-2 is not available on ibm_manila (the device"
         " does not provide cx on that locus)"
     )
     assert caught.value.hint == _TRANSPILE_FIRST
@@ -569,7 +569,7 @@ def _five_of_eight_qubits() -> QuantumCircuit:
 
 
 _BUILD_NARROWER = (
-    "transpile also counts its idle qubits, so build it on at most 5 qubits and run"
+    "transpile also counts idle qubits, so build the circuit on at most 5 qubits. Then run"
     " sim.run(transpile(circuit, sim))"
 )
 
@@ -580,15 +580,15 @@ _BUILD_NARROWER = (
         (
             lambda: _ghz_for_a_line_of_8(3),
             "circuit 'ghz3' has 8 qubits but ibm_manila has 5",
-            "it was transpiled for a backend with 8 qubits, so transpile your original circuit"
-            " for this simulator instead: sim.run(transpile(original, sim))",
+            "the circuit is transpiled for a backend with 8 qubits, so transpile the original"
+            " circuit for this simulator instead: sim.run(transpile(original, sim))",
         ),
         (
             lambda: _ghz_for_a_line_of_8(6),
             "circuit 'ghz6' has 8 qubits but ibm_manila has 5",
-            "it was transpiled for a backend with 8 qubits from a circuit with 6, so transpile that"
-            " circuit for a profile with at least 6 qubits (nv list shows how many each profile"
-            " has)",
+            "the circuit is transpiled for a backend with 8 qubits from a circuit with 6."
+            " Transpile the original circuit for a profile with at least 6 qubits (nv list shows"
+            " how many each profile has)",
         ),
         (
             _five_of_eight_qubits,
@@ -603,8 +603,8 @@ _BUILD_NARROWER = (
         (
             lambda: ghz(6),
             "circuit 'ghz6' has 6 qubits but ibm_manila has 5",
-            "it needs 6 qubits, so run it on a profile with at least 6 qubits (nv list shows how"
-            " many each profile has)",
+            "the circuit needs 6 qubits, so run the circuit on a profile with at least 6 qubits"
+            " (nv list shows how many each profile has)",
         ),
     ],
     ids=[
@@ -712,8 +712,8 @@ def test_delay_in_device_ticks_says_how_to_fix_it() -> None:
         sim.run(circuit)
     assert caught.value.message == "delay on qubit 0 has duration 100 dt"
     assert caught.value.hint == (
-        "the profile has no sample time, so give delays a time unit (s, ms, us, ns, ps), e.g."
-        " qc.delay(100, q, unit='ns')"
+        "the profile has no sample time, so give delays a time unit (s, ms, us, ns, ps), for"
+        " example qc.delay(100, q, unit='ns')"
     )
 
 
@@ -836,7 +836,7 @@ def test_report_lists_what_the_export_did() -> None:
     assert approximated["gate x"] == "noise of the typical 1-qubit native gate"
     assert approximated["gate zz"] == "exported as Qiskit rzz"
     assert "effect leakage on cz" in report.omitted
-    assert any(u.startswith("readout error of qubits [0, 1, 2]") for u in report.unknown)
+    assert "readout error of qubits 0, 1 and 2" in report.unknown
     assert {(c.gate, c.qubits) for c in report.clamped} >= {("cz", (0, 1)), ("cz", (1, 2))}
     assert report.events == {}
 
@@ -854,9 +854,9 @@ def test_unknown_gates_error_leaves_uncalibrated_natives_to_transpile_around() -
         sim = to_qiskit(ring(), unknown_gates="error")
     assert "x" not in sim.target.operation_names
     assert (
-        "native x: no error metric on qubits [0, 1, 2, 3] and unknown_gates='error', so"
-        " transpile does not use it there (unknown_gates='typical' gives it the typical"
-        " native's noise)"
+        "native x: no error metric on qubits 0, 1, 2 and 3, and unknown_gates='error', so"
+        " transpile does not use this native there (unknown_gates='typical' gives those loci"
+        " the typical native's noise)"
     ) in sim.report.omitted
     circuit = QuantumCircuit(2)
     circuit.x(0)
@@ -881,8 +881,8 @@ _NO_EDGES = {"edges": []}
 
 
 _UNCALIBRATED = (
-    " and unknown_gates='error', so transpile does not use it there (unknown_gates='typical'"
-    " gives it the typical native's noise))"
+    ", and unknown_gates='error', so transpile does not use this native there"
+    " (unknown_gates='typical' gives those loci the typical native's noise))"
 )
 
 
@@ -895,8 +895,8 @@ _UNCALIBRATED = (
                 "connectivity": _NO_EDGES,
             },
             "typical",
-            "compile to. Its connectivity allows no pair of enabled qubits, so profile.to_cirq()"
-            " cannot run a two-qubit gate either",
+            "compile to. The profile connectivity allows no pair of enabled qubits, so"
+            " profile.to_cirq() cannot run a two-qubit gate either",
             None,
         ),
         (
@@ -910,9 +910,9 @@ _UNCALIBRATED = (
                 "connectivity": _NO_EDGES,
             },
             "typical",
-            "compile to (cz: disabled on every locus; ms: ms has no calibration on (0, 1) and"
-            " connectivity does not allow it). The profile allows no two-qubit native on any pair"
-            " of enabled qubits, so profile.to_cirq() cannot run one either",
+            "compile to (cz: disabled on every locus; ms: ms has no calibration on qubits 0-1,"
+            " and the connectivity does not allow ms there). The profile allows no two-qubit"
+            " native on any pair of enabled qubits, so profile.to_cirq() cannot run one either",
             None,
         ),
         (
@@ -925,16 +925,15 @@ _UNCALIBRATED = (
         (
             {"gates": {**_ONE_QUBIT_NATIVES, "cz": {}}},
             "error",
-            "compile to (cz: no error metric on qubits [(0, 1), (1, 0), (1, 2), (2, 1)]"
-            + _UNCALIBRATED,
-            "simulate it with profile.to_cirq() instead, or give the profile a calibrated"
+            "compile to (cz: no error metric on qubits 0-1, 1-0, 1-2 and 2-1" + _UNCALIBRATED,
+            "simulate the profile with profile.to_cirq() instead, or give the profile a calibrated"
             " two-qubit native that Qiskit provides",
         ),
         (
             {"gates": {"sx": {}, "cz": {"avg_infidelity": 1e-2}}},
             "error",
-            "compile to (sx: no error metric on qubits [0, 1, 2]" + _UNCALIBRATED,
-            "simulate it with profile.to_cirq() instead, or give the profile a calibrated"
+            "compile to (sx: no error metric on qubits 0, 1 and 2" + _UNCALIBRATED,
+            "simulate the profile with profile.to_cirq() instead, or give the profile a calibrated"
             " one-qubit native that Qiskit provides",
         ),
     ],
@@ -962,7 +961,10 @@ def test_the_report_names_a_native_that_no_listed_pair_allows() -> None:
     profile = Profile.model_validate(toy(gates=gates, calibrations=cz, connectivity=_NO_EDGES))
     sim = to_qiskit(profile)
     assert sorted(sim.target.operation_names) == ["cz", "delay", "measure", "reset", "rz", "sx"]
-    omission = "native ms: ms has no calibration on (0, 1) and connectivity does not allow it"
+    omission = (
+        "native ms: ms has no calibration on qubits 0-1, and the connectivity does not allow ms"
+        " there"
+    )
     assert omission in sim.report.omitted
 
 
@@ -1045,7 +1047,10 @@ def test_google_profiles_export_sqrt_iswap_and_report_the_gate_count_cost() -> N
     assert {"r", "rz", "sqrt_iswap"} <= set(sim.target.operation_names)
     assert "sycamore" not in sim.target.operation_names
     assert any(a.what == "gate count of transpiled circuits" for a in sim.report.approximated)
-    assert "native sycamore: no Qiskit instruction for it in this export" in sim.report.omitted
+    assert (
+        "native sycamore: the Qiskit export has no instruction for this native"
+        in sim.report.omitted
+    )
     (qiskit,) = nv.load("google_weber").check(frameworks=["qiskit"]).frameworks
     assert qiskit.passed and not qiskit.not_run
 

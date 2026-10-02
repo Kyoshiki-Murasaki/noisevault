@@ -1,13 +1,12 @@
 """Drift between two profiles: device-wide medians, the largest per-qubit and per-pair changes,
-gates and qubits that were disabled or re-enabled, and qubits added or removed.
+gates and qubits that became disabled or re-enabled, and qubits added or removed.
 
 Every value is the resolved one (a record, else the device default), looked up in both profiles
-for the same locus. The typical 1-qubit and 2-qubit errors are those of the native gate the
-conversion rules would use there (:meth:`NoiseTable.typical`), on each ordered pair; a pair whose
-two directions agree in both profiles is one row. On all-to-all devices the pairs with a 2-qubit
-record are listed one by one and every other pair, all carrying the device default, is one
-"default" row that counts once per pair in the medians. A gate definition marked disabled is
-listed as "<gate> default".
+for the same locus. The typical 1-qubit and 2-qubit errors are those of the native gate that the
+exports use on that locus (:meth:`NoiseTable.typical`), on each ordered pair. A pair whose two
+directions agree in both profiles is one row. On all-to-all devices, each pair with a 2-qubit
+record is one row. All other pairs carry the device default and share one "default" row, which
+counts once per pair in the medians. A disabled gate definition shows as "<gate> default".
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ METRICS: dict[str, tuple[str, bool]] = {
 
 @dataclass(frozen=True)
 class Change:
-    """One value before and after; ``where`` is "" for a device median, else the qubit or pair."""
+    """One value before and after. ``where`` is "" for a device median, else the qubit or pair."""
 
     metric: str
     before: float | None
@@ -149,21 +148,21 @@ class ProfileDiff:
 
 
 def diff(a: Profile, b: Profile, *, top: int = 5) -> ProfileDiff:
-    """How ``b`` differs from ``a``; ``top`` limits the per-qubit and per-pair lists."""
+    """How ``b`` differs from ``a``. ``top`` limits the per-qubit and per-pair lists."""
     if top < 0:
-        raise ValueError(f"top={top}: give 0 or more")
+        raise ValueError(f"top={top}: pass 0 or more")
     warnings = []
     if a.id != b.id:
         warnings.append(
-            f"these are different devices ({a.id} and {b.id}); qubits and pairs are matched"
-            " by index"
+            f"the two profiles are from different devices ({a.id} and {b.id}), so the diff"
+            " matches qubits and pairs by index"
         )
     when_a, when_b = a.device.calibrated_at, b.device.calibrated_at
     delta = when_b - when_a if when_a and when_b else None
     if a.id == b.id and delta is not None and delta < timedelta(0):
         first, second = (f"{a.id}@{stamp}" for stamp in distinguishing_stamps(when_a, when_b))
         warnings.append(
-            f"{second} is older than {first}; before and after follow argument order, not time"
+            f"{second} is older than {first}. Before and after follow the argument order, not time"
         )
 
     qa, qb = _qubit_values(a.table), _qubit_values(b.table)
@@ -213,8 +212,9 @@ def _pair_values(
 ) -> tuple[dict[Pair | str, dict[str, float]], dict[Pair | str, dict[str, float]]]:
     """The typical 2-qubit error on the same loci of ``a`` and ``b``.
 
-    A locus with no usable 2-qubit gate in a profile is left out of that profile's values, so
-    it is not compared: losing or regaining a gate is reported as availability, not drift.
+    The values of a profile leave out each locus with no usable 2-qubit gate, so the diff does
+    not compare that locus. The diff reports a lost or regained gate as
+    availability, not as drift.
     """
     common = range(min(a.num_qubits, b.num_qubits))
     usable = [q for q in common if not a.qubit(q).disabled and not b.qubit(q).disabled]
@@ -248,9 +248,9 @@ def _pair_loci(
 ) -> tuple[list[Pair], Pair | None, int]:
     """Pairs among ``qubits`` to look up, as (a, b) with a < b.
 
-    Every connected pair and every pair with a 2-qubit record in one of ``tables``; on
-    all-to-all devices the recorded pairs plus one pair standing in for the rest (they all
-    resolve to the device default) and how many pairs it stands for.
+    Every connected pair and every pair with a 2-qubit record in one of ``tables``. On
+    all-to-all devices: the recorded pairs, one pair that stands for all other pairs, and the
+    count of those other pairs. The other pairs all resolve to the device default.
     """
     allowed = set(qubits)
     listed = sorted({p for t in tables for p in t.listed_pairs() if allowed.issuperset(p)})
@@ -322,7 +322,7 @@ def _largest(
 
 
 def _size(change: Change) -> tuple[bool, float]:
-    """Largest first; a value that appears, disappears or leaves zero comes before any ratio."""
+    """Largest first. A value that appears, disappears or leaves zero comes before any ratio."""
     rel = change.relative
     return (False, 0.0) if rel is None else (True, -abs(rel))
 
@@ -347,11 +347,12 @@ def _collapse_uniform(moved: list[tuple[Any, Change]], keys: set[Any]) -> list[t
 def _availability(a: Profile, b: Profile) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Gate loci and qubits usable in ``a`` and disabled in ``b``, and the reverse.
 
-    Every locus a record names in either profile is compared, so removing an override that
-    enabled a pair under a disabled definition counts. A locus that one profile does not have at
-    all (a directed gate calibrated in the other direction, a qubit past the end) is neither: it
-    was not usable before, or is not now. Both orders of a symmetric gate's pair are compared,
-    and they are one entry, under the lower qubit first, when they move the same way.
+    The diff compares every locus that a record names in either profile. So the removal of an
+    override that enabled a pair under a disabled definition counts. A profile can lack a locus
+    completely, for example a directed gate calibrated in the other direction, or a qubit past
+    the end. Such a locus is in neither list, because the locus was not usable before or is not
+    usable now. The diff compares both orders of the pair of a symmetric gate. The two orders
+    are one entry, under the lower qubit first, when they move the same way.
     """
     moves = {k: (_state(a, k), _state(b, k)) for k in sorted({*_loci(a), *_loci(b)})}
     labels = [
@@ -379,8 +380,11 @@ def _same_as_lower_order(
 
 
 def _loci(profile: Profile) -> set[tuple[str, tuple[int, ...]]]:
-    """Recorded gate loci as (gate, qubits), both orders for a symmetric pair; disabled gate
-    definitions as (gate, ()); disabled qubits as ("", (index,))."""
+    """Recorded gate loci, disabled gate definitions and disabled qubits of ``profile``.
+
+    A gate locus is (gate, qubits), in both orders for a symmetric pair. A disabled gate
+    definition is (gate, ()). A disabled qubit is ("", (index,)).
+    """
     table = profile.table
     gates = {(r.gate, r.qubits) for r in profile.calibrations}
     gates |= {

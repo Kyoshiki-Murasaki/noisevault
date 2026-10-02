@@ -1,12 +1,13 @@
-"""PennyLane export: a ``qml.NoiseModel`` that carries its conversion report.
+"""PennyLane export: a ``qml.NoiseModel`` that carries its report.
 
-Use it with ``qml.add_noise(qnode, model)`` on ``default.mixed``. Every gate gets the channels the
-shared conversion rules assign to it on its physical qubits, as ``qml.QubitChannel`` operations
-after the gate. Readout confusion goes right before each computational-basis measurement, on every
-wire the circuit's operations or measurements use so that all such measurements share one
-simulation, and before each Pauli measurement in its measured basis. A measurement without wires
-(``qml.probs()``, ``qml.sample()``, ``qml.counts()``) reads every device wire; it gets readout
-confusion on the wires the circuit uses, because a noise model never sees the device's wires.
+Use the model with ``qml.add_noise(qnode, model)`` on ``default.mixed``. Every gate gets the
+channels that the shared conversion rules give the gate on its physical qubits, as
+``qml.QubitChannel`` operations after the gate. Readout confusion goes directly before each
+computational-basis measurement, on every wire that the circuit's operations or measurements use.
+Thus all these measurements share one simulation. Readout confusion also goes before each Pauli
+measurement, in its measured basis. A measurement without wires (``qml.probs()``,
+``qml.sample()``, ``qml.counts()``) reads every device wire. Such a measurement gets readout
+confusion on the wires that the circuit uses, because a noise model never sees the device's wires.
 """
 
 from __future__ import annotations
@@ -87,7 +88,7 @@ _READOUT_MEASUREMENTS = (
 _ROTATED_PAULIS = {"X": qml.PauliX, "Y": qml.PauliY}
 _ADD_NOISE = ("pennylane.noise.add_noise", "add_noise")  # module and name of its tape transform
 _NO_BASIS_FIX = (
-    "measure Pauli words or computational-basis probabilities; for a Hamiltonian, wrap the"
+    "measure Pauli words or computational-basis probabilities. For a Hamiltonian, wrap the"
     " QNode in qml.transforms.split_non_commuting before qml.add_noise"
 )
 
@@ -95,8 +96,8 @@ _NO_BASIS_FIX = (
 class NoiseVaultPennyLaneModel(qml.NoiseModel):
     """A PennyLane noise model built from a NoiseVault profile.
 
-    ``.report`` says what the conversion reproduced, approximated or omitted and keeps
-    counting events as circuits run; ``.profile`` is the source profile.
+    ``.report`` says what the export reproduced, approximated or omitted. The report counts
+    events each time a circuit runs. ``.profile`` is the source profile.
     """
 
     def __init__(
@@ -147,22 +148,24 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         """The tape qml.add_noise is noising, after checking every wire it uses against the layout.
 
         Noise functions see one operation or measurement, but readout needs the whole tape and only
-        add_noise's frame holds it. Each call finds it there instead of keeping it on the model,
-        because a composed model is a new plain qml.NoiseModel that shares only these functions.
+        add_noise's frame holds the tape. Each call gets the tape from that frame and does not
+        keep it on the model. A composed model is a new plain qml.NoiseModel that shares only
+        these functions.
         """
         frame = _add_noise_frame()
         if frame is None:
             raise RuntimeError(
                 f"NoiseVault noise ran outside qml.add_noise (PennyLane {qml.__version__}),"
-                " where it cannot see the circuit's wires; use qml.add_noise(qnode, model)"
+                " so NoiseVault cannot see the circuit's wires. Use qml.add_noise(qnode, model)"
             )
-        # Its first two parameters: the tape and the model it applies. That model, not this one,
-        # decides readout, because composing can remove or add a measurement map.
+        # The first two parameters of add_noise are the tape and the model that add_noise
+        # applies. That model, not self, decides readout, because composing can remove or add a
+        # measurement map.
         tape, model = (frame.f_locals[name] for name in frame.f_code.co_varnames[:2])
         if model.meas_map and tape.shots.has_partitioned_shots:
             raise ValueError(
                 "qml.add_noise keeps only part of a shot vector's results when readout noise is"
-                " on; run each shot count separately or pass readout=False"
+                " on. Run each shot count separately or pass readout=False"
             )
         for wire in tape.wires:
             self.physical_qubit(wire)
@@ -172,18 +175,18 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         self._noised_tape()
 
     def physical_qubit(self, wire: Hashable) -> int:
-        """The device qubit a circuit wire maps to; integer wire ``i`` is qubit ``i`` by default."""
+        """The device qubit a circuit wire maps to. Integer wire ``i`` is qubit ``i`` by default."""
         if wire not in self._layout:
             if self._list_layout:
                 last = len(self._layout) - 1
                 raise LayoutError(
-                    f"wire {wire!r} is not in the layout; a list layout covers wires 0 to {last}",
+                    f"wire {wire!r} is not in the layout. A list layout covers wires 0 to {last}",
                     hint="extend the list",
                 )
             if self._explicit_layout:
                 raise LayoutError(
                     f"wire {wire!r} is not in the layout",
-                    hint=f"add it: layout={{..., {wire!r}: <physical qubit>}}",
+                    hint=f"add the wire: layout={{..., {wire!r}: <physical qubit>}}",
                 )
             self._layout.update(normalize_layout([wire], None, self.profile))
         return self._layout[wire]
@@ -210,8 +213,8 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         if moved:
             self.report.approximate(
                 "operator arithmetic",
-                "the noise of each gate it decomposes into applied after the whole operator",
-                "apply the gates one by one to put each gate's noise right after it",
+                "the noise of each gate in the decomposition, after the whole operator",
+                "apply the gates separately to put the noise of each gate directly after that gate",
             )
         for kraus, wires in noise:
             qml.QubitChannel(list(kraus), wires=wires)
@@ -225,7 +228,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             qml.BitFlip(error, wires=op.wires)
 
     def _channels(self, name: str, physical: tuple[int, ...]) -> tuple[PhysicalChannel, ...]:
-        """Channels of one gate, cached; a cache hit replays the report events it produced.
+        """Channels of one gate, from a cache. A cache hit adds the report events again.
 
         Channels do not depend on gate angles, so the key leaves them out and a trained
         circuit keeps hitting the cache as its parameters change.
@@ -263,8 +266,8 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             self.report.approximate(
                 "readout of measurements without wires",
                 "applied to every wire the circuit's operations or measurements use",
-                "a device wire the circuit never uses reads out without error; pass wires="
-                " to give it readout error",
+                "a device wire that the circuit does not use reads out without error. Pass"
+                " wires= to give that wire readout error",
             )
         basis = _measured_basis(mp.obs)
         if basis is None:
@@ -313,27 +316,29 @@ def to_pennylane(
     """A noise model for ``qml.add_noise(qnode, model)`` on ``default.mixed``.
 
     ``layout`` maps circuit wires to physical qubits (a mapping, or a sequence where wire ``i``
-    maps to ``layout[i]``); integer wires map to the same qubit by default, other wire labels
-    need a layout. ``unknown_gates`` decides what gates the profile does not calibrate get:
-    ``"typical"`` noise (warned and reported) or an error. ``readout=False`` leaves out
-    readout errors.
+    maps to ``layout[i]``). By default, an integer wire maps to the same qubit, and other wire
+    labels need a layout. ``unknown_gates`` decides what a gate gets when the profile does not
+    calibrate it: ``"typical"`` noise (with a warning and a report entry) or an error.
+    ``readout=False`` leaves out readout errors.
 
     ``qml.add_noise`` at its default ``level="user"`` decomposes ``qml.adjoint`` gates and
-    templates first, so they are noised gate by gate; pass ``level="top"`` to noise
-    ``Adjoint(SX)``, ``Adjoint(S)`` and ``Adjoint(T)`` as the profile's sxdg, sdg and tdg.
+    templates first, so each gate in the decomposition gets its own noise. To noise
+    ``Adjoint(SX)``, ``Adjoint(S)`` and ``Adjoint(T)`` as the profile's sxdg, sdg and tdg, pass
+    ``level="top"``.
     Operator arithmetic, such as ``qml.prod``, ``@``, ``qml.pow``, ``qml.exp`` or ``qml.ctrl``,
     gets the noise of the gates it decomposes into, after the whole operator.
     ``qml.pow(qml.RX(0.3, 0), 2)`` gets the noise of ``rx``. An operator with its own gate name,
-    such as ``qml.CNOT`` or ``qml.CRX``, is noised as one gate. Arithmetic with no decomposition
-    into gates, such as ``qml.sum``, raises ValueError. State preparation, such as
+    such as ``qml.CNOT`` or ``qml.CRX``, gets the noise of one gate. Arithmetic with no
+    decomposition into gates, such as ``qml.sum``, raises ValueError. State preparation, such as
     ``qml.StatePrep`` or ``qml.QubitDensityMatrix``, is noiseless.
 
-    ``qml.IsingZZ(pi/2)`` gets the noise of a profile's ``zz``, ``qml.IsingXX(+-pi/2)`` and
-    ``qml.IsingYY(+-pi/2)`` that of its ``ms``, and ``qml.Rot(a, theta, -a)`` that of its ``r``
-    (:func:`operation_for` builds zz and r); see :func:`gate_name`. Traced angles, as under
-    ``jax.jit``, cannot be compared, so those operations then get ``rzz``, ``rxx`` or ``ryy``
-    noise or the typical-noise rule. A broadcast whose angles call for different gates' noise
-    raises ValueError; apply ``qml.transforms.broadcast_expand`` before ``qml.add_noise``.
+    ``qml.IsingZZ(pi/2)`` gets the noise of a profile's ``zz``. ``qml.IsingXX(+-pi/2)`` and
+    ``qml.IsingYY(+-pi/2)`` get the noise of its ``ms``, and ``qml.Rot(a, theta, -a)`` gets the
+    noise of its ``r``. :func:`operation_for` builds zz and r. See :func:`gate_name`. NoiseVault
+    cannot compare traced angles, as under ``jax.jit``, so those operations then get ``rzz``,
+    ``rxx`` or ``ryy`` noise or the typical-noise rule. A broadcast whose angles need the noise of
+    different gates raises ValueError. Apply ``qml.transforms.broadcast_expand`` before
+    ``qml.add_noise``.
     """
     return NoiseVaultPennyLaneModel(
         profile, layout=layout, unknown_gates=unknown_gates, readout=readout
@@ -343,10 +348,11 @@ def to_pennylane(
 def gate_name(op: Operator, defined: Container[str] = ()) -> str:
     """The registry name of ``op`` under :func:`~noisevault.conversion.native_name`.
 
-    An operation that equals a registry gate at its angle is named after it (``IsingZZ(pi/2)``
-    as ``zz``, ``IsingXX(pi/2)`` and ``IsingYY(pi/2)`` as ``ms``, ``Rot(a, theta, -a)`` as
-    ``r``), and a fixed gate on a profile with only the rotation it equals after the rotation
-    (``SX`` as ``rx``); ``defined`` is a profile's gate names.
+    ``defined`` is a profile's gate names. An operation that equals a registry gate at its
+    angle takes the name of that gate. For example, ``IsingZZ(pi/2)`` is ``zz``,
+    ``IsingXX(pi/2)`` and ``IsingYY(pi/2)`` are ``ms``, and ``Rot(a, theta, -a)`` is ``r``. A
+    fixed gate takes the name of the rotation it equals when the profile has only that rotation
+    (``SX`` as ``rx``).
     """
     own = _CANONICAL.get(op.name, op.name)
     names = {
@@ -356,7 +362,7 @@ def gate_name(op: Operator, defined: Container[str] = ()) -> str:
     if len(names) > 1:
         raise ValueError(
             f"{op.name} is broadcast over angles that get the noise of different gates"
-            f" ({', '.join(sorted(names))}), and one operation takes one noise channel; expand"
+            f" ({', '.join(sorted(names))}), but one operation takes one noise channel. Expand"
             " the broadcast first: qml.add_noise(qml.transforms.broadcast_expand(qnode), model)"
         )
     return names.pop()
@@ -364,8 +370,9 @@ def gate_name(op: Operator, defined: Container[str] = ()) -> str:
 
 def operation_for(name: str) -> Callable[..., Operator] | None:
     """The PennyLane operation for registry gate ``name``, called with the gate's parameters
-    and ``wires=``; None when PennyLane has none. ``operation_for("r")(theta, phi, wires=0)``
-    is a ``qml.Rot`` with the unitary of ``r``, which the noise model recognizes as ``r``."""
+    and ``wires=``, or None if PennyLane has no such operation.
+    ``operation_for("r")(theta, phi, wires=0)`` is a ``qml.Rot`` with the unitary of ``r``,
+    which the noise model recognizes as ``r``."""
     if name in _BUILDERS:
         return _BUILDERS[name]
     info = gates.lookup(name)
@@ -399,13 +406,13 @@ def _describe(report: Report, readout: bool) -> None:
     report.approximate(
         "adjoint gates and templates",
         "noised through their decomposition at qml.add_noise's default level='user'",
-        "pass level='top' to qml.add_noise to noise Adjoint(SX), Adjoint(S), Adjoint(T) whole",
+        "pass level='top' to qml.add_noise to noise Adjoint(SX), Adjoint(S) and Adjoint(T) whole",
     )
 
 
 def _natives_at_angle(op: Operator) -> set[str | None]:
-    """The native each angle of ``op`` equals, None for an angle that equals none; a broadcast
-    operation has one angle per element."""
+    """The native gate that each angle of ``op`` equals, or None for an angle that equals no
+    native gate. A broadcast operation has one angle per element."""
     if op.name not in _AT_ANGLE:
         return {None}
     native, angle_of, values = _AT_ANGLE[op.name]
@@ -474,8 +481,8 @@ def _charges(op: Operator, defined: Container[str]) -> list[Charge]:
 def _decomposed(op: Operator) -> list[Operator]:
     if not op.has_decomposition:
         raise ValueError(
-            f"{op} has no decomposition into gates, so it gets no gate noise and default.mixed"
-            " cannot run it; apply a unitary operator as"
+            f"{op} has no decomposition into gates, so the operator gets no gate noise and"
+            " default.mixed cannot run the operator. Apply a unitary operator as"
             " qml.QubitUnitary(qml.matrix(op), wires=...)"
         )
     with qml.QueuingManager.stop_recording():
@@ -501,9 +508,11 @@ def _reads_out(mp: Any) -> bool:
 
 
 def _measured_basis(obs: Operator | None) -> tuple[Operator, ...] | None:
-    """Single-qubit rotations into the measured basis: () for the computational basis, None
-    when the observable is not measured in one product basis (Pauli terms that disagree on a
-    wire, or an entangled eigenbasis)."""
+    """Single-qubit rotations into the measured basis, or () for the computational basis.
+
+    None means that no single product basis measures the observable, for example Pauli terms
+    that disagree on a wire, or an entangled eigenbasis.
+    """
     if obs is None:
         return ()
     if obs.pauli_rep is not None:
@@ -519,8 +528,8 @@ def _measured_basis(obs: Operator | None) -> tuple[Operator, ...] | None:
 def _pauli_basis(words: qml.pauli.PauliSentence) -> tuple[Operator, ...] | None:
     """Rotations that make every +1 eigenstate read 0, from the Pauli letter of each wire.
 
-    Taken from the letters rather than the observable's own diagonalizing gates, which for a
-    sum follow eigh order and can map a -1 eigenstate to |0>.
+    The rotations come from the letters and not from the observable's own diagonalizing gates.
+    For a sum, those gates follow eigh order and can map a -1 eigenstate to |0>.
     """
     letters: dict[Hashable, str] = {}
     for word in words:

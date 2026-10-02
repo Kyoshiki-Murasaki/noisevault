@@ -1,7 +1,7 @@
 """Where profiles live (the local vault, then the bundled set) and how refs resolve.
 
 The vault is ``$NOISEVAULT_HOME/profiles``, by default ``~/.noisevault/profiles``. Loading never
-touches the network; only :func:`pull` does.
+uses the network. Only :func:`pull` uses the network.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ _PULL_SOURCES = {
     "ionq": "noisevault.sources.ionq",
 }
 
-# The ProfileInfo fields an index entry carries; whatever else it holds is ignored.
+# The ProfileInfo fields that an index entry carries. The listing ignores all other fields.
 _ENTRY_TYPES: dict[str, Any] = {
     "id": str,
     "calibrated_at": str | None,
@@ -107,7 +107,7 @@ class ProfileInfo:
     def from_entry(
         cls, entry: dict[str, Any], location: Literal["vault", "bundled"], path: Path | Traversable
     ) -> ProfileInfo:
-        """From a line of a catalog index (see :func:`index_entry`); ValueError if it is damaged."""
+        """From a line of a catalog index (see :func:`index_entry`). Raises ValueError if bad."""
         fields = {
             "calibrated_at": None,
             "vendor": None,
@@ -222,16 +222,16 @@ def _vault_entry(path: Path, cached: Any) -> tuple[dict[str, Any], ProfileInfo]:
 
 
 def _skipped(path: Path, exc: Exception) -> str:
-    """One line naming a vault entry that cannot be listed, and why."""
+    """One line that names a vault entry that the listing skips, and why."""
     try:
         dangling = path.readlink() if path.is_symlink() and not path.exists() else None
     except OSError:  # an unreachable target fails these checks as it failed the read
         dangling = None
     if dangling is not None:
-        why = f"it links to {dangling}, which does not exist; remove the link"
+        why = f"it links to {dangling}, which does not exist. Remove the link"
     elif isinstance(exc, ValidationError):
         n = exc.error_count()
-        why = f"not a valid profile ({n} problem{'s' * (n != 1)}); run nv validate {path}"
+        why = f"not a valid profile ({n} problem{'s' * (n != 1)}). Run nv validate {path}"
     elif isinstance(exc, OSError):
         why = exc.strerror or str(exc)
     else:
@@ -281,7 +281,7 @@ def profiles(*, technology: str | None = None, vendor: str | None = None) -> lis
 
 
 def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
-    """The single catalog profile a ``Ref`` names, or ProfileNotFound / AmbiguousRef.
+    """The single catalog profile that a ``Ref`` names. Raises ProfileNotFound or AmbiguousRef.
 
     ``expect`` keeps only the profiles with that fingerprint. Of profiles with the same id and
     calibration time, a vault copy shadows a bundled one.
@@ -348,11 +348,11 @@ def parse_ref_preferring_id(ref: str | Path) -> Path | Ref:
 def load(ref: str | Path, *, expect: str | None = None) -> Profile:
     """Load a profile by path, ``id``, ``id@YYYY-MM-DD`` or ``id@<timestamp>``, offline.
 
-    ``expect`` pins the fingerprint (full hex, ``sha256:<hex>`` or ``nv:<12 hex>``); a different
-    profile raises FingerprintMismatch. Loading a catalog ref checks the profile it reads
-    against the ref and the pin. If the file does not match, because another process saved over
-    it or the index described it wrongly, the load reads every vault file again and resolves the
-    ref once more.
+    ``expect`` pins the fingerprint (full hex, ``sha256:<hex>`` or ``nv:<12 hex>``). A different
+    profile raises FingerprintMismatch. Loading a catalog ref checks the profile that it reads
+    against the ref and the pin. Another process can save over the file, or the index can
+    describe the file incorrectly. If the file does not match, the load reads every vault file
+    again and resolves the ref again.
     """
     named = parse_ref_preferring_id(ref)
     if isinstance(named, Path):
@@ -393,7 +393,7 @@ def _changed(ref: Ref, profile: Profile, path: Path | Traversable) -> ProfileNot
     said = _said(ref)
     held = exact_ref(profile.id, profile.device.calibrated_at)
     return ProfileNotFound(
-        f"{path} holds {held}, not {said}; the file changed during this load",
+        f"{path} holds {held}, not {said}, because the file changed during this load",
         hint=f"load {said} again",
     )
 
@@ -411,11 +411,11 @@ def pull(
     source: str | None = None,
     output: str | Path | None = None,
 ) -> Profile:
-    """Fetch a calibration from a live source and save it (to the vault unless ``output``).
+    """Download a calibration from a live source and save it (to the vault, or to ``output``).
 
-    Pulling a calibration the vault already holds (same id and fingerprint) writes nothing, so
-    repeated pulls leave one file per calibration. A pull that converts the same calibration
-    differently (say, after a NoiseVault upgrade) replaces the older file, with a warning.
+    Pulling a calibration that the vault already holds (same id and fingerprint) writes nothing,
+    so repeated pulls leave one file per calibration. A pull that imports the same calibration
+    differently (for example, after a NoiseVault upgrade) replaces the older file and warns.
     """
     return pull_and_save(device, at=at, source=source, output=output).profile
 
@@ -443,11 +443,11 @@ def pull_and_save(
         return Pulled(profile, Path(str(held.path)), written=False)
     old = next((i for i in same_id if i.calibrated_at == profile.device.calibrated_at), None)
     if old is not None:
-        path = Path(str(old.path))  # may carry an older naming scheme; replace it in place
+        path = Path(str(old.path))  # can have an older naming scheme, so replace that file
         warnings.warn(
             f"replaced {path.name} (nv:{old.fingerprint[:12]}) with this pull"
-            f" ({profile.short_fingerprint}): the same calibration, converted differently;"
-            " update any expect= pins",
+            f" ({profile.short_fingerprint}), which imports the same calibration differently."
+            " Update any expect= pins",
             NoiseVaultWarning,
             stacklevel=3,
         )
@@ -457,8 +457,9 @@ def pull_and_save(
             occupant = next((i.ref for i in listed if i.path == path), None)
             if occupant is None:  # skipped by the listing, with a warning saying why
                 raise _FileInTheWay(
-                    f"{path} exists but cannot be read",
-                    hint=f"make it readable or move it out of {path.parent}, then pull again",
+                    f"{path} exists but is not readable",
+                    hint=f"make the file readable or move the file out of {path.parent},"
+                    " then pull again",
                 )
             raise _FileInTheWay(
                 f"{path} already holds {occupant}, another calibration",
@@ -496,7 +497,7 @@ def _unknown_source(source: str) -> _BadArgument:
     vendor = next((v for v in offline if did_you_mean(source, [v])), None)
     if vendor and not guess:
         return _BadArgument(
-            f"unknown source {source!r}; no source serves {vendor} devices",
+            f"unknown source {source!r}. No source serves {vendor} devices",
             hint=f"run nv list --vendor {vendor} to see the {vendor} profiles you can load offline",
         )
     return _BadArgument(f"unknown source {source!r}; {guess}choose one of {choices}")
@@ -510,7 +511,7 @@ def _expect_prefix(expect: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{12}" if short else r"[0-9a-f]{64}", want):
         raise _BadArgument(
             f"expect={expect!r} is not a fingerprint",
-            hint="give a full sha256 fingerprint or nv:<12 hex>",
+            hint="pass a full sha256 fingerprint or nv:<12 hex>",
         )
     return want
 
@@ -546,7 +547,7 @@ def _mismatch(
     hint = "ask whoever pinned that fingerprint for the profile file"
     if _pull_source(device):
         hint += (
-            ", or, if the source still serves that calibration, run"
+            ". If the source still serves that calibration, run"
             f" nv pull {device} --at <a time it was in effect>"
         )
     return FingerprintMismatch(f"{missed}, and no profile you have has that fingerprint", hint=hint)
@@ -556,14 +557,14 @@ def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> ProfileNotFound:
     have = ", ".join(sorted({i.ref for i in candidates}))
     if ref.timestamp is not None:
         return ProfileNotFound(
-            f"no {ref.id} profile calibrated at {iso_z(ref.timestamp)}; you have {have}"
+            f"no {ref.id} profile calibrated at {iso_z(ref.timestamp)}. You have {have}"
         )
     fetch = (
-        f"run nv pull {ref.id} --at {ref.date}T23:59:59Z to fetch the calibration in effect at"
-        " the end of that day, then load the ref it prints"
+        f"run nv pull {ref.id} --at {ref.date}T23:59:59Z to download the calibration in effect at"
+        " the end of that day. Then load the ref that nv pull prints"
     )
     return ProfileNotFound(
-        f"no {ref.id} profile calibrated on {ref.date} UTC; you have {have}",
+        f"no {ref.id} profile calibrated on {ref.date} UTC. You have {have}",
         hint=fetch if _pull_source(ref.id) else None,
     )
 

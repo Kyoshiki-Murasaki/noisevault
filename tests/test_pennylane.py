@@ -234,7 +234,7 @@ def test_wires_the_layout_cannot_place_are_layout_errors(qml, manila) -> None:
         _noisy_probs(qml, to_pennylane(manila), GHZ, ["a", "b", "c"])
     with pytest.raises(LayoutError, match="'c' is not in the layout") as caught:
         _noisy_probs(qml, to_pennylane(manila, layout={"a": 0, "b": 1}), GHZ, ["a", "b", "c"])
-    assert caught.value.hint == "add it: layout={..., 'c': <physical qubit>}"
+    assert caught.value.hint == "add the wire: layout={..., 'c': <physical qubit>}"
     with pytest.raises(LayoutError, match="wires 0 to 1; extend the list") as caught:
         _noisy_probs(qml, to_pennylane(manila, layout=[3, 4]), GHZ, [0, 1, 2])
     assert caught.value.hint == "extend the list"
@@ -297,7 +297,7 @@ _NOT_A_PRODUCT_BASIS = np.array([[1, 0, 0, 0.5], [0, -1, 0, 0], [0, 0, -1, 0], [
         (1, None, "marks disabled"),
         (3, None, "has qubits 0..2"),
         ("anc", None, r"'anc' has no integer index; pass layout="),
-        ("b", {"a": 0}, r"wire 'b' is not in the layout; add it"),
+        ("b", {"a": 0}, r"wire 'b' is not in the layout; add the wire"),
     ],
 )
 def test_measurement_only_circuits_are_checked_against_the_layout(
@@ -592,7 +592,7 @@ def test_shot_vectors_with_readout_raise_instead_of_dropping_results(qml) -> Non
         return qml.probs(wires=[0])
 
     shot_vector = qml.set_shots(qml.add_noise(circuit, to_pennylane(_asymmetric_toy())), [100, 200])
-    with pytest.raises(ValueError, match="run each shot count separately or pass readout=False"):
+    with pytest.raises(ValueError, match="Run each shot count separately or pass readout=False"):
         shot_vector()
     without_readout = to_pennylane(_asymmetric_toy(), readout=False)
     out = qml.set_shots(qml.add_noise(circuit, without_readout), [100, 200])()
@@ -648,7 +648,7 @@ def test_composed_models_still_refuse_shot_vectors_with_readout(qml) -> None:
         return qml.probs(wires=[0])
 
     composed = _composed(qml, to_pennylane(_two_readouts()), "model second")
-    with pytest.raises(ValueError, match="run each shot count separately"):
+    with pytest.raises(ValueError, match="Run each shot count separately"):
         qml.set_shots(qml.add_noise(circuit, composed), [100, 200])()
 
 

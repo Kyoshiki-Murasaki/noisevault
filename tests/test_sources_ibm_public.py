@@ -80,8 +80,8 @@ def test_unlisted_device_points_to_the_bundled_snapshot(served: list[str]) -> No
     with pytest.raises(nv.SourceUnavailable) as info:
         ibm_public.pull("ibm_torino")
     assert info.value.message == (
-        "ibm_torino is not listed on the public endpoint (it lists ibm_fez, ibm_kingston);"
-        " did you mean 'ibm_kingston'? if not, it may be retired"
+        "ibm_torino is not listed on the public endpoint (the endpoint lists ibm_fez,"
+        " ibm_kingston); did you mean 'ibm_kingston'? if not, the device may be retired"
     )
     assert info.value.hint == "ibm_torino is bundled, so nv.load('ibm_torino') loads it offline"
 
@@ -90,8 +90,8 @@ def test_unlisted_device_close_to_a_listed_one_names_it(served: list[str]) -> No
     with pytest.raises(nv.SourceUnavailable) as info:
         ibm_public.pull("ibm_fezz")
     assert info.value.message == (
-        "ibm_fezz is not listed on the public endpoint (it lists ibm_fez, ibm_kingston);"
-        " did you mean 'ibm_fez'? if not, it may be retired"
+        "ibm_fezz is not listed on the public endpoint (the endpoint lists ibm_fez, ibm_kingston);"
+        " did you mean 'ibm_fez'? if not, the device may be retired"
     )
     assert info.value.hint == "if your IBM account can see it, pull with source='ibm-account'"
 
@@ -236,7 +236,8 @@ def test_a_listing_or_configuration_it_cannot_read_only_loses_its_detail(
     with pytest.raises(nv.SourceUnavailable) as info:
         ibm_public.pull("ibm_torino")
     assert (
-        info.value.message == "ibm_torino is not listed on the public endpoint; it may be retired"
+        info.value.message
+        == "ibm_torino is not listed on the public endpoint; the device may be retired"
     )
 
 
@@ -374,7 +375,10 @@ def test_invalid_coherence_in_the_response_takes_the_median(
     profile = ibm_public.pull("ibm_manila")
     others_us = statistics.median(p["value"] for p in t2[1:])
     assert profile.table.qubit(0).t2_ns == pytest.approx(others_us * 1000)
-    note = "Qubit 0 reported T2 = 0 us; treated as missing, the device median applies."
+    note = (
+        "Qubit 0 reported T2 = 0 us. NoiseVault treats the value as missing, so the device median"
+        " applies."
+    )
     assert note in profile.provenance.notes
 
 
@@ -398,7 +402,8 @@ def test_valid_coherence_only_on_a_disabled_qubit_is_an_error(
     monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
     message = (
         f"ibm_manila reports no valid {label} on any working qubit"
-        f" (e.g. qubit 0: {label} = 0 us); {label} must be a positive number of microseconds"
+        f" (for example, qubit 0: {label} = 0 us). {label} must be a positive number of"
+        " microseconds"
     )
     with pytest.raises(ValueError, match=re.escape(message)):
         ibm_public.pull("ibm_manila")
@@ -428,7 +433,9 @@ def test_invalid_coherence_only_on_a_disabled_qubit_counts_as_missing(
 def test_no_valid_coherence_names_a_working_qubit(monkeypatch: pytest.MonkeyPatch) -> None:
     props = _disabled_with_zero(0, {0, 1, 2, 3, 4}, "T1")
     monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
-    message = "ibm_manila reports no valid T1 on any working qubit (e.g. qubit 1: T1 = 0 us)"
+    message = (
+        "ibm_manila reports no valid T1 on any working qubit (for example, qubit 1: T1 = 0 us)"
+    )
     with pytest.raises(ValueError, match=re.escape(message)):
         ibm_public.pull("ibm_manila")
 
@@ -464,8 +471,8 @@ def test_a_time_in_a_unit_it_does_not_know_names_the_field_and_the_unit(
         ibm_public.pull("ibm_fez")
     url = f"{ibm_public.BASE_URL}/ibm_fez/properties"
     assert (info.value.message, info.value.hint) == (
-        f"IBM's public endpoint ({url}): {field} has the unknown time unit 'min'; expected ns,"
-        " us, µs, ms or s",
+        f"IBM's public endpoint ({url}): {field} has the unknown time unit 'min', not one of"
+        " ns, us, µs, ms or s",
         "pass an earlier at= to use an older calibration",
     )
 

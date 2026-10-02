@@ -20,6 +20,7 @@ from noisevault.check import (
     SIGMAS,
     CheckResult,
     NotRun,
+    _Qiskit,
     _Stim,
     build_circuits,
     check,
@@ -27,7 +28,7 @@ from noisevault.check import (
 from noisevault.cli import app
 from noisevault.errors import LayoutError, NoiseVaultError, install_hint
 from noisevault.profile import Profile
-from noisevault.reference import _apply
+from noisevault.reference import Op, _apply
 from noisevault.reference import probabilities as reference
 
 pytestmark = pytest.mark.filterwarnings("ignore::noisevault.errors.NoiseApproximationWarning")
@@ -367,8 +368,8 @@ def _asks_for_an_effect() -> Profile:
 def _refused(framework: str) -> str:
     return (
         "the export refused this profile: effect atom_loss on readout asks for allow='exact',"
-        f" but {framework} export does not model effects yet; set allow to 'omit' to convert"
-        " without it"
+        f" but {framework} export does not model effects yet; set allow to 'omit' to export"
+        " without the effect"
     )
 
 
@@ -484,28 +485,33 @@ def _sx_calibrated_on(*qubits: int) -> Profile:
     return Profile.model_validate(toy(gates=gates, calibrations=sx, readout={"error": 0.01}))
 
 
-@pytest.mark.parametrize(("calibrated", "layout"), [((0, 1), {0: 0, 1: 1}), ((2,), {0: 2})])
+@pytest.mark.parametrize(
+    ("calibrated", "layout", "on"),
+    [((0, 1), {0: 0, 1: 1}, "on qubits 0-1"), ((2,), {0: 2}, "on qubit 2")],
+)
 def test_the_default_chain_leaves_out_qubits_no_one_qubit_native_calibrates(
-    calibrated, layout
+    calibrated, layout, on
 ) -> None:
     profile = _sx_calibrated_on(*calibrated)
     assert profile.suggest_layout(3) == {0: 0, 1: 1, 2: 2}
-    with pytest.raises(
-        NoiseVaultError, match=r"known unitary on qubits \[0, 1, 2\], so there"
-    ) as info:
+    with pytest.raises(NoiseVaultError, match=r"known unitary on qubits 0-1-2, so there") as info:
         check(profile, layout=[0, 1, 2])
     assert info.value.hint == "pass layout= with other qubits"
     result = check(profile, frameworks=["cirq"])
     assert result.layout == layout
     assert result.passed, result
+    assert result.summary().splitlines()[0].endswith(f" circuits {on}")
+
+
+def test_a_pair_the_qiskit_export_lacks_is_named_the_way_the_cli_does() -> None:
+    runner = _Qiskit(Profile.model_validate(toy(readout={"error": 0.01})), [0, 2])
+    assert runner.cannot_express(Op("cz", (0, 1))) == "the Qiskit export has no cz on qubits 0-2"
 
 
 def test_with_no_calibrated_one_qubit_native_the_one_qubit_chain_has_nothing_to_check(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(
-        NoiseVaultError, match=r"on qubits \[0\], so there is nothing to check$"
-    ) as info:
+    with pytest.raises(NoiseVaultError, match=r"on qubit 0, so there is nothing to check$") as info:
         check(_sx_calibrated_on())
     assert info.value.hint is None
     path = _sx_calibrated_on().save(tmp_path / "toy.json")
@@ -522,7 +528,7 @@ def test_a_device_with_every_qubit_disabled_has_no_default_chain() -> None:
 
 def test_bad_arguments_name_the_choices() -> None:
     profile = nv.load("ibm_manila")
-    with pytest.raises(ValueError, match="choose from qiskit, cirq, pennylane, stim"):
+    with pytest.raises(ValueError, match="Choose from qiskit, cirq, pennylane, stim"):
         check(profile, frameworks=["qiskt"])
     with pytest.raises(ValueError, match="positive number of shots"):
         check(profile, shots=0)
@@ -533,7 +539,7 @@ def test_result_serializes_and_prints() -> None:
     data = json.loads(json.dumps(result.to_dict()))
     assert data["passed"] is True and data["layout"] == {"0": 2, "1": 1, "2": 0}
     assert data["frameworks"][0]["report"]["approximated"] >= 1
-    assert "not a measure of how well the model matches the hardware" in str(result)
+    assert "A pass does not measure how well the model matches the hardware." in str(result)
 
 
 def test_profile_check_spells_out_its_options() -> None:

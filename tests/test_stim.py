@@ -332,8 +332,8 @@ def test_two_qubit_identity_gets_no_noise():
 
 
 _CONNECTED_PAIRS = (
-    "pass layout= so 2-qubit gates land on connected pairs (profile.suggest_layout(n) proposes"
-    " one, noisevault.stim.layout_from_coords matches the circuit's QUBIT_COORDS)"
+    "pass layout= to put 2-qubit gates on connected pairs (profile.suggest_layout(n) proposes a"
+    " layout, and noisevault.stim.layout_from_coords matches the circuit's QUBIT_COORDS)"
 )
 _NATIVE_OR_TYPICAL = (
     "compile to the profile's native gates, or pass unknown_gates='typical' to use the typical"
@@ -343,7 +343,7 @@ _NATIVE_OR_TYPICAL = (
 
 def test_unusable_gate_errors_name_the_stim_instruction_and_the_fix():
     circuit = "H 0\nCX 0 1\nCX 1 2\nM 0 1 2"
-    cx_1_2 = r"^CX 1 2 \(physical qubits \[1, 4\]\)"
+    cx_1_2 = r"^CX 1 2 \(physical qubits 1-4\)"
     with pytest.raises(MissingCalibrationError, match=cx_1_2) as caught:
         to_stim(_manila(), circuit, layout={0: 0, 1: 1, 2: 4})
     assert caught.value.hint == _CONNECTED_PAIRS
@@ -449,7 +449,7 @@ def test_idle_noise_reports_qubits_without_relaxation_data_as_unknown():
     qubits = [{"index": q, **c} for q, c in enumerate(coherence)]
     profile = Profile.model_validate(toy(device=device, qubits=qubits))
     out = to_stim(profile, "TICK\nM 0 1 2 3", readout="none", tick_ns=40.0)
-    assert out.report.unknown == ["T1/T2 for idle noise of physical qubits 3"]
+    assert out.report.unknown == ["T1/T2 for idle noise of physical qubit 3"]
     idle = [t.value for inst in out if inst.name == "PAULI_CHANNEL_1" for t in inst.targets_copy()]
     assert sorted(idle) == [0, 1, 2]
 
@@ -673,13 +673,13 @@ def test_readout_none_adds_nothing_and_reports_it():
 def test_unknown_readout_is_reported_not_zeroed_silently():
     out = to_stim(Profile.model_validate(toy()), "M 0 1")
     assert str(out) == "M 0 1"
-    assert out.report.unknown == ["readout error of physical qubits 0, 1"]
+    assert out.report.unknown == ["readout error of physical qubits 0 and 1"]
 
 
 def test_unknown_readout_is_reported_for_exact_readout_too():
     out = to_stim(Profile.model_validate(toy()), "M 0 1", readout="exact")
     assert out.readout_flips.tolist() == [[0.0, 0.0], [0.0, 0.0]]
-    assert out.report.unknown == ["readout error of physical qubits 0, 1"]
+    assert out.report.unknown == ["readout error of physical qubits 0 and 1"]
 
 
 def test_sample_with_readout_is_exact_for_asymmetric_readout():
@@ -840,9 +840,11 @@ def test_layout_from_coords_says_what_to_do_without_coords():
     with pytest.raises(LayoutError, match="no rotation or shift") as caught:
         layout_from_coords(circuit, _grid(4))
     assert caught.value.hint == "pass layout= explicitly"
-    with pytest.raises(LayoutError, match=r"qubits \[0, 1\] have no 2D QUBIT_COORDS") as caught:
+    with pytest.raises(
+        LayoutError, match=r"^the circuit gives no 2D QUBIT_COORDS for qubits 0 and 1;"
+    ) as caught:
         layout_from_coords("H 0 1", _grid(4))
-    assert caught.value.hint == "add them or pass layout="
+    assert caught.value.hint == "add QUBIT_COORDS for each qubit or pass layout="
 
 
 @pytest.mark.parametrize(

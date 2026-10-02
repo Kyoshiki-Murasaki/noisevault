@@ -108,8 +108,12 @@ def test_multi_entanglers_must_be_decomposed(name, qubits, unknown_gates) -> Non
 
 def test_pair_the_profile_does_not_allow_has_no_typical_noise() -> None:
     profile, report = _setup()
-    with pytest.raises(MissingCalibrationError, match="no calibrated 2-qubit native"):
+    with pytest.raises(MissingCalibrationError) as neither:
         _resolve(profile, report, "cz", (0, 2))
+    assert neither.value.message == (
+        "cz on qubits 0-2: cz has no calibration on qubits 0-2, and the connectivity does not"
+        " allow cz there. No calibrated 2-qubit native gate is usable there either"
+    )
 
 
 def test_typical_may_use_a_reversed_directed_record_and_reports_it() -> None:
@@ -151,13 +155,16 @@ def test_messages_name_qubits_the_way_the_cli_does() -> None:
     profile, report = _setup()
     with pytest.raises(LayoutError) as twice:
         _resolve(profile, report, "cz", (1, 1))
-    assert twice.value.message == "cz acts on qubits 1-1; its targets must be distinct"
+    assert twice.value.message == "cz acts on qubits 1-1, but its qubits must be distinct"
     with pytest.raises(MissingCalibrationError) as one:
         _resolve(profile, report, "h", (0,), "error")
     assert one.value.message.startswith("h on qubit 0: ")
     with pytest.raises(MissingCalibrationError) as pair:
         _resolve(profile, report, "cz", (0, 2), "error")
-    assert pair.value.message.startswith("cz on qubits 0-2: ")
+    assert pair.value.message == (
+        "cz on qubits 0-2: cz has no calibration on qubits 0-2, and the connectivity does not"
+        " allow cz there"
+    )
 
 
 def test_misuse_by_an_adapter_is_a_plain_error() -> None:
