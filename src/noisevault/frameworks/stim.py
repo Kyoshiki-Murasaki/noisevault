@@ -710,14 +710,10 @@ def _correlated_errors(probs: Sequence[float], qubits: Sequence[int]) -> tuple[s
     for label, p in zip(metrics.pauli_labels(len(qubits)), probs, strict=True):
         if p > 0:
             targets = " ".join(f"{c}{q}" for c, q in zip(label, qubits, strict=True) if c != "I")
-            given = _conditional(p, untouched)
+            given = p / untouched if p < untouched else 1.0
             lines.append(f"{'ELSE_' if lines else ''}CORRELATED_ERROR({given!r}) {targets}")
             untouched -= p
     return tuple(lines)
-
-
-def _conditional(p: float, untouched: float) -> float:
-    return p / untouched if p < untouched else 1.0
 
 
 def _noise_lines(noise: dict[str, list[int]]) -> list[str]:

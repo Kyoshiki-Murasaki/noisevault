@@ -412,10 +412,10 @@ def test_show_qubits_and_json() -> None:
 def test_show_qubits_fits_60_columns_and_shows_state_only_when_a_qubit_has_one(
     tmp_path: Path,
 ) -> None:
-    lines = runner.invoke(app, ["show", "ibm_fez", "--qubits", "0,1,87"], env={"COLUMNS": "60"})
-    table = lines.stdout.splitlines()[-5:]
+    result = runner.invoke(app, ["show", "ibm_fez", "--qubits", "0,1,87"], env={"COLUMNS": "60"})
+    table = result.stdout.splitlines()[-5:]
     assert [row.split()[0] for row in table[2:]] == ["0", "1", "87"]
-    assert table[1].split()[-1] == "infidelity" and "\u2026" not in lines.stdout
+    assert table[1].split()[-1] == "infidelity" and "\u2026" not in result.stdout
     assert max(map(len, table)) <= 60
     data = toy(qubits=[{"index": 1, "disabled": True}])
     path = tmp_path / "toy.json"
@@ -528,9 +528,7 @@ def _manila_in_the_vault(calibrated_at: str, **provenance: str) -> Profile:
     data["provenance"].update(provenance)
     data["qubits"][0]["t1_us"] *= 1.1
     profile = Profile.model_validate(data)
-    path = nv.catalog.vault_path(profile)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    profile.save(path)
+    profile.save(nv.catalog.vault_path(profile))
     return profile
 
 
@@ -584,7 +582,6 @@ def test_list_names_an_unknown_license_once_when_no_profile_states_one(vault: Pa
         data["device"].update(calibrated_at=when, vendor="acme")
         data["provenance"].pop("license")
         profile = Profile.model_validate(data)
-        vault.mkdir(parents=True, exist_ok=True)
         profile.save(nv.catalog.vault_path(profile))
     out = runner.invoke(app, ["list", "--vendor", "acme"], env={"COLUMNS": "30"}).stdout
     assert "2 profiles, license unknown. See one with nv show <id>." in " ".join(out.split())
@@ -998,19 +995,13 @@ def test_check_with_no_framework_installed_is_one_error_and_one_install_command(
     ]
 
 
-def test_check_of_a_named_framework_that_is_not_installed_installs_that_one(monkeypatch) -> None:
+@pytest.mark.parametrize("named", ["cirq", "cirq,Cirq, cirq"])
+def test_check_of_a_named_framework_that_is_not_installed_installs_that_one(
+    monkeypatch, named: str
+) -> None:
     monkeypatch.setitem(sys.modules, "cirq", None)
-    result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq"])
+    result = runner.invoke(app, ["check", "ibm_manila", "--framework", named])
     assert result.exit_code == 1 and result.stdout == ""
-    assert result.stderr.splitlines() == [
-        "error: nv check needs a framework to check, and cirq is not installed",
-        f"hint: {install_hint('cirq')}",
-    ]
-
-
-def test_check_names_a_framework_given_twice_once(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "cirq", None)
-    result = runner.invoke(app, ["check", "ibm_manila", "--framework", "cirq,Cirq, cirq"])
     assert result.stderr.splitlines() == [
         "error: nv check needs a framework to check, and cirq is not installed",
         f"hint: {install_hint('cirq')}",
@@ -1257,9 +1248,7 @@ def _same_day(vault: Path) -> tuple[str, str]:
         data["gates"] = {**base["gates"], "zz": {**base["gates"]["zz"], "avg_infidelity": zz}}
         data["qubits"], data["calibrations"] = qubits, calibrations
         profile = Profile.model_validate(data)
-        path = nv.catalog.vault_path(profile)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        profile.save(path)
+        profile.save(nv.catalog.vault_path(profile))
         return f"quantinuum_h1-1@{when}"
 
     before = save(

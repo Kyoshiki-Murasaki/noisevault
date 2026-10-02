@@ -359,8 +359,6 @@ class _OnHand(NamedTuple):
 
 
 def _on_hand(ref: str, profile: Profile) -> _OnHand | None:
-    """How many calibrations a bare id had to pick from.
-    None for a dated ref, a file, or an id with one calibration."""
     target = catalog.parse_ref_preferring_id(ref)
     if isinstance(target, Path) or target.date or target.timestamp:
         return None
@@ -621,7 +619,6 @@ def _qubit_row(profile: Profile, index: int) -> dict[str, Any]:
 
 
 def _print_qubits(rows: list[dict[str, Any]]) -> None:
-    """One row per qubit."""
     columns = ["qubit", "T1 (us)", "T2 (us)", "P(1|0)", "P(0|1)", "1q avg infidelity", "state"]
     cells = [
         [
@@ -934,9 +931,7 @@ def _none_installed(missing: list[str], *, named: bool) -> NoReturn:
             f"{install_hint(first)}\n      (or {', '.join(others[:-1])} or {others[-1]},"
             f" or several, as in noisevault[{first},{others[-1]}])"
         )
-    err.print(f"error: nv check needs a framework to check, and {error}", markup=False)
-    err.print(f"hint: {hint}", markup=False)
-    raise typer.Exit(1)
+    _fail(f"nv check needs a framework to check, and {error}", hint)
 
 
 # cite, validate, doctor, schema ---------------------------------------------------------------

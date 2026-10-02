@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import pickle
 
-import pytest
-
 import noisevault as nv
 from noisevault.errors import FingerprintMismatch, LayoutError, NoiseVaultError
 
@@ -13,8 +11,6 @@ def test_an_error_keeps_its_next_step_apart_and_prints_both() -> None:
     assert (error.message, error.hint) == ("ibm_fez is nv:06404cefa54f", "load ibm_fez@2025-02-26")
     assert str(error) == "ibm_fez is nv:06404cefa54f; load ibm_fez@2025-02-26"
     assert isinstance(error, ValueError)
-    with pytest.raises(ValueError, match="; load ibm_fez@2025-02-26$"):
-        raise error
 
 
 def test_an_error_without_a_hint_prints_its_message_alone() -> None:

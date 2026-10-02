@@ -23,7 +23,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 from .. import __version__, gates, metrics, units
 from ..errors import SourceDataError
@@ -494,10 +494,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     When the source lists where a gate runs, a qubit or connected pair off that list gets
     ``disabled: true``. A working locus with no error of its own takes the device median, and a
     note names it.
-    Records of a symmetric gate that agree in both directions are stored once. to_profile treats
-    a nonpositive or nonfinite T1 or T2 as missing. If a working qubit has a valid value, a note
-    names each invalid one. If none does, an invalid value on a working qubit raises
-    SourceDataError.
+    Records of a symmetric gate that agree in both directions are stored once.
     """
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
@@ -547,7 +544,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
                 " the device median applies."
                 for index, value in invalid[key]
             ]
-        elif on_working := [r for r in invalid[key] if r.index not in disabled_qubits]:
+        elif on_working := [(i, v) for i, v in invalid[key] if i not in disabled_qubits]:
             index, value = on_working[0]
             raise SourceDataError(
                 f"{cal.name} reports no valid {label} on any working qubit (e.g. qubit {index}:"
@@ -602,25 +599,20 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
 _COHERENCE = {"t1_us": "T1", "t2_us": "T2"}
 
 
-class _Reading(NamedTuple):
-    index: int
-    value: float
-
-
 def _without_invalid_coherence(
     cal: Calibration,
-) -> tuple[dict[int, QubitCalibration], dict[str, list[_Reading]]]:
+) -> tuple[dict[int, QubitCalibration], dict[str, list[tuple[int, float]]]]:
     """The qubits with nonpositive or nonfinite T1/T2 cleared, and what each cleared one said.
 
     A dead qubit can report T1 = 0; treating it as missing keeps the rest of the device usable.
     """
     qubits = dict(cal.qubits)
-    invalid: dict[str, list[_Reading]] = {key: [] for key in _COHERENCE}
+    invalid: dict[str, list[tuple[int, float]]] = {key: [] for key in _COHERENCE}
     for index, qubit in sorted(cal.qubits.items()):
         for key in _COHERENCE:
             value = getattr(qubit, key)
             if value is not None and not (math.isfinite(value) and value > 0):
-                invalid[key].append(_Reading(index, value))
+                invalid[key].append((index, value))
                 qubits[index] = replace(qubits[index], **{key: None})
     return qubits, invalid
 
