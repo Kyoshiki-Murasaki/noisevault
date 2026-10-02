@@ -1,4 +1,5 @@
-"""A mistyped name, an ambiguous ref or an odd vault entry gets one line that says what to type."""
+"""A failed command prints an error line and, when there is a next step, a hint line after it.
+An odd vault entry prints one warning line."""
 
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from noisevault.sources import ibm_public, ionq
 runner = CliRunner()
 
 
-def _one_error(args: list[str], code: int = 1) -> str:
+def _error_and_hint(args: list[str], code: int = 1) -> str:
     """The error line and, when there is a next step, the hint line after it."""
     result = runner.invoke(app, args, env={"COLUMNS": "80"}, prog_name="nv")
     assert result.exit_code == code and result.stdout == ""
@@ -39,7 +40,7 @@ def test_pull_of_a_mistyped_ibm_device_names_the_close_one(monkeypatch) -> None:
         raise ibm_public._NotFound(url)
 
     monkeypatch.setattr(ibm_public, "fetch", fetch)
-    assert "did you mean ibm_fez?" in _one_error(["pull", "ibm_fezz"])
+    assert "did you mean ibm_fez?" in _error_and_hint(["pull", "ibm_fezz"])
 
 
 def test_pull_of_a_mistyped_ionq_device_names_the_close_one(monkeypatch) -> None:
@@ -105,7 +106,13 @@ def test_a_failed_pull_puts_its_next_step_on_a_hint_line(
     monkeypatch: pytest.MonkeyPatch, setup, args: list[str], error: str, hint: str
 ) -> None:
     setup(monkeypatch)
-    assert _one_error(args) == f"error: {error}\nhint: {hint}\n"
+    assert _error_and_hint(args) == f"error: {error}\nhint: {hint}\n"
+
+
+_NO_LIVE_GOOGLE = (
+    "error: unknown source '{source}'; no live source serves google devices\n"
+    "hint: run nv list --vendor google to see the google profiles you can load offline\n"
+)
 
 
 @pytest.mark.parametrize(
@@ -113,8 +120,8 @@ def test_a_failed_pull_puts_its_next_step_on_a_hint_line(
     [
         ("ibmm", "unknown source 'ibmm'; did you mean ibm? choose one of ibm, ibm-account, ionq"),
         ("IBM-Account", None),
-        ("googel", "no live source serves google devices; to see the bundled ones, run nv list"),
-        ("google", "no live source serves google devices; to see the bundled ones, run nv list"),
+        ("googel", _NO_LIVE_GOOGLE.format(source="googel")),
+        ("google", _NO_LIVE_GOOGLE.format(source="google")),
         ("xyz", "unknown source 'xyz'; choose one of ibm, ibm-account, ionq\n"),
     ],
 )
@@ -123,7 +130,7 @@ def test_pull_with_a_mistyped_source_says_what_to_type(monkeypatch, source, expe
         "noisevault.sources.ibm_account.pull",
         lambda device, at=None: (_ for _ in ()).throw(nv.SourceUnavailable("reached the account")),
     )
-    error = _one_error(["pull", "ibm_fez", "--source", source])
+    error = _error_and_hint(["pull", "ibm_fez", "--source", source])
     assert (expected or "reached the account") in error
 
 
@@ -139,7 +146,7 @@ def _same_time_pair(vault: Path) -> list[Path]:
 def test_an_ambiguous_ref_on_the_command_line_says_what_to_type(vault: Path) -> None:
     vault.mkdir(parents=True)
     first, second = _same_time_pair(vault)
-    error = _one_error(["show", "ibm_manila@2024-05-27T18:27:23Z"])
+    error = _error_and_hint(["show", "ibm_manila@2024-05-27T18:27:23Z"])
     assert "expect=" not in error
     assert f"\nhint: give one of their files: {first}, {second}\n" in error
     assert runner.invoke(app, ["show", str(first)]).exit_code == 0
@@ -163,7 +170,7 @@ def test_an_ambiguous_ref_in_python_keeps_the_python_fix(vault: Path) -> None:
 def test_a_mistyped_top_level_option_is_one_error_and_at_most_one_hint(
     args: list[str], error: str
 ) -> None:
-    assert _one_error(args, code=2) == error
+    assert _error_and_hint(args, code=2) == error
 
 
 def test_list_and_doctor_name_a_dangling_vault_link_in_one_line(vault: Path) -> None:

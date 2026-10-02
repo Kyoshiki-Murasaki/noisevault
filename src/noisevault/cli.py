@@ -86,8 +86,7 @@ class _Commands(TyperGroup):
                 raise
             _fail(
                 f"unexpected {type(exc).__name__}: {exc}",
-                f"please report this bug at {REPOSITORY}/issues"
-                " (NOISEVAULT_DEBUG=1 shows the traceback)",
+                f"report this bug at {REPOSITORY}/issues (NOISEVAULT_DEBUG=1 shows the traceback)",
             )
 
 
@@ -103,9 +102,9 @@ def _usage_error(exc: Any) -> NoReturn:
 _REF_HELP = "Profile id (ibm_fez), id@date, or a file path."
 _START = """
  Start with:
-   nv list             the bundled devices, offline
-   nv show ibm_fez     one device's calibration
-   nv check ibm_fez    test each installed framework export
+   nv list             list the bundled devices, offline
+   nv show ibm_fez     show one device's calibration
+   nv check ibm_fez    check each installed framework export
 """
 
 app = typer.Typer(
@@ -141,7 +140,7 @@ _SOURCE_KINDS = {
     "package_snapshot": _SourceWords("package", "package snapshot"),
     "public_api": _SourceWords("public API", "public API"),
     "account_api": _SourceWords("account", "account API"),
-    "user_file": _SourceWords("your file", "imported file"),
+    "user_file": _SourceWords("imported", "imported file"),
     "published_data": _SourceWords("published", "published data"),
     "vendor_sample": _SourceWords("sample", "vendor sample"),
     "hand_written": _SourceWords("by hand", "written by hand"),
@@ -362,7 +361,7 @@ class _OnHand(NamedTuple):
 def _on_hand(ref: str, profile: Profile) -> _OnHand | None:
     """How many calibrations a bare id had to pick from.
     None for a dated ref, a file, or an id with one calibration."""
-    target = catalog.target(ref)
+    target = catalog.parse_ref_preferring_id(ref)
     if isinstance(target, Path) or target.date or target.timestamp:
         return None
     same = [info for info in catalog.profiles() if info.id == profile.id]
@@ -373,7 +372,7 @@ def _on_hand(ref: str, profile: Profile) -> _OnHand | None:
         return _OnHand(len(same), None)
     if bundled.calibrated_at == profile.device.calibrated_at:
         replaced = f"nv:{bundled.fingerprint[:12]}"
-        return _OnHand(len(same), f"your vault copy replaces the bundled one, {replaced}")
+        return _OnHand(len(same), f"your vault copy replaces the bundled one ({replaced})")
     return _OnHand(len(same), f"the bundled one is {bundled.ref}")
 
 
@@ -556,7 +555,7 @@ def _natives_table(natives: list[dict[str, Any]]) -> Table:
             f"{count} {word}"
             for count, word in (
                 (n["loci"]["ideal"], "virtual"),
-                (n["loci"]["uncalibrated"] if has_error else 0, "without error"),
+                (n["loci"]["uncalibrated"] if has_error else 0, "uncalibrated"),
                 (n["loci"]["disabled"], "disabled"),
             )
             if count
@@ -684,7 +683,7 @@ def _check_writable(output: Path) -> None:
     folder = output.parent
     if output.is_dir():
         raise NoiseVaultError(
-            f"-o {output} is a directory", hint=f"give a file name such as {output / 'x.json'}"
+            f"-o {output} is a folder", hint=f"give a file name such as {output / 'x.json'}"
         )
     if not folder.is_dir():
         raise NoiseVaultError(
@@ -969,7 +968,7 @@ def validate(
             for line in _validation_lines(exc):
                 err.print(f"error: {line}", markup=False)
             raise typer.Exit(1) from None
-        except (*_UNREADABLE, NoiseVaultError) as exc:
+        except _UNREADABLE as exc:
             _fail(*_unreadable(file, exc))
     notes = [str(w.message) for w in caught] + _soft_issues(profile)
     when = _iso(profile.device.calibrated_at) or "undated"
@@ -1022,7 +1021,7 @@ def schema() -> None:
 
 
 def _load(ref: str) -> Profile:
-    target = catalog.target(ref)
+    target = catalog.parse_ref_preferring_id(ref)
     if not isinstance(target, Path):
         return catalog.load(ref)
     if not target.exists():
@@ -1062,11 +1061,9 @@ def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
     if isinstance(exc, UnicodeDecodeError):
         return _FileProblem(f"{path} is not JSON (not UTF-8 text)", _PROFILE_FILE)
     if isinstance(exc, EOFError | zlib.error | gzip.BadGzipFile):
-        return _FileProblem(
-            f"cannot read {path}: it is a damaged gzip file ({exc})", "copy or pull it again"
-        )
+        return _FileProblem(f"{path} is a damaged gzip file ({exc})", "copy or pull it again")
     if isinstance(exc, IsADirectoryError):
-        return _FileProblem(f"cannot read {path}: it is a folder", _PROFILE_FILE)
+        return _FileProblem(f"{path} is a folder", _PROFILE_FILE)
     if isinstance(exc, OSError):
         return _FileProblem(
             f"cannot read {path}: {exc.strerror or exc}", "check the file and its permissions"
@@ -1140,7 +1137,8 @@ def _fail(message: str, hint: str | None = None, *, code: int = 1) -> NoReturn:
 
 
 def _emit(renderable: RenderableType, *, natural_width: int | None = None) -> None:
-    """Print without the spaces rich pads and wraps lines with, so pasted output is clean."""
+    """Print without the trailing spaces rich adds when it pads or wraps a line, so pasted output
+    is clean."""
     if isinstance(renderable, str):
         renderable = Text(renderable)
     options = out.options if natural_width is None else out.options.update_width(natural_width)
@@ -1176,7 +1174,7 @@ def _duration(ns: float | None) -> str:
 
 
 _PLAIN_ERRORS = {
-    "extra_forbidden": "not a format 1.0 key; put your own data under extensions",
+    "extra_forbidden": "not a format 1.0 key; put your own data under the top-level extensions key",
     "missing": "missing; format 1.0 requires it",
 }
 

@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from .errors import (
     AmbiguousRef,
     FingerprintMismatch,
+    NoiseVaultError,
     NoiseVaultWarning,
     ProfileNotFound,
     SourceUnavailable,
@@ -53,6 +54,14 @@ _ENTRY_TYPES: dict[str, Any] = {
     "source_kind": str | None,
     "redistributable": str,
 }
+
+
+class _BadArgument(NoiseVaultError, ValueError):
+    """A ``source`` or ``expect`` value that names nothing NoiseVault knows."""
+
+
+class _FileInTheWay(NoiseVaultError, FileExistsError):
+    """A vault file at the path where a pull would save its calibration."""
 
 
 @dataclass(frozen=True)
@@ -256,7 +265,7 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
     calibration time, a vault copy shadows a bundled one.
     """
     if isinstance(ref, str):
-        parsed = target(ref)
+        parsed = parse_ref_preferring_id(ref)
         if isinstance(parsed, Path):
             raise ValueError(f"{ref!r} is a path, not a catalog ref")
         ref = parsed
@@ -302,9 +311,7 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
     return matches[0]
 
 
-def target(ref: str | Path) -> Path | Ref:
-    """What a ref names, as :func:`parse_ref` reads it, except that a bare id that also names a
-    folder here is still the id."""
+def parse_ref_preferring_id(ref: str | Path) -> Path | Ref:
     parsed = parse_ref(ref)
     text = ref.strip() if isinstance(ref, str) else ""
     if isinstance(parsed, Path) and parsed.is_dir() and text == parsed.name and "@" not in text:
@@ -318,7 +325,7 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
     ``expect`` pins the fingerprint (full hex, ``sha256:<hex>`` or ``nv:<12 hex>``); a different
     profile raises FingerprintMismatch.
     """
-    named = target(ref)
+    named = parse_ref_preferring_id(ref)
     if isinstance(named, Path):
         if not named.exists():
             raise ProfileNotFound(f"no file {named}")
@@ -363,7 +370,7 @@ def pull_and_save(
     """:func:`pull`, also saying where the profile is and whether this call wrote it."""
     source = source.strip().lower() if source else _default_source(device)
     if source not in _PULL_SOURCES:
-        raise ValueError(_unknown_source(source))
+        raise _unknown_source(source)
     when = None if at is None else as_utc(at)
     module = importlib.import_module(_PULL_SOURCES[source])
     profile = module.pull(device, at=when)
@@ -390,13 +397,13 @@ def pull_and_save(
         if path.exists():
             occupant = next((i.ref for i in listed if i.path == path), None)
             if occupant is None:  # skipped by the listing, with a warning saying why
-                raise FileExistsError(
-                    f"{path} exists but cannot be read; make it readable or move it out of"
-                    f" {path.parent}, then pull again"
+                raise _FileInTheWay(
+                    f"{path} exists but cannot be read",
+                    hint=f"make it readable or move it out of {path.parent}, then pull again",
                 )
-            raise FileExistsError(
-                f"{path} already holds {occupant}, another calibration; move that file out of"
-                f" {path.parent} and pull again"
+            raise _FileInTheWay(
+                f"{path} already holds {occupant}, another calibration",
+                hint=f"move that file out of {path.parent} and pull again",
             )
     profile.save(path)
     return Pulled(profile, path, written=True)
@@ -415,23 +422,23 @@ def _default_source(device: str) -> str:
         return source
     bundled = any(i.id == device for i in bundled_profiles())
     raise SourceUnavailable(
-        f"no live source pulls {device!r}: pull reads IBM devices (ibm_..., source='ibm' or"
+        f"no live source pulls {device!r}; pull reads only IBM devices (ibm_..., source='ibm' or"
         " 'ibm-account') and IonQ devices (ionq..., source='ionq')",
         hint=f"{device} is bundled, so nv.load({device!r}) loads it offline" if bundled else None,
     )
 
 
-def _unknown_source(source: str) -> str:
+def _unknown_source(source: str) -> _BadArgument:
     choices = ", ".join(_PULL_SOURCES)
     guess = did_you_mean(source, _PULL_SOURCES)
     offline = sorted({i.vendor for i in bundled_profiles() if i.vendor} - _PULL_SOURCES.keys())
     vendor = next((v for v in offline if did_you_mean(source, [v])), None)
     if vendor and not guess:
-        return (
-            f"unknown source {source!r}; no live source serves {vendor} devices; to see the"
-            f" bundled ones, run nv list --vendor {vendor}"
+        return _BadArgument(
+            f"unknown source {source!r}; no live source serves {vendor} devices",
+            hint=f"run nv list --vendor {vendor} to see the {vendor} profiles you can load offline",
         )
-    return f"unknown source {source!r}; {guess}choose one of {choices}"
+    return _BadArgument(f"unknown source {source!r}; {guess}choose one of {choices}")
 
 
 def _expect_prefix(expect: str) -> str:
@@ -440,7 +447,10 @@ def _expect_prefix(expect: str) -> str:
     short = want.startswith("nv:")
     want = want.removeprefix("nv:")
     if not re.fullmatch(r"[0-9a-f]{12}" if short else r"[0-9a-f]{64}", want):
-        raise ValueError(f"expect={expect!r}: give a full sha256 fingerprint or nv:<12 hex>")
+        raise _BadArgument(
+            f"expect={expect!r} is not a fingerprint",
+            hint="give a full sha256 fingerprint or nv:<12 hex>",
+        )
     return want
 
 
@@ -452,7 +462,6 @@ def _check_expect(profile: Profile, expect: str, path: Path | Traversable) -> No
 
 
 def _loaded(ref: Ref, held: list[ProfileInfo]) -> str:
-    """The ref as given and the fingerprints it loads, with the newest ref when the id is bare."""
     said = f"{ref.id}@{ref.date}" if ref.date else _ref(ref.id, ref.timestamp)
     newest = said if ref.date or ref.timestamp else held[0].ref
     found = " or ".join(f"nv:{i.fingerprint[:12]}" for i in held)
@@ -462,9 +471,6 @@ def _loaded(ref: Ref, held: list[ProfileInfo]) -> str:
 def _mismatch(
     loaded: str, expect: str, device: str, known: list[ProfileInfo]
 ) -> FingerprintMismatch:
-    """The error for a profile that misses its pin. If you have a profile with that fingerprint,
-    the hint is the nv.load call, with the same pin, that loads it. If not, the hint says how to
-    get the file."""
     want = _expect_prefix(expect)
     missed = f"{loaded}, not the expected {expect}"
     match = next((i for i in known if i.fingerprint.startswith(want)), None)
@@ -472,7 +478,7 @@ def _mismatch(
         where = match.ref if match.calibrated_at else str(match.path)
         call = f"nv.load({where!r}, expect={expect!r})"
         return FingerprintMismatch(missed, hint=f"{call} loads the profile with that fingerprint")
-    hint = "ask whoever pinned it for the profile file"
+    hint = "ask whoever pinned that fingerprint for the profile file"
     if _pull_source(device):
         hint += (
             ", or, if the source still serves that calibration, run"
@@ -482,14 +488,14 @@ def _mismatch(
 
 
 def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> ProfileNotFound:
-    """What a dated ref's date means when it names no profile, and what you have instead."""
     have = ", ".join(sorted({i.ref for i in candidates}))
     if ref.timestamp is not None:
         return ProfileNotFound(
             f"no {ref.id} profile calibrated at {_stamp(ref.timestamp)}; you have {have}"
         )
     fetch = (
-        f"to fetch the calibration in effect at {ref.date}, run nv pull {ref.id} --at {ref.date}"
+        f"run nv pull {ref.id} --at {ref.date}T23:59:59Z to fetch the calibration in effect at"
+        " the end of that day, then load the ref it prints"
     )
     return ProfileNotFound(
         f"no {ref.id} profile calibrated on {ref.date} UTC; you have {have}",
@@ -498,7 +504,6 @@ def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> ProfileNotFound:
 
 
 def _unshadowed(infos: list[ProfileInfo]) -> list[ProfileInfo]:
-    """Profiles of one id, without each bundled one that a vault profile of its time shadows."""
     shadowed = {_epoch(i.calibrated_at) for i in infos if i.location == "vault"}
     return [i for i in infos if i.location == "vault" or _epoch(i.calibrated_at) not in shadowed]
 

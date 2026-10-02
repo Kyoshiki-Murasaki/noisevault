@@ -11,6 +11,7 @@ import threading
 import time
 import warnings
 import zlib
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -81,8 +82,13 @@ def test_expect_pins_the_fingerprint() -> None:
         nv.load("ibm_manila", expect=other)
     with pytest.raises(FingerprintMismatch):
         nv.load("ibm_manila", expect="nv:000000000000")
-    with pytest.raises(ValueError, match="full sha256"):
+    with pytest.raises(ValueError) as info:
         nv.load("ibm_manila", expect="nv:abc")
+    assert isinstance(info.value, nv.NoiseVaultError)
+    assert (info.value.message, info.value.hint) == (
+        "expect='nv:abc' is not a fingerprint",
+        "give a full sha256 fingerprint or nv:<12 hex>",
+    )
 
 
 def test_vault_refs_newest_date_and_ambiguity(vault: Path) -> None:
@@ -110,7 +116,8 @@ def test_a_ref_date_that_misses_says_it_names_the_calibration_day() -> None:
         "ibm_fez@2025-03-01": (
             "no ibm_fez profile calibrated on 2025-03-01 UTC;"
             " you have ibm_fez@2025-02-26T20:16:25Z",
-            "to fetch the calibration in effect at 2025-03-01, run nv pull ibm_fez --at 2025-03-01",
+            "run nv pull ibm_fez --at 2025-03-01T23:59:59Z to fetch the calibration in effect at"
+            " the end of that day, then load the ref it prints",
         ),
         "quantinuum_h2-1@2020-01-01": (
             "no quantinuum_h2-1 profile calibrated on 2020-01-01 UTC;"
@@ -152,8 +159,22 @@ def test_an_id_that_also_names_a_folder_here_loads_the_id(tmp_path: Path, monkey
 def test_pulling_a_bundled_device_no_source_serves_says_how_to_load_it() -> None:
     with pytest.raises(SourceUnavailable) as info:
         nv.pull("google_weber")
+    assert info.value.message == (
+        "no live source pulls 'google_weber'; pull reads only IBM devices (ibm_..., source='ibm'"
+        " or 'ibm-account') and IonQ devices (ionq..., source='ionq')"
+    )
     assert info.value.hint == "google_weber is bundled, so nv.load('google_weber') loads it offline"
     assert str(info.value).endswith(f"; {info.value.hint}")
+
+
+def test_pulling_from_a_vendor_no_live_source_serves_says_how_to_list_its_profiles() -> None:
+    with pytest.raises(ValueError) as info:
+        nv.pull("ibm_fez", source="google")
+    assert isinstance(info.value, nv.NoiseVaultError)
+    assert (info.value.message, info.value.hint) == (
+        "unknown source 'google'; no live source serves google devices",
+        "run nv list --vendor google to see the google profiles you can load offline",
+    )
 
 
 def test_vault_copy_of_a_bundled_profile_is_not_ambiguous(vault: Path) -> None:
@@ -318,12 +339,12 @@ def test_a_fingerprint_no_profile_has_says_how_to_get_the_file() -> None:
         f" {nowhere}, and no profile you have has that fingerprint"
     )
     assert info.value.hint == (
-        "ask whoever pinned it for the profile file, or, if the source still serves that"
-        " calibration, run nv pull ibm_manila --at <a time it was in effect>"
+        "ask whoever pinned that fingerprint for the profile file, or, if the source still serves"
+        " that calibration, run nv pull ibm_manila --at <a time it was in effect>"
     )
     with pytest.raises(FingerprintMismatch) as info:
         nv.load("quantinuum_h2-1", expect=nowhere)
-    assert info.value.hint == "ask whoever pinned it for the profile file"
+    assert info.value.hint == "ask whoever pinned that fingerprint for the profile file"
 
 
 def test_same_time_profiles_in_the_vault_are_told_apart_by_expect(vault: Path) -> None:
@@ -394,6 +415,45 @@ def _serve(monkeypatch: pytest.MonkeyPatch, profile: Profile) -> None:
     monkeypatch.setattr(ibm_public, "pull", lambda device, at=None: profile)
 
 
+def _serve_history(monkeypatch: pytest.MonkeyPatch, *stamps: str) -> None:
+    """IBM's public endpoint with ibm_manila calibrated at these times. A pull gets the newest
+    calibration older than ``at``."""
+    from noisevault.sources import ibm_public
+
+    def pull(device: str, at: datetime | None = None) -> Profile:
+        older = [s for s in stamps if at is None or datetime.fromisoformat(s) < at]
+        data = nv.load("ibm_manila").to_dict()
+        data["device"]["calibrated_at"] = max(older, key=datetime.fromisoformat)
+        return Profile.model_validate(data)
+
+    monkeypatch.setattr(ibm_public, "pull", pull)
+
+
+@pytest.mark.parametrize(
+    ("history", "printed"),
+    [
+        (("2024-05-30T04:56:23Z", "2024-06-01T19:00:00Z"), "ibm_manila@2024-06-01T19:00:00Z"),
+        (("2024-05-30T04:56:23Z",), "ibm_manila@2024-05-30T04:56:23Z"),
+    ],
+    ids=["calibrated-that-day", "calibrated-before"],
+)
+def test_following_the_hint_of_a_missed_date_ends_with_a_profile_that_loads(
+    monkeypatch: pytest.MonkeyPatch, history: tuple[str, ...], printed: str
+) -> None:
+    _serve_history(monkeypatch, *history)
+    runner = CliRunner()
+    asked = ["show", "ibm_manila@2024-06-01"]
+    missed = runner.invoke(app, asked)
+    assert missed.exit_code == 1
+    hint = missed.stderr.splitlines()[-1]
+    pull = re.search(r"run nv (pull \S+ --at \S+)", hint)
+    assert pull is not None, hint
+    assert runner.invoke(app, pull.group(1).split()).stdout.split()[0] == printed
+    assert hint.endswith(", then load the ref it prints")
+    assert runner.invoke(app, ["show", printed]).exit_code == 0
+    assert runner.invoke(app, asked).exit_code == (0 if "2024-06-01" in printed else 1)
+
+
 def _pull_quietly(**options) -> catalog.Pulled:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -437,8 +497,14 @@ def test_a_pull_never_replaces_a_vault_file_of_another_calibration(
     held = _dated("2024-05-27T18:27:23.100000Z", 1e-3)
     legacy = held.save(vault / "test_toy@2024-05-27T182723Z.json.gz")
     _serve(monkeypatch, _dated("2024-05-27T18:27:23Z", 2e-3))
-    with pytest.raises(FileExistsError, match="2024-05-27T18:27:23.100000Z"):
+    with pytest.raises(FileExistsError) as info:
         _pull_quietly()
+    assert isinstance(info.value, nv.NoiseVaultError)
+    error = f"{legacy} already holds test_toy@2024-05-27T18:27:23.100000Z, another calibration"
+    hint = f"move that file out of {vault} and pull again"
+    assert (info.value.message, info.value.hint) == (error, hint)
+    result = CliRunner().invoke(app, ["pull", "ibm_toy"])
+    assert result.exit_code == 1 and result.stderr == f"error: {error}\nhint: {hint}\n"
     assert nv.load(legacy) == held
 
 
@@ -605,8 +671,13 @@ def test_a_pull_onto_an_unreadable_vault_file_does_not_call_it_saved(
     _serve(monkeypatch, profile)
     _lock(monkeypatch, path)
     with pytest.warns(nv.NoiseVaultWarning, match="skipped"):
-        with pytest.raises(FileExistsError, match="exists but cannot be read"):
+        with pytest.raises(FileExistsError) as info:
             catalog.pull_and_save("ibm_toy", source="ibm")
+    assert isinstance(info.value, nv.NoiseVaultError)
+    assert (info.value.message, info.value.hint) == (
+        f"{path} exists but cannot be read",
+        f"make it readable or move it out of {vault}, then pull again",
+    )
     monkeypatch.undo()
     assert path.read_bytes() == before
 

@@ -18,11 +18,11 @@ profile files still load.
 - **Fingerprints.** Every profile has a SHA-256 fingerprint of its physics.
   `nv.load(ref, expect="nv:...")` fails if the profile changed, and `nv cite` prints a
   citation with the full fingerprint, the NoiseVault version and the ref that loads the cited
-  calibration. On a mismatch, the error names the calibration the ref loaded and, if you have
-  the pinned calibration, the `nv.load` call, with the same pin, that loads it. A dated ref
-  with no calibration on that UTC day fails with "no ibm_fez profile calibrated on 2025-03-01
-  UTC", and for a device `nv pull` serves, its hint is the `nv pull ibm_fez --at 2025-03-01`
-  command that fetches the calibration in effect then.
+  calibration. On a mismatch, the error names the calibration the ref loaded. If you have the
+  pinned calibration, the hint is the `nv.load` call, with the same pin, that loads it. A dated
+  ref with no calibration on that UTC day fails with "no ibm_fez profile calibrated on
+  2025-03-01 UTC", and for a device that `nv pull` serves, the hint is
+  `nv pull ibm_fez --at 2025-03-01T23:59:59Z` and says to load the ref that pull prints.
 - **25 bundled profiles that load offline**: 18 IBM devices from qiskit-ibm-runtime, 5
   Quantinuum machines from Quantinuum's published benchmark data, and Google's Rainbow and
   Weber from cirq-google. All are Apache-2.0 data, and the files are byte-identical on

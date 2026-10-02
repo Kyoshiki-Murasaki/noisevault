@@ -66,7 +66,13 @@ def test_validate_unreadable_input_is_a_friendly_error(tmp_path: Path, damage: s
         path.mkdir()
     result = runner.invoke(app, ["validate", str(path)])
     assert result.exit_code == 1
-    assert result.stderr.startswith(f"error: cannot read {path}")
+    if damage == "directory":
+        assert result.stderr == (
+            f"error: {path} is a folder\nhint: give a profile file (.json or .json.gz)\n"
+        )
+    else:
+        assert result.stderr.startswith(f"error: {path} is a damaged gzip file (")
+        assert result.stderr.endswith(")\nhint: copy or pull it again\n")
     assert "Traceback" not in result.output and "Aborted" not in result.output
 
 
@@ -86,7 +92,8 @@ def test_validate_says_what_an_unknown_or_a_missing_key_means(tmp_path: Path) ->
     assert result.exit_code == 1
     assert result.stderr.splitlines() == [
         "error: device: missing; format 1.0 requires it",
-        "error: unknown_field: not a format 1.0 key; put your own data under extensions",
+        "error: unknown_field: not a format 1.0 key; put your own data under the top-level"
+        " extensions key",
     ]
 
 
@@ -242,7 +249,8 @@ def test_no_color_removes_color_codes() -> None:
             ["show", "ibm_fez@2020-01-01"],
             "no ibm_fez profile calibrated on 2020-01-01 UTC;"
             " you have ibm_fez@2025-02-26T20:16:25Z",
-            "to fetch the calibration in effect at 2020-01-01, run nv pull ibm_fez --at 2020-01-01",
+            "run nv pull ibm_fez --at 2020-01-01T23:59:59Z to fetch the calibration in effect at"
+            " the end of that day, then load the ref it prints",
         ),
         (["show", "quantinuum_h1-1@2020-01-01"], "you have quantinuum_h1-1@2025-05-02", None),
         (
@@ -417,6 +425,14 @@ def test_show_qubits_fits_60_columns_and_shows_state_only_when_a_qubit_has_one(
     assert rows[0].split()[-1] == "state" and rows[2].split()[-1] == "disabled"
 
 
+def test_show_qubits_keeps_the_state_column_for_a_label_alone() -> None:
+    weber = nv.load("google_weber").table
+    assert not any(weber.qubit(q).disabled for q in (0, 1, 2))
+    args = ["show", "google_weber", "--qubits", "0,1,2"]
+    table = runner.invoke(app, args, env={"COLUMNS": "100"}).stdout.splitlines()[-4:]
+    assert [row.split()[-1] for row in table] == ["state", "q(0,5)", "q(0,6)", "q(1,4)"]
+
+
 @pytest.mark.parametrize("ref", ["ibm_fez", "ibm_kyiv", "ibm_manila"])
 def test_show_qubits_names_a_real_gate_not_the_identity(ref: str) -> None:
     text = runner.invoke(app, ["show", ref, "--qubits", "0,1,2,3,4"]).stdout
@@ -446,7 +462,7 @@ def test_show_and_diff_name_the_error_metric(tmp_path: Path) -> None:
     path.write_text(json.dumps(toy(gates=gates, calibrations=calibrations)))
     out = runner.invoke(app, ["show", str(path)], env={"COLUMNS": "120"}).stdout
     cz = next(line for line in out.splitlines() if "cz (2q)" in line)
-    assert cz.split()[2:] == ["2.00e-02", "70", "ns", "1", "(1", "without", "error)"]
+    assert cz.split()[2:] == ["2.00e-02", "70", "ns", "1", "(1", "uncalibrated)"]
     drift = runner.invoke(app, ["diff", "ibm_kyiv", "ibm_brisbane"], env={"COLUMNS": "80"}).stdout
     medians = [line.split("  ")[0] for line in drift.splitlines()[1:7]]
     assert medians == [
@@ -548,7 +564,7 @@ def test_show_says_when_a_vault_copy_replaces_the_bundled_calibration(vault: Pat
     assert lines[0] == f"ibm_manila@2024-05-27T18:27:23Z  {mine.short_fingerprint}"
     assert lines[2:4] == [
         "calibrations  newest of the 2 you have",
-        f"              your vault copy replaces the bundled one, {bundled.short_fingerprint}",
+        f"              your vault copy replaces the bundled one ({bundled.short_fingerprint})",
     ]
 
 
@@ -583,6 +599,15 @@ def test_list_keeps_one_ids_calibrations_together_newest_first(vault: Path) -> N
         ["ibm_manila", "2024-05-27", "5"],
     ]
     assert at[1] == at[0] + 1 and lines[at[0] - 1].split()[0] == "ibm_kyiv"
+
+
+def test_list_and_show_call_a_user_file_imported(vault: Path) -> None:
+    _manila_in_the_vault("2024-06-03T10:00:00Z", source_kind="user_file")
+    lines = runner.invoke(app, ["list"], env={"COLUMNS": "120"}).stdout.splitlines()
+    row = next(line for line in lines if line.startswith("* ibm_manila "))
+    assert row.split() == ["*", "ibm_manila", "2024-06-03", "5", "Falcon", "r5.11", "imported"]
+    card = runner.invoke(app, ["show", "ibm_manila"], env={"COLUMNS": "200"}).stdout
+    assert re.search(r"^provenance +measured, imported file, ", card, re.M), card
 
 
 def test_check_says_which_calibration_a_bare_id_picked(vault: Path) -> None:
@@ -707,11 +732,20 @@ def test_pull_checks_the_output_folder_before_fetching(monkeypatch, tmp_path: Pa
     result = runner.invoke(app, ["pull", "ibm_fez", "-o", str(tmp_path / "no" / "x.json")])
     assert result.exit_code == 1 and calls == []
     assert f"the folder {tmp_path / 'no'} does not exist" in result.stderr
+    result = runner.invoke(app, ["pull", "ibm_fez", "-o", str(tmp_path)])
+    assert result.exit_code == 1 and calls == []
+    assert result.stderr == (
+        f"error: -o {tmp_path} is a folder\nhint: give a file name such as {tmp_path / 'x.json'}\n"
+    )
 
 
 def test_pull_of_an_unsupported_vendor_says_which_sources_exist() -> None:
     result = runner.invoke(app, ["pull", "rigetti_ankaa-3"])
-    assert result.exit_code == 1 and "IonQ devices" in result.stderr
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "error: no live source pulls 'rigetti_ankaa-3'; pull reads only IBM devices (ibm_...,"
+        " --source ibm or ibm-account) and IonQ devices (ionq..., --source ionq)\n"
+    )
 
 
 # diff, check, cite, schema, doctor --------------------------------------------------------------
@@ -1328,15 +1362,16 @@ def test_nv_alone_prints_the_help_and_no_error() -> None:
 def test_help_ends_with_the_commands_to_start_with() -> None:
     start = [
         " Start with:",
-        "   nv list             the bundled devices, offline",
-        "   nv show ibm_fez     one device's calibration",
-        "   nv check ibm_fez    test each installed framework export",
+        "   nv list             list the bundled devices, offline",
+        "   nv show ibm_fez     show one device's calibration",
+        "   nv check ibm_fez    check each installed framework export",
     ]
     for args in ([], ["--help"]):
         result = runner.invoke(app, args, env={"COLUMNS": "60"}, prog_name="nv")
         assert result.exit_code == 0, result.output
         lines = _unstyled(result.output).rstrip().splitlines()
         assert lines[-4:] == start and lines[-5] == ""
+        assert max(map(len, lines)) <= 60
     sub = runner.invoke(app, ["show", "--help"], env={"COLUMNS": "80"}, prog_name="nv")
     assert "Start with" not in sub.output
 
@@ -1350,7 +1385,7 @@ def test_an_unexpected_failure_is_one_error_and_a_hint_unless_debugging(monkeypa
     assert result.exit_code == 1
     assert result.stderr.splitlines() == [
         "error: unexpected KeyError: 'provider'",
-        "hint: please report this bug at https://github.com/Kyoshiki-Murasaki/noisevault/issues"
+        "hint: report this bug at https://github.com/Kyoshiki-Murasaki/noisevault/issues"
         " (NOISEVAULT_DEBUG=1 shows the traceback)",
     ]
     debug = runner.invoke(app, ["show", "ibm_fez"], env={"NOISEVAULT_DEBUG": "1"})
