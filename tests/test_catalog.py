@@ -577,6 +577,86 @@ def test_a_damaged_index_entry_is_rebuilt_from_its_file(vault: Path, damage) -> 
     assert json.loads(index.read_text())[path.name] == entry
 
 
+def _misindex(vault: Path, path: Path, **wrong: object) -> dict[str, object]:
+    """Index the vault and rewrite one entry with wrong values. Returns the entry as it was."""
+    catalog.vault_profiles()
+    index = vault / ".index.json"
+    entries = json.loads(index.read_text())
+    entry = entries[path.name]
+    entries[path.name] = {**entry, **wrong}
+    index.write_text(json.dumps(entries))
+    return entry
+
+
+def test_a_stale_index_date_does_not_bypass_dated_ref_matching(vault: Path) -> None:
+    manila = nv.load("ibm_manila")
+    path = manila.save(vault_path(manila))
+    entry = _misindex(vault, path, calibrated_at="2024-05-28T18:27:23Z")
+    with pytest.raises(ProfileNotFound) as info:
+        nv.load("ibm_manila@2024-05-28")
+    assert info.value.message == (
+        "no ibm_manila profile calibrated on 2024-05-28 UTC;"
+        " you have ibm_manila@2024-05-27T18:27:23Z"
+    )
+    with pytest.raises(ProfileNotFound):
+        nv.load("ibm_manila@2024-05-28", expect=manila.short_fingerprint)
+    assert json.loads((vault / ".index.json").read_text())[path.name] == entry
+
+
+def test_a_stale_index_date_does_not_hide_a_vault_profile(vault: Path) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    path = profile.save(vault_path(profile))
+    entry = _misindex(vault, path, calibrated_at="2025-01-02T00:00:00Z")
+    assert nv.load("test_toy@2025-01-01") == profile
+    assert json.loads((vault / ".index.json").read_text())[path.name] == entry
+
+
+def test_a_stale_index_time_does_not_make_a_ref_ambiguous(vault: Path) -> None:
+    morning = _dated("2025-01-01T08:00:00Z")
+    evening = _dated("2025-01-01T20:00:00Z", error=2e-3)
+    path = morning.save(vault_path(morning))
+    evening.save(vault_path(evening))
+    _misindex(vault, path, calibrated_at="2025-01-01T20:00:00Z")
+    assert nv.load("test_toy@2025-01-01T20:00:00Z") == evening
+
+
+def test_a_stale_index_fingerprint_does_not_refuse_a_correct_pin(vault: Path) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    path = profile.save(vault_path(profile))
+    _misindex(vault, path, fingerprint="ab" * 32)
+    assert nv.load("test_toy", expect=profile.short_fingerprint) == profile
+    assert [i.fingerprint for i in nv.profiles() if i.id == "test_toy"] == [profile.fingerprint]
+
+
+def test_a_load_corrects_the_stale_index_fields_nv_list_shows(vault: Path) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    path = profile.save(vault_path(profile))
+    entry = _misindex(vault, path, vendor="ionq", num_qubits=27, license="CC0-1.0")
+    assert nv.load("test_toy") == profile
+    assert [i for i in nv.profiles() if i.id == "test_toy"] == [
+        catalog.ProfileInfo.of(profile, "vault", path)
+    ]
+    assert json.loads((vault / ".index.json").read_text())[path.name] == entry
+
+
+@pytest.mark.parametrize("wrong", ["calibrated_at", "fingerprint"])
+def test_a_pull_does_not_trust_a_stale_index_entry(
+    monkeypatch: pytest.MonkeyPatch, vault: Path, wrong: str
+) -> None:
+    first = _dated("2025-01-01T00:00:00Z")
+    path = first.save(vault_path(first))
+    second = _dated("2025-01-02T00:00:00Z", error=2e-3)
+    served = {"calibrated_at": "2025-01-02T00:00:00Z", "fingerprint": second.fingerprint}
+    _misindex(vault, path, **{wrong: served[wrong]})
+    _serve(monkeypatch, second)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pulled = catalog.pull_and_save("ibm_toy", source="ibm")
+    assert (pulled.path, pulled.written) == (vault_path(second), True)
+    assert nv.load("test_toy@2025-01-01") == first
+    assert nv.load("test_toy@2025-01-02") == second
+
+
 def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:
     profile = _dated("2025-01-01T00:00:00Z")
     profile.save(vault_path(profile))

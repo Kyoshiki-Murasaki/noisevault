@@ -86,7 +86,9 @@ class ProfileInfo:
         return load_bytes(self.path.read_bytes())
 
     @classmethod
-    def of(cls, profile: Profile, location: Literal["vault", "bundled"], path: Path) -> ProfileInfo:
+    def of(
+        cls, profile: Profile, location: Literal["vault", "bundled"], path: Path | Traversable
+    ) -> ProfileInfo:
         return cls.from_entry(index_entry(profile), location, path)
 
     @classmethod
@@ -168,15 +170,16 @@ def bundled_profiles() -> list[ProfileInfo]:
 _VAULT_INDEX = ".index.json"
 
 
-def vault_profiles() -> list[ProfileInfo]:
+def vault_profiles(*, rebuild_index: bool = False) -> list[ProfileInfo]:
     """Profiles in the vault, indexed by file name so unchanged files are not parsed again.
 
     The index (``.index.json`` in the vault) is only a cache: it is rebuilt from the files
     whenever a file's size, modification time or change time (moved by chmod and chown, which
-    can make it unreadable) changes, and losing it costs one re-read.
+    can make it unreadable) changes, and losing it costs one re-read. ``rebuild_index`` parses
+    every file and rewrites the index. Callers pass it after an entry disagreed with its file.
     """
     folder = vault_dir()
-    cached = _read_vault_index(folder)
+    cached = {} if rebuild_index else _read_vault_index(folder)
     index: dict[str, dict[str, Any]] = {}
     out = []
     for path in sorted(folder.glob("*.json*")):
@@ -246,10 +249,9 @@ def _write_vault_index(folder: Path, index: dict[str, dict[str, Any]]) -> None:
 
 def profiles(*, technology: str | None = None, vendor: str | None = None) -> list[ProfileInfo]:
     """Every known profile (a vault copy hides an identical bundled one), by id then date."""
-    found = _dedupe(vault_profiles() + bundled_profiles())
     found = [
         info
-        for info in found
+        for info in _known()
         if (technology is None or info.technology == technology)
         and (vendor is None or info.vendor == vendor)
     ]
@@ -267,7 +269,14 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
         if isinstance(parsed, Path):
             raise ValueError(f"{ref!r} is a path, not a catalog ref")
         ref = parsed
-    known = _dedupe(vault_profiles() + bundled_profiles())
+    return _pick(ref, _known(), expect)
+
+
+def _known(*, rebuild_index: bool = False) -> list[ProfileInfo]:
+    return _dedupe(vault_profiles(rebuild_index=rebuild_index) + bundled_profiles())
+
+
+def _pick(ref: Ref, known: list[ProfileInfo], expect: str | None) -> ProfileInfo:
     candidates = [info for info in known if info.id == ref.id]
     if not candidates:
         close = difflib.get_close_matches(ref.id, sorted({i.id for i in known}), n=3)
@@ -321,7 +330,9 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
     """Load a profile by path, ``id``, ``id@YYYY-MM-DD`` or ``id@<timestamp>``, offline.
 
     ``expect`` pins the fingerprint (full hex, ``sha256:<hex>`` or ``nv:<12 hex>``); a different
-    profile raises FingerprintMismatch.
+    profile raises FingerprintMismatch. The vault index is only a cache. When the index cannot
+    resolve the ref, or its entry disagrees with the file it names, ``load`` resolves the ref
+    again from the files and rebuilds the index.
     """
     named = parse_ref_preferring_id(ref)
     if isinstance(named, Path):
@@ -329,11 +340,24 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
             raise ProfileNotFound(f"no file {named}")
         path, profile = named, load_file(named)
     else:
-        info = resolve(named, expect=expect)
-        path, profile = info.path, info.load()
+        try:
+            info = resolve(named, expect=expect)
+            profile = info.load()
+            stale = _stale(info, profile)
+        except (ProfileNotFound, AmbiguousRef, FingerprintMismatch):
+            stale = True
+        if stale:
+            info = _pick(named, _known(rebuild_index=True), expect)
+            profile = info.load()
+        path = info.path
     if expect is not None:
         _check_expect(profile, expect, path)
     return profile
+
+
+def _stale(info: ProfileInfo, profile: Profile) -> bool:
+    """Whether a vault index entry disagrees with the profile its file holds."""
+    return info.location == "vault" and ProfileInfo.of(profile, "vault", info.path) != info
 
 
 class Pulled(NamedTuple):
@@ -375,13 +399,13 @@ def pull_and_save(
     if output is not None:
         return Pulled(profile, profile.save(output), written=True)
     listed = vault_profiles()
-    held = [i for i in listed if i.id == profile.id]
-    for info in held:
-        if info.fingerprint == profile.fingerprint:
-            return Pulled(profile, Path(str(info.path)), written=False)
-    same_time = [i for i in held if i.calibrated_at == profile.device.calibrated_at]
-    if same_time:
-        old = same_time[0]
+    old = _held(profile, listed)
+    if old is not None and _stale(old, old.load()):
+        listed = vault_profiles(rebuild_index=True)
+        old = _held(profile, listed)
+    if old is not None and old.fingerprint == profile.fingerprint:
+        return Pulled(profile, Path(str(old.path)), written=False)
+    if old is not None:
         path = Path(str(old.path))  # may carry an older naming scheme; replace it in place
         warnings.warn(
             f"replaced {path.name} (nv:{old.fingerprint[:12]}) with this pull"
@@ -405,6 +429,15 @@ def pull_and_save(
             )
     profile.save(path)
     return Pulled(profile, path, written=True)
+
+
+def _held(profile: Profile, listed: list[ProfileInfo]) -> ProfileInfo | None:
+    """The vault file that holds this profile, else the same calibration converted differently."""
+    same_id = [i for i in listed if i.id == profile.id]
+    same = next((i for i in same_id if i.fingerprint == profile.fingerprint), None)
+    return same or next(
+        (i for i in same_id if i.calibrated_at == profile.device.calibrated_at), None
+    )
 
 
 _DEFAULT_SOURCES = {"ibm_": "ibm", "ionq": "ionq"}  # id prefix -> source that pulls it
