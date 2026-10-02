@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from conftest import MANILA_V01, migrated, require, toy
+from conftest import MANILA_V01, deeper_than_the_parser_takes, migrated, require, toy
 from typer.testing import CliRunner
 
 import noisevault as nv
@@ -639,11 +639,13 @@ def test_an_index_this_noisevault_did_not_write_is_ignored_and_rewritten(
         '"num_qubits": -Infinity',
         '"num_qubits": "\\ud800"',
         '"\\udfff": 5',
-        '"num_qubits": ' + "[" * 100_000 + "]" * 100_000,
+        "deep nesting",
     ],
     ids=["1e309", "NaN", "-Infinity", "lone surrogate", "lone surrogate key", "deep nesting"],
 )
 def test_an_index_that_cannot_be_hashed_is_ignored_and_rewritten(vault: Path, damaged: str) -> None:
+    if damaged == "deep nesting":
+        damaged = '"num_qubits": ' + deeper_than_the_parser_takes()
     manila = nv.load("ibm_manila")
     manila.save(vault / "current.json.gz")
     catalog.vault_profiles()

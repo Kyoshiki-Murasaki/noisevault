@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from conftest import toy
+from conftest import deeper_than_the_parser_takes, toy
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import noisevault as nv
@@ -201,6 +201,27 @@ def test_round_trip(tmp_path: Path, suffix: str) -> None:
     assert loaded.fingerprint == profile.fingerprint
     assert loaded.artifact_hash == profile.artifact_hash
     assert loaded.device.calibrated_at == datetime(2025, 2, 26, 9, 12, tzinfo=UTC)
+
+
+def test_a_file_nested_deeper_than_the_parser_takes_is_not_json(tmp_path: Path) -> None:
+    nested = deeper_than_the_parser_takes()
+    data = toy(extensions={"deep": 0})
+    data["device"]["vendor"] = 'say "[[" here'
+    text = json.dumps(data, indent=1).replace('"deep": 0', '"deep": ' + nested)
+    path = tmp_path / "deep.json"
+    path.write_text(text)
+    rows = text.splitlines()
+    (line,) = [n for n, row in enumerate(rows, 1) if '"deep"' in row]
+    innermost = rows[line - 1].index("[") + len(nested) // 2
+
+    with pytest.raises(json.JSONDecodeError) as caught:
+        load_file(path)
+
+    assert (caught.value.msg, caught.value.lineno, caught.value.colno) == (
+        f"nested {len(nested) // 2 + 2} levels deep",
+        line,
+        innermost,
+    )
 
 
 def test_gzip_output_is_reproducible(tmp_path: Path) -> None:

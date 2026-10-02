@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import gc
 import importlib
+import json
 import os
 import warnings
 from collections.abc import Iterator
@@ -69,6 +70,23 @@ def migrated(path: Path) -> Profile:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", MigrationWarning)
         return load_file(path)
+
+
+def deeper_than_the_parser_takes() -> str:
+    """JSON arrays nested past the depth ``json.loads`` can parse in this interpreter.
+
+    Python 3.11 bounds that depth by the recursion limit, 3.12 and 3.13 by a fixed C limit, and
+    3.14 by the free stack, so the depth is found by doubling rather than fixed.
+    """
+    depth = 1024
+    while depth <= 2**23:
+        text = "[" * depth + "]" * depth
+        try:
+            json.loads(text)
+        except RecursionError:
+            return text
+        depth *= 2
+    pytest.skip("json.loads parses arrays nested 8 million deep here")
 
 
 @pytest.fixture(autouse=True)

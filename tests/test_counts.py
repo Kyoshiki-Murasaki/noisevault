@@ -11,7 +11,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 import pytest
-from conftest import require, toy
+from conftest import deeper_than_the_parser_takes, require, toy
 from pydantic import ValidationError
 
 import noisevault as nv
@@ -321,28 +321,11 @@ def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) ->
     assert all("\n" not in str(e) for e in errors.values())
 
 
-def _deeper_than_the_parser_takes() -> str:
-    """JSON arrays nested past the depth ``json.loads`` can parse in this interpreter.
-
-    Python 3.11 bounds that depth by the recursion limit, 3.12 and 3.13 by a fixed C limit, and
-    3.14 by the free stack, so the depth is found by doubling rather than fixed.
-    """
-    depth = 1024
-    while depth <= 2**23:
-        text = "[" * depth + "]" * depth
-        try:
-            json.loads(text)
-        except RecursionError:
-            return text
-        depth *= 2
-    pytest.skip("json.loads parses arrays nested 8 million deep here")
-
-
 def test_a_file_nested_deeper_than_the_parser_takes_is_one_counts_error_line(
     tmp_path: Path,
 ) -> None:
     deep = tmp_path / "deep.counts.json"
-    deep.write_text(_deeper_than_the_parser_takes())
+    deep.write_text(deeper_than_the_parser_takes())
 
     with pytest.raises(CountsError) as caught:
         load_counts(deep)

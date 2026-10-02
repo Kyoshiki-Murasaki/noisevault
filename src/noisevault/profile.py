@@ -1203,7 +1203,27 @@ def load_file(path: str | Path) -> Profile:
 def load_bytes(raw: bytes) -> Profile:
     if raw[:2] == b"\x1f\x8b":
         raw = gzip.decompress(raw)
-    return Profile.from_dict(json.loads(raw))
+    try:
+        data = json.loads(raw)
+    except RecursionError:
+        raise _too_deep(raw.decode(json.detect_encoding(raw), "surrogatepass")) from None
+    return Profile.from_dict(data)
+
+
+_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
+
+
+def _too_deep(text: str) -> json.JSONDecodeError:
+    """The parse error for JSON nested deeper than ``json.loads`` takes, at its deepest point."""
+    depth = deepest = at = 0
+    for token in _STRING_OR_BRACKET.finditer(text):
+        if token[0] in ("[", "{"):
+            depth += 1
+            if depth > deepest:
+                deepest, at = depth, token.start()
+        elif token[0] in ("]", "}"):
+            depth -= 1
+    return json.JSONDecodeError(f"nested {deepest} levels deep", text, at)
 
 
 def json_schema() -> dict[str, Any]:
