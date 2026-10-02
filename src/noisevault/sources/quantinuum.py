@@ -232,9 +232,19 @@ def _not_utf8(exc: UnicodeDecodeError, where: str, hint: str | None = None) -> S
 
 
 def _key(node: Mapping[str, Any], key: str, where: str) -> Any:
+    if not isinstance(node, Mapping):
+        raise SourceDataError(f"{where} is not a JSON object")
     if key not in node:
         raise SourceDataError(f"{where} has no {key!r}")
     return node[key]
+
+
+def _object(node: Any, where: str, of: str) -> Mapping[str, Any]:
+    if not isinstance(node, Mapping):
+        raise SourceDataError(f"{where} is not a JSON object")
+    if not node:
+        raise SourceDataError(f"{where} has no {of}")
+    return node
 
 
 # the qtm_spec analysis ----------------------------------------------------------------------
@@ -262,30 +272,47 @@ def _rb(data: Mapping[str, Any], where: str, *, num_qubits: int) -> tuple[float,
     """(average infidelity per native gate, leakage per gate or None), as qtm_spec reports them.
 
     With leakage data the error is ``legacy + leakage / d``: qtm_spec's leakage correction.
+    Every zone of ``survival`` and ``leakage_postselect`` must have counts at the same sequence
+    lengths.
     """
     d = 2**num_qubits
     per_clifford = _TWO_QUBIT_CLIFFORD_ZZ if num_qubits == 2 else 1.0
-    shots, survival = _shots(data, where), _key(data, "survival", where)
-    rate = decay_rate(*_pooled(survival, shots, f"{where}: survival"), asymptote=1 / d)
+    shots, survival = _shots(data, where), _zones(data, "survival", where)
+    leak_zones = _zones(data, "leakage_postselect", where) if "leakage_postselect" in data else {}
+    lengths = list(dict.fromkeys(m for zone in (survival | leak_zones).values() for m in zone))
+    rate = decay_rate(*_pooled(survival, lengths, shots), asymptote=1 / d)
     error = 1 - ((d - 1) * rate ** (1 / per_clifford) + 1) / d
     if "leakage_postselect" not in data:
         return error, None
-    leak_curve = _pooled(data["leakage_postselect"], shots, f"{where}: leakage_postselect")
-    leak_rate = decay_rate(*leak_curve, asymptote=0.0)
+    leak_rate = decay_rate(*_pooled(leak_zones, lengths, shots), asymptote=0.0)
     leakage = (1 - leak_rate) / per_clifford
     return error + leakage / d, leakage
 
 
-def _pooled(survival: Mapping[str, Any], shots: int, where: str) -> tuple[np.ndarray, np.ndarray]:
+def _zones(data: Mapping[str, Any], curve: str, where: str) -> dict[str, Mapping[str, Any]]:
+    """Each zone's counts by sequence length for one decay curve, keyed by the zone's path."""
+    zones = {}
+    for zone, by_length in _object(_key(data, curve, where), f"{where}: {curve}", "zones").items():
+        at = f"{where}: {curve}[{zone!r}]"
+        for m in _object(by_length, at, "sequence lengths"):
+            if not m.isdecimal():
+                raise SourceDataError(
+                    f"{at} has the sequence length {m!r}; expected a whole number"
+                )
+        zones[at] = by_length
+    return zones
+
+
+def _pooled(
+    zones: Mapping[str, Mapping[str, Any]], lengths: list[str], shots: int
+) -> tuple[np.ndarray, np.ndarray]:
     """Sequence lengths and mean survival over every zone and repetition at each length."""
-    lengths = list(next(iter(survival.values())))
-    zones = [(f"{where}[{zone!r}]", counts) for zone, counts in survival.items()]
     means = []
     for m in lengths:
         found = [
             _count(n, shots, f"{at}[{m!r}][{rep!r}]")
-            for at, counts in zones
-            for rep, n in _key(counts, m, at).items()
+            for at, by_length in zones.items()
+            for rep, n in _object(_key(by_length, m, at), f"{at}[{m!r}]", "counts").items()
         ]
         means.append(np.mean(found) / shots)
     return np.array([int(m) for m in lengths], dtype=float), np.array(means)
@@ -342,7 +369,8 @@ def decay_rate(lengths: np.ndarray, means: np.ndarray, *, asymptote: float) -> f
 
 def _spam(data: Mapping[str, Any], where: str) -> tuple[float, float]:
     """(P(1|0), P(0|1)): wrong outcomes for each prepared state, averaged over qubits."""
-    shots, survival = _shots(data, where), _key(data, "survival", where)
+    shots = _shots(data, where)
+    survival = _object(_key(data, "survival", where), f"{where}: survival", "qubits")
     rows = [(f"{where}: survival[{qubit!r}]", row) for qubit, row in survival.items()]
     wrong = []
     for state in ("0", "1"):

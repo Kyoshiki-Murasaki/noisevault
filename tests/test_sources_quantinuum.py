@@ -330,21 +330,21 @@ def test_dataset_file_missing_a_value_names_where(
     assert str(info.value) == message
 
 
+def _at(node: Any, path: tuple[str, ...]) -> Any:
+    for key in path:
+        node = node[key]
+    return node
+
+
 def _files_without(name: str, path: tuple[str, ...]) -> dict[str, bytes]:
     doc = json.loads(_files()[name])
-    parent = doc
-    for key in path[:-1]:
-        parent = parent[key]
-    del parent[path[-1]]
+    del _at(doc, path[:-1])[path[-1]]
     return {**_files(), name: json.dumps(doc).encode()}
 
 
 def _files_with(name: str, path: tuple[str, ...], value: Any) -> dict[str, bytes]:
     doc = json.loads(_files()[name])
-    parent = doc
-    for key in path[:-1]:
-        parent = parent[key]
-    parent[path[-1]] = value
+    _at(doc, path[:-1])[path[-1]] = value
     return {**_files(), name: json.dumps(doc).encode()}
 
 
@@ -412,6 +412,73 @@ def test_dataset_file_with_an_impossible_count_names_where(
     assert str(info.value) == message
 
 
+@pytest.mark.parametrize(
+    ("name", "path", "value", "message"),
+    [
+        (
+            "SQ_RB",
+            ("survival", "0"),
+            {},
+            f"{_DATA}/SQ_RB.json: survival['0'] has no sequence lengths",
+        ),
+        ("TQ_RB", ("survival",), {}, f"{_DATA}/TQ_RB.json: survival has no zones"),
+        (
+            "Memory_RB",
+            ("survival", "55", "64"),
+            {},
+            f"{_DATA}/Memory_RB.json: survival['55']['64'] has no counts",
+        ),
+        ("SPAM", ("survival",), {}, f"{_DATA}/SPAM.json: survival has no qubits"),
+        (
+            "SQ_RB",
+            ("survival", "0"),
+            [],
+            f"{_DATA}/SQ_RB.json: survival['0'] is not a JSON object",
+        ),
+        ("SPAM", ("survival", "3"), 5, f"{_DATA}/SPAM.json: survival['3'] is not a JSON object"),
+        (
+            "SQ_RB",
+            ("survival", "7", "4096"),
+            {"0": 50},
+            f"{_DATA}/SQ_RB.json: survival['0'] has no '4096'",
+        ),
+        (
+            "TQ_RB",
+            ("leakage_postselect", "(0, 1)", "x"),
+            {"0": 50},
+            f"{_DATA}/TQ_RB.json: leakage_postselect['(0, 1)'] has the sequence length 'x';"
+            " expected a whole number",
+        ),
+    ],
+    ids=[
+        "no-lengths",
+        "no-zones",
+        "no-counts",
+        "no-qubits",
+        "zone-array",
+        "spam-row-number",
+        "extra-length",
+        "length-not-a-number",
+    ],
+)
+def test_dataset_file_with_a_misshapen_map_names_where(
+    name: str, path: tuple[str, ...], value: Any, message: str
+) -> None:
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_data("H2-2", "2024_12_06", _files_with(name, path, value))
+    assert str(info.value) == message
+
+
+def test_rb_curves_measured_at_different_sequence_lengths_name_the_gap() -> None:
+    doc = json.loads(_files()["SQ_RB"])
+    for zone in doc["leakage_postselect"].values():
+        del zone["1024"]
+    damaged = {**_files(), "SQ_RB": json.dumps(doc).encode()}
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_data("H2-2", "2024_12_06", damaged)
+    assert str(info.value) == f"{_DATA}/SQ_RB.json: leakage_postselect['0'] has no '1024'"
+
+
 def _sampled_key_paths(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[str, ...]]:
     """Each key path, taking only the first and the last of the keys that number qubits,
     sequence lengths or repetitions, so the cases stay few."""
@@ -436,6 +503,23 @@ def test_a_dataset_file_missing_any_key_imports_or_raises_source_data_error(
 ) -> None:
     with contextlib.suppress(SourceDataError):
         quantinuum.from_data("H2-2", "2024_12_06", _files_without(name, path))
+
+
+@pytest.mark.parametrize(
+    ("name", "path"),
+    [
+        pytest.param(name, path, id=f"{name}:{'.'.join(path)}")
+        for name in quantinuum.FILES
+        for doc in [json.loads(_files()[name])]
+        for path in _sampled_key_paths(doc)
+        if path[0] != "sequence_info" and isinstance(_at(doc, path), dict)
+    ],
+)
+def test_emptying_any_object_the_import_reads_names_it(name: str, path: tuple[str, ...]) -> None:
+    where = f"{_DATA}/{name}.json: {path[0]}" + "".join(f"[{key!r}]" for key in path[1:])
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_data("H2-2", "2024_12_06", _files_with(name, path, {}))
+    assert str(info.value).startswith(f"{where} has no ")
 
 
 def test_a_failed_download_says_what_loads_offline(monkeypatch: pytest.MonkeyPatch) -> None:
