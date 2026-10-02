@@ -15,7 +15,7 @@ from __future__ import annotations
 import statistics
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from itertools import combinations
 from math import comb
 from typing import TYPE_CHECKING, Any
@@ -159,9 +159,10 @@ def diff(a: Profile, b: Profile, *, top: int = 5) -> ProfileDiff:
         )
     when_a, when_b = a.device.calibrated_at, b.device.calibrated_at
     delta = when_b - when_a if when_a and when_b else None
-    if delta is not None and delta < timedelta(0):
+    if a.id == b.id and delta is not None and delta < timedelta(0):
+        first, second = (f"{a.id}@{stamp}" for stamp in stamps(when_a, when_b))
         warnings.append(
-            f"{_ref(b)} is older than {_ref(a)}; before and after follow argument order, not time"
+            f"{second} is older than {first}; before and after follow argument order, not time"
         )
 
     qa, qb = _qubit_values(a.table), _qubit_values(b.table)
@@ -416,6 +417,21 @@ def _ref(profile: Profile) -> str:
     return f"{profile.id}@{when.date().isoformat()}" if when else profile.id
 
 
+def stamps(a: datetime | None, b: datetime | None) -> tuple[str | None, str | None]:
+    """Two calibration times as dates, or with the clock time when they share a date.
+
+    The clock is given to the minute, or to the second when the minutes agree. An undated
+    profile gives None.
+    """
+    if a and b:
+        a, b = a.astimezone(UTC), b.astimezone(UTC)
+        if a.date() == b.date() and a != b:
+            seconds = a.strftime("%H:%M") == b.strftime("%H:%M")
+            clock = "%Y-%m-%dT%H:%M:%SZ" if seconds else "%Y-%m-%dT%H:%MZ"
+            return a.strftime(clock), b.strftime(clock)
+    return (a.date().isoformat() if a else None, b.date().isoformat() if b else None)
+
+
 # formatting ---------------------------------------------------------------------------------
 
 
@@ -427,8 +443,13 @@ def fmt_time(value: float | None) -> str:
     return "-" if value is None else f"{value:.4g}"
 
 
+def fmt_us(value: float | None) -> str:
+    """Microseconds in a table column: one decimal, so the values line up."""
+    return "-" if value is None else f"{value:.1f}"
+
+
 def fmt_metric(metric: str, value: float | None) -> str:
-    return fmt_time(value) if metric in ("t1_us", "t2_us") else fmt_error(value)
+    return fmt_us(value) if metric in ("t1_us", "t2_us") else fmt_error(value)
 
 
 def fmt_relative(value: float | None) -> str:

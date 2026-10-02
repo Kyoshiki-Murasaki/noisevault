@@ -36,13 +36,13 @@ def test_pull_of_a_mistyped_ibm_device_names_the_close_one(monkeypatch) -> None:
         raise ibm_public._NotFound(url)
 
     monkeypatch.setattr(ibm_public, "fetch", fetch)
-    assert "did you mean ibm_fez?" in _error_and_hint(["pull", "ibm_fezz"])
+    assert "did you mean 'ibm_fez'?" in _error_and_hint(["pull", "ibm_fezz"])
 
 
 def test_pull_of_a_mistyped_ionq_device_names_the_close_one(monkeypatch) -> None:
     backends = [{"backend": "qpu.forte-1"}, {"backend": "qpu.aria-1"}, {"backend": "simulator"}]
     monkeypatch.setattr(ionq, "_get", lambda url: json.dumps(backends).encode())
-    with pytest.raises(nv.SourceUnavailable, match=r"did you mean qpu\.forte-1\?"):
+    with pytest.raises(nv.SourceUnavailable, match=r"did you mean 'qpu\.forte-1'\?"):
         ionq.pull("ionq_forte-11")
 
 
@@ -114,7 +114,10 @@ _NO_LIVE_GOOGLE = (
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
-        ("ibmm", "unknown source 'ibmm'; did you mean ibm? choose one of ibm, ibm-account, ionq"),
+        (
+            "ibmm",
+            "unknown source 'ibmm'; did you mean 'ibm'? choose one of ibm, ibm-account, ionq",
+        ),
         ("IBM-Account", None),
         ("googel", _NO_LIVE_GOOGLE.format(source="googel")),
         ("google", _NO_LIVE_GOOGLE.format(source="google")),
@@ -158,9 +161,9 @@ def test_an_ambiguous_ref_in_python_keeps_the_python_fix(vault: Path) -> None:
 @pytest.mark.parametrize(
     ("args", "error"),
     [
-        (["--bogus"], "error: no such option: --bogus\nhint: run nv --help\n"),
-        (["--vresion"], "error: no such option: --vresion (Possible options: --version)\n"),
-        (["--bogus", "list"], "error: no such option: --bogus\nhint: run nv --help\n"),
+        (["--bogus"], "error: no such option '--bogus'\nhint: run nv --help\n"),
+        (["--vresion"], "error: no such option '--vresion'; did you mean '--version'?\n"),
+        (["--bogus", "list"], "error: no such option '--bogus'\nhint: run nv --help\n"),
     ],
 )
 def test_a_mistyped_top_level_option_is_one_error_and_at_most_one_hint(

@@ -72,7 +72,7 @@ print(sim.report.summary())
 # approximated: T2 of qubit 87: clamped to 2*T1 (the stated T2 exceeds 2*T1)
 # omitted: idle time outside explicit delays (insert delays with transpile(circuit, sim, scheduling_method='alap'))
 # unknown (no noise applied): preparation (reset) error of qubits [0, 1, 2, 3, 4, 5, 6, 7, ...] (156 qubits)
-# clamped: 82 gate(s) noisier than stated because relaxation alone exceeds the stated error; largest cz[91, 98] 0.00308 -> 0.0039
+# clamped: 82 gates noisier than stated because relaxation alone exceeds the stated error; largest cz[91, 98] 0.00308 -> 0.0039
 # used: cz took the calibration recorded for the opposite qubit order once
 # Calibration-derived models approximate the hardware; they are not a digital twin.
 ```

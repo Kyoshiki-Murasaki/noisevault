@@ -77,7 +77,7 @@ def test_unlisted_device_points_to_the_bundled_snapshot(served: list[str]) -> No
         ibm_public.pull("ibm_torino")
     assert info.value.message == (
         "ibm_torino is not listed on the public endpoint (it lists ibm_fez, ibm_kingston);"
-        " did you mean ibm_kingston? if not, it may be retired"
+        " did you mean 'ibm_kingston'? if not, it may be retired"
     )
     assert info.value.hint == "ibm_torino is bundled, so nv.load('ibm_torino') loads it offline"
 
@@ -87,7 +87,7 @@ def test_unlisted_device_close_to_a_listed_one_names_it(served: list[str]) -> No
         ibm_public.pull("ibm_fezz")
     assert info.value.message == (
         "ibm_fezz is not listed on the public endpoint (it lists ibm_fez, ibm_kingston);"
-        " did you mean ibm_fez? if not, it may be retired"
+        " did you mean 'ibm_fez'? if not, it may be retired"
     )
     assert info.value.hint == "if your IBM account can see it, pull with source='ibm-account'"
 

@@ -105,7 +105,9 @@ def check_metric(kind: MetricKind, value: float | Sequence[float], num_qubits: i
         "depolarizing_param": max_depolarizing_param(num_qubits),
     }[kind]
     if not 0 <= value <= upper + _TOL:  # type: ignore[operator]
-        raise ValueError(f"{kind} of a {num_qubits}-qubit gate must be in [0, {upper:.6g}]")
+        raise ValueError(
+            f"{kind} of a {num_qubits}-qubit gate must be in [0, {upper:.6g}], got {value!r}"
+        )
 
 
 def pauli_labels(num_qubits: int) -> tuple[str, ...]:

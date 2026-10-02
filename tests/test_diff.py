@@ -8,7 +8,7 @@ import pytest
 from conftest import toy
 
 import noisevault as nv
-from noisevault.diff import describe_delta, diff
+from noisevault.diff import describe_delta, diff, fmt_metric
 from noisevault.profile import Profile
 
 
@@ -147,7 +147,31 @@ def test_added_and_removed_qubits_and_other_devices_are_flagged() -> None:
     assert result.qubits_added == (3, 4) and result.qubits_removed == ()
     assert diff(bigger, _profile()).qubits_removed == (3, 4)
     assert "different devices (test_toy and test_other)" in result.warnings[0]
-    assert "older" in diff(bigger, _profile()).warnings[-1]
+    assert diff(bigger, _profile()).warnings == (
+        "these are different devices (test_other and test_toy); qubits and pairs are matched"
+        " by index",
+    )
+
+
+def test_an_older_second_calibration_of_one_device_is_flagged_with_its_time() -> None:
+    older = _later(device={"calibrated_at": "2024-12-31T06:00:00Z"})
+    assert diff(_profile(), older).warnings == (
+        "test_toy@2024-12-31 is older than test_toy@2025-01-01; before and after follow"
+        " argument order, not time",
+    )
+    same_day = _later(device={"calibrated_at": "2025-01-01T06:00:00Z"})
+    assert diff(same_day, _profile()).warnings == (
+        "test_toy@2025-01-01T00:00Z is older than test_toy@2025-01-01T06:00Z; before and after"
+        " follow argument order, not time",
+    )
+    assert diff(_profile(), same_day).warnings == ()
+
+
+def test_microseconds_print_with_one_decimal_in_tables() -> None:
+    values = (190, 99.98, 48.806, None)
+    assert [fmt_metric("t1_us", v) for v in values] == ["190.0", "100.0", "48.8", "-"]
+    assert fmt_metric("t2_us", 1e7) == "10000000.0"
+    assert fmt_metric("error_1q", 2.29e-4) == "2.29e-04"
 
 
 def test_identical_profiles_say_so() -> None:

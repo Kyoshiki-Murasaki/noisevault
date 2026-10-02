@@ -8,7 +8,7 @@ from conftest import require, toy
 
 from noisevault.errors import NoiseApproximationWarning, UnsupportedEffect
 from noisevault.profile import Profile
-from noisevault.report import HONESTY, Report
+from noisevault.report import HONESTY, Clamp, Report
 
 
 def _report(**effects) -> tuple[Profile, Report]:
@@ -78,6 +78,23 @@ def test_summary_states_each_count_as_a_sentence() -> None:
     ]
     assert "=" not in used[0]
     assert report.to_dict()["events"]["reversed_record_used"] == {"cz": 20}
+
+
+def test_clamps_are_counted_as_one_gate_or_several_gates() -> None:
+    _, report = _report()
+    report.clamped.append(Clamp("cz", (0, 1), 0.003, 0.0039))
+    assert "clamped: 1 gate noisier than stated because" in report.summary()
+    report.clamped.append(Clamp("cz", (1, 2), 0.003, 0.0041))
+    report.clamped.append(Clamp("sx", (0,), 0.01, 0.002))
+    lines = report.summary().splitlines()
+    assert (
+        "clamped: 2 gates noisier than stated because relaxation alone exceeds the stated error;"
+        " largest cz[1, 2] 0.003 -> 0.0041" in lines
+    )
+    assert (
+        "clamped: 1 gate less noisy than stated because the strongest depolarizing noise on top"
+        " of relaxation falls short; largest sx[0] 0.01 -> 0.002" in lines
+    )
 
 
 def test_calibration_qualifiers_of_used_gates_are_reported() -> None:

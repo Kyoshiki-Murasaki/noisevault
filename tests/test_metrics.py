@@ -83,6 +83,12 @@ def test_check_metric_rejects_unphysical_values(kind, value, n) -> None:
         metrics.check_metric(kind, value, n)
 
 
+def test_an_out_of_range_metric_error_names_the_value() -> None:
+    message = r"avg_infidelity of a 2-qubit gate must be in \[0, 0\.8\], got 0\.93$"
+    with pytest.raises(ValueError, match=message):
+        metrics.check_metric("avg_infidelity", 0.93, 2)
+
+
 @pytest.mark.parametrize(
     ("kind", "value", "n"),
     [

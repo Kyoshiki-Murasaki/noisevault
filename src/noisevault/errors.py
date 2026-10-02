@@ -62,9 +62,9 @@ class SourceDataError(NoiseVaultError, ValueError):
 
 
 def did_you_mean(given: str, choices: Iterable[str]) -> str:
-    """``did you mean X? `` for the choice closest to a mistyped value, or '' when none is close."""
+    """``did you mean 'X'? `` for the choice closest to a mistyped value; '' when none is close."""
     close = difflib.get_close_matches(given, list(choices), n=1)
-    return f"did you mean {close[0]}? " if close else ""
+    return f"did you mean '{close[0]}'? " if close else ""
 
 
 class NoiseVaultWarning(UserWarning):

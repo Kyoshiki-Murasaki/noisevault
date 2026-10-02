@@ -16,7 +16,7 @@ import re
 import sys
 import warnings
 import zlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -29,10 +29,20 @@ from pydantic import ValidationError
 from rich.console import Console, RenderableType
 from rich.table import Table
 from rich.text import Text
-from typer.core import TyperGroup
+from typer.core import TyperCommand, TyperGroup
+from typer.main import get_click_type
 
 from . import __version__, catalog
-from .diff import METRICS, describe_delta, fmt_error, fmt_metric, fmt_relative, fmt_time
+from .diff import (
+    METRICS,
+    describe_delta,
+    fmt_error,
+    fmt_metric,
+    fmt_relative,
+    fmt_time,
+    fmt_us,
+    stamps,
+)
 from .errors import (
     REPOSITORY,
     NoiseVaultError,
@@ -52,8 +62,36 @@ from .table import GateNoise
 
 # Click's UsageError; typer exports only this subclass of it.
 _USAGE_ERROR = typer.BadParameter.__mro__[1]
+_CLICK_ERRORS = sys.modules[_USAGE_ERROR.__module__]
 # Raised by a bare `nv` once the help is printed; older click has no such class.
-_NO_ARGS = getattr(sys.modules[_USAGE_ERROR.__module__], "NoArgsIsHelpError", ())
+_NO_ARGS = getattr(_CLICK_ERRORS, "NoArgsIsHelpError", ())
+_STRING = get_click_type(annotation=str, parameter_info=typer.Argument())
+
+
+class _Command(TyperCommand):
+    """A usage line names an argument as REF, not {ref}."""
+
+    def collect_usage_pieces(self, ctx: Any) -> list[str]:
+        return [piece.strip("{}") for piece in super().collect_usage_pieces(ctx)]
+
+
+class _App(typer.Typer):
+    def command(self, *args: Any, cls: Any = None, **kwargs: Any) -> Any:
+        return super().command(*args, cls=cls or _Command, **kwargs)
+
+
+class _PlainString(type(_STRING)):
+    """A str argument whose help names it by its metavar alone, with no <str> beside it."""
+
+    def get_metavar(self, param: Any, ctx: Any = None) -> str:
+        return ""
+
+
+_PLAIN = _PlainString()
+
+
+def _argument(metavar: str, text: str) -> Any:
+    return typer.Argument(metavar=metavar, click_type=_PLAIN, help=text)
 
 
 class _Commands(TyperGroup):
@@ -90,24 +128,45 @@ class _Commands(TyperGroup):
             )
 
 
+_VALUE_HINTS = {
+    "--qubits": "qubit indices, e.g. --qubits 0,1,2",
+    "--tech": "a technology, e.g. --tech trapped_ion",
+    "--vendor": "a vendor, e.g. --vendor ibm",
+    "--framework": "one or more of qiskit,cirq,pennylane,stim, e.g. --framework cirq,stim",
+    "--top": "a count, e.g. --top 10",
+    "--at": "a date or time, e.g. --at 2025-02-26",
+    "--source": "ibm, ibm-account or ionq, e.g. --source ionq",
+    "--output": "a file name, e.g. --output fez.json",
+    "-o": "a file name, e.g. -o fez.json",
+}
+
+
 def _usage_error(exc: Any) -> NoReturn:
+    command = exc.ctx.command_path if exc.ctx else "nv"
+    if isinstance(exc, _CLICK_ERRORS.NoSuchOption):
+        params = exc.ctx.command.get_params(exc.ctx) if exc.ctx else []
+        guess = did_you_mean(exc.option_name, [opt for p in params for opt in p.opts]).rstrip()
+        message = f"no such option '{exc.option_name}'" + (f"; {guess}" if guess else "")
+        _fail(message, None if guess else f"run {command} --help", code=2)
     message = exc.format_message().rstrip(".").replace(". Did you mean", "; did you mean")
     message = message[:1].lower() + message[1:]
-    hint = None
-    if not re.search(r"did you mean|possible options", message, re.I):
-        hint = f"run {exc.ctx.command_path if exc.ctx else 'nv'} --help"
+    option = getattr(exc, "option_name", None)
+    if option in _VALUE_HINTS:
+        hint = f"give {_VALUE_HINTS[option]}"
+    else:
+        hint = None if "did you mean" in message else f"run {command} --help"
     _fail(message, hint, code=2)
 
 
 _REF_HELP = "Profile id (ibm_fez), id@date, or a file path."
 _START = """
  Start with:
-   nv list             list the bundled devices, offline
-   nv show ibm_fez     show one device's calibration
-   nv check ibm_fez    check each installed framework export
+   nv list             the bundled devices, offline
+   nv show ibm_fez     one device's calibration
+   nv check ibm_fez    each export against the reference
 """
 
-app = typer.Typer(
+app = _App(
     cls=_Commands,
     no_args_is_help=True,
     add_completion=False,
@@ -128,6 +187,7 @@ _PACKAGES: dict[str, str | None] = {
     "stim": "stim",
     "pymatching": None,
 }
+_EXTRAS = sorted({extra for extra in _PACKAGES.values() if extra})
 _INSTALL_ALL = install_hint("all")
 
 
@@ -137,7 +197,7 @@ class _SourceWords(NamedTuple):
 
 
 _SOURCE_KINDS = {
-    "package_snapshot": _SourceWords("package", "package snapshot"),
+    "package_snapshot": _SourceWords("SDK", "SDK snapshot"),
     "public_api": _SourceWords("public API", "public API"),
     "account_api": _SourceWords("account", "account API"),
     "user_file": _SourceWords("imported", "imported file"),
@@ -145,6 +205,23 @@ _SOURCE_KINDS = {
     "vendor_sample": _SourceWords("sample", "vendor sample"),
     "hand_written": _SourceWords("by hand", "written by hand"),
     "derived": _SourceWords("derived", "derived from another profile"),
+}
+_WORDS = {
+    "ibm": "IBM",
+    "google": "Google",
+    "quantinuum": "Quantinuum",
+    "ionq": "IonQ",
+    "iqm": "IQM",
+    "rigetti": "Rigetti",
+    "quera": "QuEra",
+    "coherent_overrotation": "coherent over-rotation",
+    "crosstalk_zz": "ZZ crosstalk",
+    "crosstalk_measurement": "measurement crosstalk",
+}
+_REDISTRIBUTION = {
+    "yes": "may be redistributed",
+    "no": "may not be redistributed",
+    "unknown": "redistribution unknown",
 }
 _FOREIGN_ERROR_HINTS: tuple[tuple[type[BaseException], str], ...] = (
     (ImportError, f"install the frameworks: {_INSTALL_ALL}"),
@@ -189,9 +266,12 @@ def main(
 @app.command("list")
 def list_profiles(
     tech: Annotated[
-        str | None, typer.Option("--tech", help="Only this technology, e.g. trapped_ion.")
+        str | None,
+        typer.Option("--tech", metavar="NAME", help="Only this technology, e.g. trapped_ion."),
     ] = None,
-    vendor: Annotated[str | None, typer.Option("--vendor", help="Only this vendor.")] = None,
+    vendor: Annotated[
+        str | None, typer.Option("--vendor", metavar="NAME", help="Only this vendor.")
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
 ) -> None:
     """List the profiles you can load offline: the bundled set and your vault."""
@@ -227,26 +307,19 @@ def list_profiles(
             day = same_day[info.id, stamp.date()] if stamp else []
             row["when"] = _when(stamp, day) if stamp else "undated"
             row["short_ref"] = info.ref if len(day) > 1 else _ref_on_day(info.id, stamp)
-            row["shown_license"] = (row["license"] or "-").split(" (")[0]
+            row["shown_license"] = (row["license"] or "unknown").split(" (")[0]
         newest_first = sorted(
             zip(rows, infos, strict=True),
             key=lambda pair: (pair[1].id, -_epoch(pair[1].calibrated_at)),
         )
         rows = [row for row, _ in newest_first]
         licenses = {row["shown_license"] for row in rows}
-        shared = licenses.pop() if len(licenses) == 1 and "-" not in licenses else None
+        shared = licenses.pop() if len(licenses) == 1 and "unknown" not in licenses else None
         columns = ["id", "date", "qubits", "processor", "source"]
         if shared is None:
             columns.append("license")
-        unlimited = out.options.update_width(10_000)
-        table = _list_table(rows, columns)
-        for column in _LIST_DROPS:
-            if out.measure(table, options=unlimited).maximum <= out.width:
-                break
-            if column in columns:
-                columns.remove(column)
-                table = _list_table(rows, columns)
-        _emit(table, natural_width=out.measure(table, options=unlimited).maximum)
+        table = _fit(lambda shown: _list_table(rows, shown), columns, _LIST_DROPS)
+        _emit(table, natural_width=_natural_width(table))
         if any(r["location"] == "vault" for r in rows):
             _emit("* in your vault (nv doctor shows its folder)")
         count = _count(len(rows), "profile")
@@ -261,12 +334,28 @@ def list_profiles(
 _LIST_DROPS = ("source", "processor", "license")
 
 
+def _fit(build: Callable[[list[str]], Table], columns: list[str], drops: Sequence[str]) -> Table:
+    """The table of ``columns``, less the first of ``drops`` that make it fit the terminal."""
+    table = build(columns)
+    for column in drops:
+        if _natural_width(table) <= out.width:
+            break
+        if column in columns:
+            columns.remove(column)
+            table = build(columns)
+    return table
+
+
+def _natural_width(table: Table) -> int:
+    return out.measure(table, options=out.options.update_width(10_000)).maximum
+
+
 def _licenses(rows: list[dict[str, Any]]) -> str:
     by_license: dict[str, list[str]] = {}
     for row in rows:
         by_license.setdefault(row["shown_license"], []).append(row["short_ref"])
     common, *others = sorted(by_license, key=lambda name: -len(by_license[name]))
-    named = {name: "license unknown" if name == "-" else name for name in by_license}
+    named = {name: "license unknown" if name == "unknown" else name for name in by_license}
     if not others:
         return named[common]
     exceptions = "; ".join(f"{', '.join(by_license[name])} ({named[name]})" for name in others)
@@ -332,9 +421,10 @@ def _list_row(info: catalog.ProfileInfo) -> dict[str, Any]:
 
 @app.command()
 def show(
-    ref: Annotated[str, typer.Argument(help=_REF_HELP)],
+    ref: Annotated[str, _argument("REF", _REF_HELP)],
     qubits: Annotated[
-        str | None, typer.Option("--qubits", help="Also list these qubits, e.g. 0,1,2.")
+        str | None,
+        typer.Option("--qubits", metavar="LIST", help="Also list these qubits, e.g. 0,1,2."),
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
 ) -> None:
@@ -387,7 +477,7 @@ def card(profile: Profile) -> dict[str, Any]:
         "technology": dev.technology,
         "num_qubits": dev.num_qubits,
         "connectivity": _connectivity(profile),
-        "natives": [_native(profile, name) for name in profile.gates],
+        "natives": [_native(profile, name) for name in _native_order(profile)],
         "median_t1_us": medians.t1_us,
         "median_t2_us": medians.t2_us,
         "median_readout_error": medians.readout_error,
@@ -401,6 +491,17 @@ def card(profile: Profile) -> dict[str, Any]:
         "notes": list(prov.notes),
         "effects": _effects(profile),
     }
+
+
+def _native_order(profile: Profile) -> list[str]:
+    """1-qubit gates, then 2-qubit gates, then reset, by name within each."""
+    table = profile.table
+    return sorted(profile.gates, key=lambda name: (name == "reset", table.arity(name) or 0, name))
+
+
+def _words(token: str) -> str:
+    """A schema token (vendor, technology, data kind, effect type) as prose."""
+    return _WORDS.get(token) or token.replace("_", " ")
 
 
 def _assumptions(profile: Profile) -> list[str]:
@@ -474,12 +575,13 @@ def _print_card(
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold", no_wrap=True)
     grid.add_column(overflow="fold")
+    vendor = data["vendor"]
     device = ", ".join(
         x
         for x in (
-            data["vendor"],
+            vendor and _words(vendor),
             data["processor"],
-            data["technology"],
+            _words(data["technology"]),
             f"{data['num_qubits']} qubits",
         )
         if x
@@ -496,13 +598,11 @@ def _print_card(
     if data["disabled_qubits"]:
         grid.add_row("disabled", "qubits " + ", ".join(map(str, data["disabled_qubits"])))
     if not brief:
-        _add_lines(grid, "not modeled", data["effects"])
+        _add_lines(grid, "not modeled", [_plain_effect(line) for line in data["effects"]])
     prov = data["provenance"]
     grid.add_row("provenance", _provenance(prov))
-    grid.add_row(
-        "license",
-        f"{prov.get('license') or 'unknown'}, redistributable {prov.get('redistributable')}",
-    )
+    redistribution = _REDISTRIBUTION[prov["redistributable"]]
+    grid.add_row("license", f"{prov.get('license') or 'unknown'}, {redistribution}")
     if prov.get("attribution"):
         grid.add_row("attribution", prov["attribution"])
     grid.add_row("fingerprint", data["fingerprint"])
@@ -517,9 +617,14 @@ def _add_lines(grid: Table, label: str, items: list[str]) -> None:
         grid.add_row(label if i == 0 else "", item)
 
 
+def _plain_effect(line: str) -> str:
+    kind, _, rest = line.partition(" ")
+    return f"{_words(kind)} {rest}"
+
+
 def _provenance(prov: dict[str, Any]) -> str:
     kind = prov.get("data_kind", "unknown")
-    words = ["unknown kind" if kind == "unknown" else kind.replace("_", " ")]
+    words = ["unknown kind" if kind == "unknown" else _words(kind)]
     if prov.get("source_kind") in _SOURCE_KINDS:
         words.append(_SOURCE_KINDS[prov["source_kind"]].show_phrase)
     if prov.get("source"):
@@ -623,8 +728,8 @@ def _print_qubits(rows: list[dict[str, Any]]) -> None:
     cells = [
         [
             str(r["qubit"]),
-            fmt_time(r["t1_us"]),
-            fmt_time(r["t2_us"]),
+            fmt_us(r["t1_us"]),
+            fmt_us(r["t2_us"]),
             fmt_error(r["p1_given_0"]),
             fmt_error(r["p0_given_1"]),
             f"{fmt_error(r['error_1q'])} ({r['gate_1q']})" if r["gate_1q"] else "-",
@@ -649,20 +754,24 @@ def _print_qubits(rows: list[dict[str, Any]]) -> None:
 
 @app.command()
 def pull(
-    device: Annotated[str, typer.Argument(help="Device to pull, e.g. ibm_fez or ionq_forte-1.")],
+    device: Annotated[str, _argument("DEVICE", "Device to pull, e.g. ibm_fez or ionq_forte-1.")],
     at: Annotated[
         str | None,
         typer.Option(
             "--at",
+            metavar="DATE",
             help="Calibration in effect at this date or time (IBM public, IBM account, IonQ).",
         ),
     ] = None,
     source: Annotated[
         str | None,
-        typer.Option("--source", help="ibm, ibm-account or ionq; default from the name."),
+        typer.Option(
+            "--source", metavar="NAME", help="ibm, ibm-account or ionq; default from the name."
+        ),
     ] = None,
     output: Annotated[
-        Path | None, typer.Option("--output", "-o", help="Save here instead of the vault.")
+        Path | None,
+        typer.Option("--output", "-o", metavar="FILE", help="Save here instead of the vault."),
     ] = None,
 ) -> None:
     """Fetch a live calibration and save it as a profile (network)."""
@@ -698,10 +807,10 @@ def _check_writable(output: Path) -> None:
 @app.command()
 def diff(
     before: Annotated[
-        str, typer.Argument(help="First profile id (ibm_fez), id@date, or a file path.")
+        str, _argument("BEFORE", "First profile id (ibm_fez), id@date, or a file path.")
     ],
     after: Annotated[
-        str, typer.Argument(help="Second profile id (ibm_kyiv), id@date, or a file path.")
+        str, _argument("AFTER", "Second profile id (ibm_kyiv), id@date, or a file path.")
     ],
     top: Annotated[
         int, typer.Option("--top", min=0, metavar="N", help="Qubits and pairs to list.")
@@ -715,9 +824,13 @@ def diff(
         if as_json:
             _echo_json(result.to_dict())
             return
-        _emit(
-            Text.from_markup(f"{_diff_title(first, second)}  ({describe_delta(result.time_delta)})")
-        )
+        title = Text.from_markup(_diff_title(first, second))
+        delta = f"({describe_delta(result.time_delta)})"
+        if title.cell_len + 2 + len(delta) <= out.width:
+            _emit(Text.assemble(title, f"  {delta}"))
+        else:
+            _emit(title)
+            _emit(f"  {delta}")
         for warning in result.warnings:
             err.print(f"warning: {warning}", markup=False)
         if result.identical:
@@ -783,17 +896,12 @@ def _runs(indices: Sequence[int]) -> str:
 
 
 def _diff_title(first: Profile, second: Profile) -> str:
-    """``a@date -> b@date``; one device is named once, with times when the dates match."""
-    a, b = first.device.calibrated_at, second.device.calibrated_at
+    """``a@date -> b@date``, one device named once; with the times when the dates match."""
+    when = stamps(first.device.calibrated_at, second.device.calibrated_at)
     if first.id != second.id:
-        return (
-            f"[bold]{_ref_on_day(first.id, a)}[/bold] -> [bold]{_ref_on_day(second.id, b)}[/bold]"
-        )
-    if a and b and a.date() == b.date() and a != b:
-        when = (_iso(a), _iso(b))
-    else:
-        when = tuple(t.date().isoformat() if t else "undated" for t in (a, b))
-    return f"[bold]{first.id}[/bold] {when[0]} -> {when[1]}"
+        refs = (f"{p.id}@{w}" if w else p.id for p, w in zip((first, second), when, strict=True))
+        return " -> ".join(f"[bold]{ref}[/bold]" for ref in refs)
+    return f"[bold]{first.id}[/bold] {when[0] or 'undated'} -> {when[1] or 'undated'}"
 
 
 def _ref_on_day(device: str, when: datetime | None) -> str:
@@ -829,11 +937,13 @@ def _change(change: Any) -> str:
 
 @app.command()
 def check(
-    ref: Annotated[str, typer.Argument(help=_REF_HELP)],
+    ref: Annotated[str, _argument("REF", _REF_HELP)],
     framework: Annotated[
         str | None,
         typer.Option(
-            "--framework", help="Comma-separated: qiskit,cirq,pennylane,stim (default all)."
+            "--framework",
+            metavar="NAMES",
+            help="Comma-separated: qiskit,cirq,pennylane,stim (default all).",
         ),
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
@@ -874,64 +984,90 @@ def check(
             title = Text(_ref(profile), style="bold")
             _emit(Text.assemble(title, f"{newest} {profile.short_fingerprint} on qubits {chain}"))
             _emit(f"{len(result.circuits)} circuits: {', '.join(c.name for c in result.circuits)}")
-            table = Table(box=None, pad_edge=False, header_style="bold")
-            for column in ("framework", "result", "TVD", "tolerance", "circuits", "method"):
-                table.add_column(
-                    column, justify="right" if column in ("TVD", "tolerance") else "left"
-                )
-            for f in result.frameworks:
-                verdict = "[green]pass[/green]" if f.passed else "[red]FAIL[/red]"
-                reduced = {n.circuit for n in f.not_run if n.ran_without}
-                ran = len({c.circuit for c in f.circuits} - reduced)
-                counted = f"{ran} of {len(result.circuits)}"
-                kinds = {c.sampled for c in f.circuits}
-                method = {
-                    frozenset({False}): "exact",
-                    frozenset({True}): f"{result.shots} shots, 5 sigma",
-                }.get(frozenset(kinds), f"exact + {result.shots} shots")
-                table.add_row(
-                    f.framework,
-                    verdict,
-                    f"{f.worst.tvd:.1e}",
-                    f"{f.worst.tolerance:.1e}",
-                    f"{counted}, {len(reduced)} reduced" if reduced else counted,
-                    method,
-                )
-            for name, _ in result.skipped:
-                table.add_row(name, "not installed" if name in missing else "skipped")
-            _emit(table)
+            rows = [_check_row(f, result) for f in result.frameworks]
+            rows += [
+                {"framework": name, "result": "not installed" if name in missing else "skipped"}
+                for name, _ in result.skipped
+            ]
+            columns = ["framework", "result", "TVD", "tolerance", "circuits", "method"]
+            table = _fit(lambda shown: _check_table(rows, shown), columns, _CHECK_DROPS)
+            _emit(table, natural_width=_natural_width(table))
             for f in result.frameworks:
                 for part in f.not_run:
                     _emit(f"{f.framework}: {part.describe()}")
             for name, reason in result.skipped:
                 if name not in missing:
-                    out.print(f"{name} skipped: {reason}", markup=False, soft_wrap=True)
+                    _emit(f"{name}: {reason}")
             if missing:
                 command = install_hint(",".join(missing))
                 out.print(f"To add the missing frameworks: {command}", markup=False, soft_wrap=True)
             if any(f.passed for f in result.frameworks):
                 _emit(NOTE)
         if len(missing) == len(names):
-            _none_installed(missing, named=framework is not None)
+            named = ",".join(names) if framework is not None else None
+            _none_installed(missing, ref=ref, framework=named)
         if not result.frameworks:
             raise NoiseVaultError("no framework could run the check")
         if not result.passed:
             raise typer.Exit(1)
 
 
-def _none_installed(missing: list[str], *, named: bool) -> NoReturn:
-    if named:
+_CHECK_DROPS = ("tolerance", "circuits")
+
+
+def _check_row(f: Any, result: Any) -> dict[str, str]:
+    reduced = {n.circuit for n in f.not_run if n.ran_without}
+    ran = len({c.circuit for c in f.circuits} - reduced)
+    counted = f"{ran} of {len(result.circuits)}"
+    kinds = frozenset(c.sampled for c in f.circuits)
+    method = {
+        frozenset({False}): "exact",
+        frozenset({True}): f"{result.shots} shots, 5 sigma",
+    }.get(kinds, f"exact + {result.shots} shots")
+    return {
+        "framework": f.framework,
+        "result": "[green]pass[/green]" if f.passed else "[red]FAIL[/red]",
+        "TVD": f"{f.worst.tvd:.1e}",
+        "tolerance": f"{f.worst.tolerance:.1e}",
+        "circuits": f"{counted}, {len(reduced)} reduced" if reduced else counted,
+        "method": method,
+    }
+
+
+def _check_table(rows: list[dict[str, str]], columns: list[str]) -> Table:
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for column in columns:
+        justify = "right" if column in ("TVD", "tolerance") else "left"
+        table.add_column(column, justify=justify, no_wrap=True)
+    for row in rows:
+        table.add_row(*(row.get(column, "") for column in columns))
+    return table
+
+
+def _none_installed(missing: list[str], *, ref: str, framework: str | None) -> NoReturn:
+    first, *others = missing
+    if framework is None:
+        error = "none is installed"
+        extra = first
+        lines = [
+            install_hint(first),
+            f"(or {', '.join(others[:-1])} or {others[-1]}, or several, as in"
+            f" noisevault[{first},{others[-1]}])",
+        ]
+        command = f"nv check {ref}"
+    else:
         which = " and ".join(filter(None, (", ".join(missing[:-1]), missing[-1])))
         error = f"{which} {'is' if len(missing) == 1 else 'are'} not installed"
-        hint = install_hint(",".join(missing))
-    else:
-        first, *others = missing
-        error = "none is installed"
-        hint = (
-            f"{install_hint(first)}\n      (or {', '.join(others[:-1])} or {others[-1]},"
-            f" or several, as in noisevault[{first},{others[-1]}])"
-        )
-    _fail(f"nv check needs a framework to check, and {error}", hint)
+        extra = ",".join(missing)
+        lines = [install_hint(extra)]
+        command = f"nv check {ref} --framework {framework}"
+    lines.append(f"or, with uv and no install: {_uvx_hint(extra, command)}")
+    _fail(f"nv check needs a framework to check, and {error}", "\n      ".join(lines))
+
+
+def _uvx_hint(extra: str, command: str) -> str:
+    """The uvx command that runs ``command`` with an optional extra, installing nothing."""
+    return f'uvx --from "noisevault[{extra}] @ git+{REPOSITORY}" {command}'
 
 
 # cite, validate, doctor, schema ---------------------------------------------------------------
@@ -939,7 +1075,7 @@ def _none_installed(missing: list[str], *, named: bool) -> NoReturn:
 
 @app.command()
 def cite(
-    ref: Annotated[str, typer.Argument(help=_REF_HELP)],
+    ref: Annotated[str, _argument("REF", _REF_HELP)],
     bibtex: Annotated[bool, typer.Option("--bibtex", help="Print a BibTeX entry.")] = False,
 ) -> None:
     """Print a citation for a profile, with its fingerprint."""
@@ -949,28 +1085,28 @@ def cite(
 
 @app.command()
 def validate(
-    file: Annotated[Path, typer.Argument(help="Profile: .json or .json.gz, format 1.0 or 0.1.")],
+    file: Annotated[str, _argument("FILE", "Profile: .json or .json.gz, format 1.0 or 0.1.")],
     strict: Annotated[bool, typer.Option("--strict", help="Treat warnings as errors.")] = False,
 ) -> None:
     """Check a profile file against the format rules."""
+    path = Path(file)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
-            profile = load_file(file)
+            profile = load_file(path)
         except FileNotFoundError:
-            _fail(f"no file {file}", "check the path")
+            _fail(f"no file {path}", "check the path")
         except ValidationError as exc:
             for line in _validation_lines(exc):
                 err.print(f"error: {line}", markup=False)
             raise typer.Exit(1) from None
         except _UNREADABLE as exc:
-            _fail(*_unreadable(file, exc))
+            _fail(*_unreadable(path, exc))
     notes = [str(w.message) for w in caught] + _soft_issues(profile)
-    when = _iso(profile.device.calibrated_at) or "undated"
     _emit(
-        f"ok: {profile.id} calibrated {when}, {profile.device.num_qubits} qubits,"
-        f" {len(profile.gates)} gates, {len(profile.calibrations)} calibration records,"
-        f" {profile.short_fingerprint}"
+        f"ok: {_ref_on_day(profile.id, profile.device.calibrated_at)} {profile.short_fingerprint},"
+        f" {_count(profile.device.num_qubits, 'qubit')}, {_count(len(profile.gates), 'gate')},"
+        f" {_count(len(profile.calibrations), 'record')}"
     )
     for note in notes:
         err.print(f"warning: {note}", markup=False)
@@ -999,11 +1135,12 @@ def doctor() -> None:
     _emit(f"bundled profiles: {len(catalog.bundled_profiles())}")
     extras = sorted({extra for p in missing if (extra := _PACKAGES[p])})
     if extras:
-        command = install_hint(",".join(extras))
-        out.print(f"To add the missing frameworks: {command}", markup=False, soft_wrap=True)
-    loose = [p for p in missing if _PACKAGES[p] is None]
-    if loose:
-        _emit(f"To add {', '.join(loose)}: pip install {' '.join(loose)}")
+        extra = "all" if extras == _EXTRAS else ",".join(extras)
+        out.print(
+            f"To add the missing frameworks: {install_hint(extra)}", markup=False, soft_wrap=True
+        )
+        uvx = _uvx_hint(extra, "nv check ibm_fez")
+        out.print(f"Or, with uv and no install: {uvx}", markup=False, soft_wrap=True)
 
 
 @app.command()
@@ -1037,6 +1174,7 @@ _UNREADABLE = (ValueError, OSError, EOFError, zlib.error)
 
 
 _PROFILE_FILE = "give a profile file (.json or .json.gz)"
+_DAMAGED_FILE = "the file is damaged or cut short; pull or export it again"
 
 
 class _FileProblem(NamedTuple):
@@ -1052,9 +1190,9 @@ def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
         )
     if isinstance(exc, json.JSONDecodeError):
         where = f"{exc.msg} at line {exc.lineno}, column {exc.colno}"
-        return _FileProblem(f"{path} is not JSON ({where})", _PROFILE_FILE)
+        return _FileProblem(f"{path} is not JSON ({where})", _not_json_hint(path))
     if isinstance(exc, UnicodeDecodeError):
-        return _FileProblem(f"{path} is not JSON (not UTF-8 text)", _PROFILE_FILE)
+        return _FileProblem(f"{path} is not JSON (not UTF-8 text)", _not_json_hint(path))
     if isinstance(exc, EOFError | zlib.error | gzip.BadGzipFile):
         return _FileProblem(f"{path} is a damaged gzip file ({exc})", "copy or pull it again")
     if isinstance(exc, IsADirectoryError):
@@ -1066,6 +1204,11 @@ def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
     if isinstance(exc, NoiseVaultError):
         return _FileProblem(f"{path}: {exc.message}", exc.hint)
     return _FileProblem(f"{path}: {exc}", None)
+
+
+def _not_json_hint(path: Path) -> str:
+    """A file named like a profile has damaged content; any other file is the wrong kind."""
+    return _DAMAGED_FILE if path.name.endswith((".json", ".json.gz")) else _PROFILE_FILE
 
 
 @contextmanager

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pickle
 
 import noisevault as nv
-from noisevault.errors import FingerprintMismatch, LayoutError, NoiseVaultError
+from noisevault.errors import FingerprintMismatch, LayoutError, NoiseVaultError, did_you_mean
 
 
 def test_an_error_keeps_its_next_step_apart_and_prints_both() -> None:
@@ -25,6 +25,11 @@ def test_a_hint_survives_pickling() -> None:
         "pull it again",
         "no source; pull it again",
     )
+
+
+def test_did_you_mean_quotes_the_closest_choice_or_says_nothing() -> None:
+    assert did_you_mean("ibm_fezz", ["ibm_fez", "ibm_kyiv"]) == "did you mean 'ibm_fez'? "
+    assert did_you_mean("zzz", ["ibm_fez"]) == ""
 
 
 def test_unreadable_source_data_is_caught_as_a_noisevault_error_or_a_value_error() -> None:

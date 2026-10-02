@@ -207,12 +207,12 @@ class Report:
         quieter = [c for c in self.clamped if c.achieved < c.requested]
         if noisier:
             lines.append(
-                f"clamped: {len(noisier)} gate(s) noisier than stated because relaxation"
+                f"clamped: {_gates(len(noisier))} noisier than stated because relaxation"
                 f" alone exceeds the stated error; largest {_worst(noisier)}"
             )
         if quieter:
             lines.append(
-                f"clamped: {len(quieter)} gate(s) less noisy than stated because the strongest"
+                f"clamped: {_gates(len(quieter))} less noisy than stated because the strongest"
                 f" depolarizing noise on top of relaxation falls short; largest {_worst(quieter)}"
             )
         if self.events:
@@ -243,6 +243,10 @@ def warn_from_caller(message: str, category: type[Warning], packages: Collection
 
 def _package(frame: FrameType) -> str:
     return frame.f_globals.get("__name__", "").partition(".")[0]
+
+
+def _gates(n: int) -> str:
+    return "1 gate" if n == 1 else f"{n} gates"
 
 
 def _worst(clamps: list[Clamp]) -> str:
