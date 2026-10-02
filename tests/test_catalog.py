@@ -887,8 +887,22 @@ def test_a_vault_file_saved_over_after_it_resolved_leaves_its_day_not_found(
     )
 
 
-def test_a_file_that_changes_under_both_reads_of_a_load_is_not_found(
+def test_an_undated_load_answers_the_newest_profile_when_the_file_it_resolved_is_saved_over(
     monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    may, june = nv.load("ibm_manila"), _later_manila()
+    current = _january_manila().save(vault / "current.json.gz")
+    june.save(vault_path(june))
+    catalog.vault_profiles()
+    _saved_while_loading(monkeypatch, current, may)
+    loaded = nv.load("ibm_manila")
+    assert loaded.device.calibrated_at.isoformat() == "2024-06-03T10:00:00+00:00"
+    assert loaded == june
+
+
+@pytest.mark.parametrize("ref", ["test_toy@2025-01-01", "test_toy"])
+def test_a_file_that_changes_under_both_reads_of_a_load_is_not_found(
+    monkeypatch: pytest.MonkeyPatch, vault: Path, ref: str
 ) -> None:
     first = _dated("2025-01-01T00:00:00Z")
     later = _dated("2025-02-01T00:00:00Z", error=2e-3)
@@ -896,11 +910,11 @@ def test_a_file_that_changes_under_both_reads_of_a_load_is_not_found(
     catalog.vault_profiles()
     _saved_while_loading(monkeypatch, path, later, then=first)
     with pytest.raises(ProfileNotFound) as info:
-        nv.load("test_toy@2025-01-01")
+        nv.load(ref)
     assert (info.value.message, info.value.hint) == (
-        f"{path} holds test_toy@2025-02-01T00:00:00Z, not test_toy@2025-01-01,"
+        f"{path} holds test_toy@2025-02-01T00:00:00Z, not test_toy@2025-01-01T00:00:00Z,"
         " because the file changed during this load",
-        "load test_toy@2025-01-01 again",
+        f"load {ref} again",
     )
 
 
@@ -917,8 +931,9 @@ def test_a_load_rereads_the_files_when_the_index_misdescribes_an_unchanged_one(
     assert _indexed(vault) == {current.name: entry}
 
 
+@pytest.mark.parametrize(("ref", "picked"), [("test_toy@2025-01-03", 2), ("test_toy", -1)])
 def test_a_load_through_the_index_reads_only_the_file_it_resolves(
-    monkeypatch: pytest.MonkeyPatch, vault: Path
+    monkeypatch: pytest.MonkeyPatch, vault: Path, ref: str, picked: int
 ) -> None:
     days = [_dated(f"2025-01-0{day}T00:00:00Z", error=day * 1e-4) for day in range(1, 6)]
     for profile in days:
@@ -927,8 +942,8 @@ def test_a_load_through_the_index_reads_only_the_file_it_resolves(
     reads: list[Path] = []
     real = Path.read_bytes
     monkeypatch.setattr(Path, "read_bytes", lambda self: reads.append(self) or real(self))
-    assert nv.load("test_toy@2025-01-03") == days[2]
-    assert [p for p in reads if p != vault / ".index.json"] == [vault_path(days[2])]
+    assert nv.load(ref) == days[picked]
+    assert [p for p in reads if p != vault / ".index.json"] == [vault_path(days[picked])]
 
 
 def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:

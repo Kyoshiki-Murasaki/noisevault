@@ -350,9 +350,9 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
 
     ``expect`` pins the fingerprint (full hex, ``sha256:<hex>`` or ``nv:<12 hex>``). A different
     profile raises FingerprintMismatch. Loading a catalog ref checks the profile that it reads
-    against the ref and the pin. Another process can save over the file, or the index can
-    describe the file incorrectly. If the file does not match, the load reads every vault file
-    again and resolves the ref again.
+    against the calibration that the ref selects and against the pin. Another process can save
+    over the file, or the index can describe the file incorrectly. If the file does not match,
+    the load reads every vault file again and resolves the ref again.
     """
     named = parse_ref_preferring_id(ref)
     if isinstance(named, Path):
@@ -362,11 +362,11 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
     else:
         info = resolve(named, expect=expect)
         profile = info.load()
-        if not (_answers(named, profile) and _pinned(profile, expect)):
+        if not (_holds(info, profile) and _pinned(profile, expect)):
             info = _pick(named, _known(reread=True), expect)
             profile = info.load()
-            if not _answers(named, profile):
-                raise _changed(named, profile, info.path)
+            if not _holds(info, profile):
+                raise _changed(named, profile, info)
         path = info.path
     if expect is not None:
         _check_expect(profile, expect, path)
@@ -381,20 +381,19 @@ def _ref_time_matches(ref: Ref, when: datetime | None) -> bool:
     return True
 
 
-def _answers(ref: Ref, profile: Profile) -> bool:
-    return profile.id == ref.id and _ref_time_matches(ref, profile.device.calibrated_at)
+def _holds(info: ProfileInfo, profile: Profile) -> bool:
+    return (profile.id, profile.device.calibrated_at) == (info.id, info.calibrated_at)
 
 
 def _pinned(profile: Profile, expect: str | None) -> bool:
     return expect is None or profile.fingerprint.startswith(_expect_prefix(expect))
 
 
-def _changed(ref: Ref, profile: Profile, path: Path | Traversable) -> ProfileNotFound:
-    said = _said(ref)
+def _changed(ref: Ref, profile: Profile, info: ProfileInfo) -> ProfileNotFound:
     held = exact_ref(profile.id, profile.device.calibrated_at)
     return ProfileNotFound(
-        f"{path} holds {held}, not {said}, because the file changed during this load",
-        hint=f"load {said} again",
+        f"{info.path} holds {held}, not {info.ref}, because the file changed during this load",
+        hint=f"load {_said(ref)} again",
     )
 
 
