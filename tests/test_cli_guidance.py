@@ -106,7 +106,7 @@ def test_a_failed_pull_puts_its_next_step_on_a_hint_line(
     assert _error_and_hint(args) == f"error: {error}\nhint: {hint}\n"
 
 
-_NO_LIVE_GOOGLE = (
+_NO_GOOGLE_SOURCE = (
     "error: unknown source '{source}'; no source serves google devices\n"
     "hint: run nv list --vendor google to see the google profiles you can load offline\n"
 )
@@ -120,8 +120,8 @@ _NO_LIVE_GOOGLE = (
             "unknown source 'ibmm'; did you mean 'ibm'? choose one of ibm, ibm-account, ionq",
         ),
         ("IBM-Account", None),
-        ("googel", _NO_LIVE_GOOGLE.format(source="googel")),
-        ("google", _NO_LIVE_GOOGLE.format(source="google")),
+        ("googel", _NO_GOOGLE_SOURCE.format(source="googel")),
+        ("google", _NO_GOOGLE_SOURCE.format(source="google")),
         ("xyz", "unknown source 'xyz'; choose one of ibm, ibm-account, ionq\n"),
     ],
 )

@@ -70,9 +70,10 @@ redistribution. Only those profiles can be bundled.
 1. Write `src/noisevault/frameworks/<name>.py` with a `to_<name>(profile, *, layout=None,
    unknown_gates="typical", ...)` function. Raise an `ImportError` that names the extra when the
    framework is missing.
-2. Map circuit qubits with `noisevault.layout.normalize_layout`, and get each gate's channels
-   from `noisevault.conversion.resolve_op`. That keeps the lookup rules, errors and report
-   wording identical across frameworks.
+2. Map circuit qubits with `noisevault.layout.normalize_layout`. Get each gate's channels from
+   `noisevault.conversion.resolve_op`, and each idle qubit's relaxation from
+   `noisevault.conversion.idle_channel`. That keeps the lookup rules, errors and report wording
+   identical across frameworks.
 3. Start a report with `Report.start(profile, "<name>", <framework version>, **options)`, call
    `report.record_effects(profile.effects)`, and mark what the export reproduces exactly,
    approximates, omits and does not know.

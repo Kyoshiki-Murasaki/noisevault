@@ -475,10 +475,13 @@ def _describe_factor(factor: ErrorFactor) -> str:
     return text
 
 
+POOR_FIT_P_VALUE = 0.01
+
+
 def _describe_p(p_value: float | None) -> str:
     if p_value is None:
         return "fit not testable"
-    return f"p = {p_value:.2g}" + (", a poor fit" if p_value < 0.01 else "")
+    return f"p = {p_value:.2g}" + (", a poor fit" if p_value < POOR_FIT_P_VALUE else "")
 
 
 def _unmodeled_clause(unmodeled: UnmodeledError | None) -> str:
