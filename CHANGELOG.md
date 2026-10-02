@@ -2,6 +2,35 @@
 
 All notable changes to NoiseVault. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- **Factors for the error a calibration leaves out.** A profile can set `unmodeled_error`, with
+  a factor on its gate error rates, a factor on its readout error rates, or both. Every export
+  and the `nv check` reference apply the factors, and `nv diff` compares the scaled errors. A
+  factor raises each error channel to that power, so 1 keeps the stated error and no factor
+  takes an error out of its physical range. T1, T2 and preparation error are never scaled. An
+  error with no valid power, such as a readout pair no better than chance, stays as stated.
+  - Each export's report states the factors on its second line, which starts with
+    `unmodeled error:` and names each error left as stated. `report.to_dict()` holds the same
+    text under `unmodeled_error`.
+  - `nv show` prints the calibration as stated, then the factors on an `unmodeled` row.
+  - The field is part of the fingerprint, and `nv cite` names the factors.
+    `profile.uncorrected()` returns the profile without the field, with the calibration's
+    fingerprint. Profiles without the field keep their fingerprints.
+  - NoiseVault 0.2.0 refuses a profile that sets the field.
+
+  See [Unmodeled error](docs/profile-format.md#unmodeled-error).
+- **IBM calibration history from Hugging Face.** `nv.from_calibration_archive(path, device,
+  at=...)` reads a local copy of the Hugging Face dataset `phanerozoic/qiskit-calibration-drift`
+  and returns IBM's calibration of `ibm_fez`, `ibm_kingston`, `ibm_marrakesh` or `ibm_torino`
+  as it stood at `at`. A provenance note names the values calibrated more than 7 days before
+  `at`, or before the newest calibration when you give no `at`.
+  `nv.calibration_archive_devices(path)` gives the range of times each device covers. Install
+  `noisevault[hf]` (pyarrow 14.0.1 or later). `nv doctor` lists pyarrow. See
+  [IBM calibration archive on Hugging Face](docs/data-sources.md#ibm-calibration-archive-on-hugging-face).
+
 ## 0.2.0 (2026-10-01)
 
 A rebuild around one hardware-agnostic file format. Code written for 0.1 needs changes; 0.1

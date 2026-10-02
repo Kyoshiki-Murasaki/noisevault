@@ -15,7 +15,7 @@ from conftest import MANILA_V01, migrated, require, toy
 from typer.testing import CliRunner, Result
 
 import noisevault as nv
-from noisevault.cli import app
+from noisevault.cli import _PACKAGES, app
 from noisevault.errors import REPOSITORY, SourceUnavailable, install_hint
 from noisevault.profile import Profile
 
@@ -1181,7 +1181,7 @@ def test_doctor_lists_frameworks_and_the_vault(vault: Path) -> None:
     assert f"bundled profiles: {len(nv.catalog.bundled_profiles())}" in out
 
 
-def test_doctor_gives_a_whole_install_command_for_missing_frameworks(monkeypatch) -> None:
+def test_doctor_gives_a_whole_install_command_for_missing_packages(monkeypatch) -> None:
     from importlib.metadata import PackageNotFoundError
 
     import noisevault.cli as cli
@@ -1194,7 +1194,7 @@ def test_doctor_gives_a_whole_install_command_for_missing_frameworks(monkeypatch
     monkeypatch.setattr(cli, "version", without_stim)
     lines = runner.invoke(app, ["doctor"], env={"COLUMNS": "80"}).stdout.splitlines()
     assert lines[-2:] == [
-        f"To add the missing frameworks: {install_hint('stim')}",
+        f"To add the missing packages: {install_hint('stim')}",
         f'Or, with uv and no install: uvx --from "noisevault[stim] @ git+{REPOSITORY}"'
         " nv check ibm_fez",
     ]
@@ -1451,27 +1451,39 @@ def test_doctor_reports_pymatching_and_gives_no_advice_about_it(monkeypatch) -> 
     assert out.splitlines()[-1].startswith("bundled profiles: ")
 
 
-def test_doctor_names_only_the_extras_that_install_what_is_missing(monkeypatch) -> None:
-    out = _doctor_without(monkeypatch, "cirq-google", "stim", "pymatching")
-    advice = out.split("bundled profiles")[1]
-    assert install_hint("google,stim") in advice and "pymatching" not in advice
+def _install(extra: str) -> str:
+    return f"To add the missing packages: {install_hint(extra)}"
 
 
-def test_doctor_names_the_all_extra_when_every_framework_is_missing(monkeypatch) -> None:
-    from noisevault.cli import _PACKAGES
+def _try(extra: str) -> str:
+    return (
+        f'Or, with uv and no install: uvx --from "noisevault[{extra}] @ git+{REPOSITORY}"'
+        " nv check ibm_fez"
+    )
 
-    lines = _doctor_without(monkeypatch, *_PACKAGES).splitlines()
-    assert lines[-2:] == [
-        f"To add the missing frameworks: {install_hint('all')}",
-        f'Or, with uv and no install: uvx --from "noisevault[all] @ git+{REPOSITORY}"'
-        " nv check ibm_fez",
-    ]
+
+@pytest.mark.parametrize(
+    ("absent", "advice"),
+    [
+        ((), []),
+        (("stim",), [_install("stim"), _try("stim")]),
+        (("pyarrow",), [_install("hf")]),
+        (("cirq-google", "stim", "pymatching"), [_install("google,stim"), _try("stim")]),
+        (("qiskit-ibm-runtime", "cirq-google", "pyarrow"), [_install("google,hf,ibm")]),
+        (tuple(_PACKAGES), [_install("all"), _try("cirq,pennylane,qiskit,stim")]),
+    ],
+    ids=["nothing", "stim", "only_hf", "google_and_stim", "no_check_framework", "everything"],
+)
+def test_doctor_installs_what_is_missing_and_tries_nv_check_with_what_it_uses(
+    monkeypatch, absent, advice
+) -> None:
+    lines = _doctor_without(monkeypatch, *absent).splitlines()
+    end = next(i for i, line in enumerate(lines) if line.startswith("bundled profiles: "))
+    assert lines[end + 1 :] == advice
 
 
 def test_each_extra_doctor_names_installs_its_package() -> None:
     import tomllib
-
-    from noisevault.cli import _PACKAGES
 
     extras = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())["project"][
         "optional-dependencies"
@@ -1491,6 +1503,18 @@ def test_each_extra_doctor_names_installs_its_package() -> None:
         if extra is not None:
             assert package in requirements(extra), (package, extra)
         assert package in requirements("dev")
+
+
+def test_doctor_reports_a_package_of_every_extra_that_all_installs() -> None:
+    import tomllib
+
+    from noisevault.cli import _EXTRAS
+
+    extras = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())["project"][
+        "optional-dependencies"
+    ]
+    (everything,) = extras["all"]
+    assert _EXTRAS == sorted(re.fullmatch(r"noisevault\[(.+)\]", everything)[1].split(","))
 
 
 # diff and list with two calibrations on one day -----------------------------------------------

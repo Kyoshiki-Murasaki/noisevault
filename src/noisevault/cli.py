@@ -51,6 +51,7 @@ from .errors import (
     install_hint,
 )
 from .profile import (
+    POOR_FIT_P_VALUE,
     Profile,
     Technology,
     gate_stats,
@@ -186,6 +187,7 @@ _PACKAGES: dict[str, str | None] = {
     "cirq-google": "google",
     "pennylane": "pennylane",
     "stim": "stim",
+    "pyarrow": "hf",
     "pymatching": None,
 }
 _EXTRAS = sorted({extra for extra in _PACKAGES.values() if extra})
@@ -219,7 +221,6 @@ _WORDS = {
     "crosstalk_zz": "ZZ crosstalk",
     "crosstalk_measurement": "measurement crosstalk",
 }
-_POOR_FIT = 0.01
 _REDISTRIBUTION = {
     "yes": "may be redistributed",
     "no": "may not be redistributed",
@@ -619,7 +620,7 @@ def _print_card(
         _add_lines(grid, "notes", data["notes"])
     _emit(grid)
     fit = data["unmodeled_error"] and data["unmodeled_error"]["fit"]
-    if fit and fit["p_value"] is not None and fit["p_value"] < _POOR_FIT:
+    if fit and fit["p_value"] is not None and fit["p_value"] < POOR_FIT_P_VALUE:
         err.print(
             "warning: the unmodeled-error factors are a poor fit to their counts"
             f" (p = {fit['p_value']:.2g}); no one pair of factors fits every circuit",
@@ -1131,7 +1132,9 @@ def validate(
 
 @app.command()
 def doctor() -> None:
-    """Show NoiseVault, Python and framework versions, and where profiles live."""
+    """Show NoiseVault, Python and package versions, and where profiles live."""
+    from .check import FRAMEWORKS
+
     table = Table("component", "version", box=None, pad_edge=False, header_style="bold")
     table.add_row("noisevault", __version__)
     table.add_row("python", platform.python_version())
@@ -1152,9 +1155,11 @@ def doctor() -> None:
     if extras:
         extra = "all" if extras == _EXTRAS else ",".join(extras)
         out.print(
-            f"To add the missing frameworks: {install_hint(extra)}", markup=False, soft_wrap=True
+            f"To add the missing packages: {install_hint(extra)}", markup=False, soft_wrap=True
         )
-        uvx = _uvx_hint(extra, "nv check ibm_fez")
+    for_check = [name for name in extras if name in FRAMEWORKS]
+    if for_check:
+        uvx = _uvx_hint(",".join(for_check), "nv check ibm_fez")
         out.print(f"Or, with uv and no install: {uvx}", markup=False, soft_wrap=True)
 
 
