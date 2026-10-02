@@ -15,9 +15,9 @@ from conftest import deeper_than_the_parser_takes, require, toy
 from pydantic import ValidationError
 
 import noisevault as nv
-from noisevault import CountsError
+from noisevault import CountsError, NoiseVaultError
 from noisevault.counts import (
-    _SAMPLER_V2_OPTIONS,
+    SAMPLER_V2_OPTIONS,
     MeasuredCircuit,
     MeasuredCounts,
     PlannedCircuit,
@@ -39,7 +39,6 @@ def kingston() -> Profile:
 
 
 def _run(bit_order: str = "clbit0_left") -> dict[str, Any]:
-    """A two-circuit hardware run, with its counts keys written in ``bit_order``."""
     bell = {"00": 46, "01": 3, "10": 5, "11": 46}
     readout = {"000": 97, "100": 2, "010": 1}
     if bit_order == "qiskit":
@@ -374,7 +373,7 @@ def test_a_file_with_several_problems_names_the_first_and_counts_them(tmp_path: 
 def test_the_sampler_options_name_real_qiskit_ibm_runtime_options() -> None:
     options_module = require("qiskit_ibm_runtime.options")
     options = options_module.SamplerOptions()
-    for path, value in _SAMPLER_V2_OPTIONS.items():
+    for path, value in SAMPLER_V2_OPTIONS.items():
         *parents, leaf = path.split(".")
         setattr(reduce(getattr, parents, options), leaf, value)
         assert reduce(getattr, path.split("."), options) == value
@@ -428,7 +427,6 @@ def test_an_update_through_model_copy_is_validated_and_hashed_afresh(tmp_path: P
 
 
 def _timeline(profile: Profile, circuit: PlannedCircuit) -> list[float]:
-    """Each circuit qubit's clock after replaying the ops; a gate must find its qubits in step."""
     clock = [0.0] * len(circuit.qubits)
     for op in circuit.ops:
         if op.name == "delay":
@@ -518,6 +516,20 @@ def test_loaded_circuits_key_a_cache_as_the_planned_ones_do(tmp_path: Path, ref:
 
     assert all(isinstance(op, Op) for c in loaded.circuits for op in c.ops)
     assert {(c.qubits, c.ops) for c in loaded.circuits} == {(c.qubits, c.ops) for c in circuits}
+
+
+def test_plan_refuses_a_profile_with_no_calibrated_native_on_the_chain() -> None:
+    gates = {"rz": {"virtual": True}, "sx": {}}
+    profile = Profile.model_validate(toy(gates=gates, calibrations=[]))
+    with pytest.raises(
+        NoiseVaultError, match=r"on qubits \[0\], so there is nothing to run$"
+    ) as info:
+        plan(profile)
+    assert info.value.hint is None
+    with pytest.raises(NoiseVaultError) as info:
+        plan(profile, layout=[1])
+    assert info.value.message.endswith("on qubits [1], so there is nothing to run")
+    assert info.value.hint == "pass layout= with other qubits"
 
 
 def test_simulate_refuses_a_shot_count_that_is_not_positive() -> None:

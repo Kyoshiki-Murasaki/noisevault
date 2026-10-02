@@ -15,7 +15,7 @@ from . import gates, metrics
 from .profile import Connectivity, GateSpec, GateState, Idle, merge_spec
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
     from typing import Any
 
     from .profile import Profile
@@ -204,44 +204,31 @@ class NoiseTable:
         recorded = (qubits for _, qubits in self._records if len(qubits) == 2)
         return sorted({(min(p), max(p)) for p in (*self._edges, *recorded)})
 
-    # unmodeled error -----------------------------------------------------------------------
-
     def unscaled(self) -> tuple[str, ...]:
-        """What the profile's unmodeled-error factors leave as stated, one phrase each.
-
-        Read from the gate definitions, the calibration records and the qubits, never from gate
-        loci, so all-to-all connectivity costs nothing extra.
-        """
+        """What the profile's unmodeled-error factors leave as stated, one phrase each."""
         phrases = []
+        loci: list[tuple[str, tuple[int, ...], str]] = []
         if self._gate_factor is not None:
             for name, spec in self.profile.gates.items():
                 if _state(spec) != "calibrated":
                     continue
-                reason = _no_power(spec.metric, self.arity(name))
+                reason = _unscalable(spec.metric, self.arity(name))
                 if reason:
                     phrases.append(f"default {name} error is not scaled ({reason})")
-            loci: dict[tuple[str, str], list[tuple[int, ...]]] = {}
             for record in self.profile.calibrations:
-                reason = _no_power(record.metric, len(record.qubits))
+                reason = _unscalable(record.metric, len(record.qubits))
                 if reason is None or self._target_problem(record.gate, record.qubits):
                     continue
                 if _state(merge_spec(self.profile.gates[record.gate], record)) == "calibrated":
-                    loci.setdefault((record.gate, reason), []).append(record.qubits)
-            phrases += [
-                f"{name} on {_qubits(on)} is not scaled ({reason})"
-                for (name, reason), on in loci.items()
-            ]
+                    loci.append((record.gate, record.qubits, reason))
+        chance: list[tuple[int, str]] = []
         if self._readout_factor is not None:
-            chance = [
-                (q,)
-                for q in range(self.num_qubits)
-                if sum(self._stated_readout(q) or (0, 0)) >= 1 and not self.qubit(q).disabled
-            ]
-            if chance:
-                phrases.append(
-                    f"readout of {_qubits(chance)} is not scaled (no better than chance)"
-                )
-        return tuple(phrases)
+            for q in range(self.num_qubits):
+                pair = self._stated_readout(q)
+                reason = None if pair is None else metrics.readout_unscalable(pair)
+                if reason and not self.qubit(q).disabled:
+                    chance.append((q, reason))
+        return (*phrases, *unscaled_phrases(loci, chance))
 
     def _resolve_gate(self, name: str, qubits: tuple[int, ...]) -> GateNoise | Unavailable:
         spec = self.profile.gates.get(name)
@@ -325,26 +312,22 @@ class NoiseTable:
         return GateNoise(name, qubits, state, r, pauli, spec.duration_ns, origin, spec)
 
 
-def _no_power(metric: tuple[metrics.MetricKind, Any] | None, num_qubits: int) -> str | None:
-    """Why a factor leaves this error metric as stated, or None when every factor scales it."""
-    if metric is None:
-        return None
-    kind, value = metric
-    if kind == "pauli":
-        pauli = tuple(value)
-        if metrics.pauli_embeddable(pauli):
-            return None
-        if metrics.pauli_rates(pauli) is not None:
-            return "it has a negative Pauli-Lindblad rate"
-    else:
-        r = metrics.to_avg_infidelity(kind, value, num_qubits)
-        if metrics.depolarizing_from_avg(r, num_qubits) < 1:
-            return None
-    return "at or past full depolarization"
+def _unscalable(metric: tuple[metrics.MetricKind, Any] | None, num_qubits: int) -> str | None:
+    return None if metric is None else metrics.unscalable(*metric, num_qubits)
 
 
-def _qubits(loci: list[tuple[int, ...]]) -> str:
-    """Qubits or loci in words, such as "qubit 146" or "qubits 0, 14, 18 and 24 more"."""
+def unscaled_phrases(
+    gates: Iterable[tuple[str, tuple[int, ...], str]], readout: Iterable[tuple[int, str]]
+) -> list[str]:
+    loci: dict[tuple[str, str], dict[tuple[int, ...], None]] = {}
+    for name, qubits, reason in gates:
+        loci.setdefault((f"{name} on", reason), {})[qubits] = None
+    for qubit, reason in readout:
+        loci.setdefault(("readout of", reason), {})[(qubit,)] = None
+    return [f"{what} {_qubits(list(on))} is not scaled ({why})" for (what, why), on in loci.items()]
+
+
+def _qubits(loci: Sequence[tuple[int, ...]]) -> str:
     labels = ["-".join(map(str, locus)) for locus in loci]
     if len(labels) > 4:
         labels = [*labels[:3], f"{len(labels) - 3} more"]

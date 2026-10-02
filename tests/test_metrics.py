@@ -207,8 +207,8 @@ def test_independent_flips_and_dephasing_scale_in_closed_form() -> None:
     ],
 )
 def test_embeddable_channels_stay_channels_at_every_factor(pauli) -> None:
-    assert metrics.pauli_embeddable(pauli)
     n = metrics.pauli_arity(len(pauli))
+    assert metrics.unscalable("pauli", pauli, n) is None
     for factor in (0.0, *np.geomspace(1e-3, 1e3, 25)):
         metrics.check_metric("pauli", metrics.scale_pauli(pauli, float(factor)), n)
 
@@ -228,7 +228,8 @@ def test_pauli_rates_recover_the_generators_of_a_composed_channel(labels) -> Non
 )
 def test_non_embeddable_channels_come_back_unchanged(pauli, min_rate) -> None:
     assert min(metrics.pauli_rates(pauli)) == pytest.approx(min_rate, abs=1e-4)
-    assert not metrics.pauli_embeddable(pauli)
+    n = metrics.pauli_arity(len(pauli))
+    assert metrics.unscalable("pauli", pauli, n) == "it has a negative Pauli-Lindblad rate"
     for factor in (0.0, 0.5, 1.5, 2.0, 1e3):
         assert metrics.scale_pauli(pauli, factor) == pauli
 
@@ -240,13 +241,15 @@ def test_non_embeddable_channels_come_back_unchanged(pauli, min_rate) -> None:
 )
 def test_pauli_rates_is_none_at_and_past_full_depolarization(pauli) -> None:
     assert metrics.pauli_rates(pauli) is None
-    assert not metrics.pauli_embeddable(pauli)
+    n = metrics.pauli_arity(len(pauli))
+    assert metrics.unscalable("pauli", pauli, n) == "at or past full depolarization"
     for factor in (0.0, 0.5, 2.0):
         assert metrics.scale_pauli(pauli, factor) == pauli
 
 
 @pytest.mark.parametrize(("r", "n"), [(0.5, 1), (2 / 3, 1), (0.75, 2), (0.8, 2)])
 def test_avg_infidelity_at_or_past_full_depolarization_is_unchanged(r: float, n: int) -> None:
+    assert metrics.unscalable("avg_infidelity", r, n) == "at or past full depolarization"
     for factor in (0.0, 0.5, 2.0):
         assert metrics.scale_avg_infidelity(r, n, factor) == r
 
@@ -267,6 +270,7 @@ def test_scaled_avg_infidelity_at_factor_1_84() -> None:
 @pytest.mark.parametrize("pair", [(0.02, 0.05), (0.0, 0.0093)])
 @pytest.mark.parametrize("power", [2, 3, 7])
 def test_readout_scales_as_a_power_of_its_confusion_matrix(pair, power: int) -> None:
+    assert metrics.readout_unscalable(pair) is None
     a, b = pair
     m = np.linalg.matrix_power(np.array([[1 - a, b], [a, 1 - b]]), power)
     np.testing.assert_allclose(
@@ -275,11 +279,13 @@ def test_readout_scales_as_a_power_of_its_confusion_matrix(pair, power: int) -> 
 
 
 def test_identity_readout_stays_the_identity() -> None:
+    assert metrics.readout_unscalable((0.0, 0.0)) is None
     for factor in (0.0, 0.5, 1.0, 2.0, 1e3):
         assert metrics.scale_readout((0.0, 0.0), factor) == (0.0, 0.0)
 
 
 @pytest.mark.parametrize("pair", [(0.5, 0.5), (0.6, 0.7), (1.0, 0.0)])
 def test_readout_no_better_than_chance_is_unchanged(pair) -> None:
+    assert metrics.readout_unscalable(pair) == "no better than chance"
     for factor in (0.0, 0.5, 2.0):
         assert metrics.scale_readout(pair, factor) == pair

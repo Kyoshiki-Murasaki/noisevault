@@ -1,12 +1,3 @@
-"""A small, framework-free density-matrix simulator used as the reference for every export.
-
-It applies the ideal unitary of each gate, then the channels that the shared conversion rules
-assign to it, and finishes with per-qubit readout confusion. A delay applies no unitary, only
-the relaxation that :func:`~noisevault.conversion.idle_channel` gives the Qiskit export's delays
-and the Cirq export's waits. Probabilities are over the circuit's qubits in big-endian order:
-circuit qubit 0 is the most significant bit.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
@@ -95,6 +86,10 @@ def probabilities(
     return probs / probs.sum()
 
 
+def outcome_bits(outcome: int, num_qubits: int) -> str:
+    return format(outcome, f"0{num_qubits}b")
+
+
 def charged_as(profile: Profile, name: str, unitary: np.ndarray) -> str:
     """The gate whose calibration an operation ``name`` with ``unitary`` takes, as the exports
     decide it."""
@@ -107,7 +102,7 @@ def _rotation(name: str, unitary: np.ndarray) -> str | None:
         return None
     for rotation in _MS_ROTATIONS:
         for theta in (pi / 2, -pi / 2):
-            v = gates.GATES[rotation].unitary(theta)  # type: ignore[misc]
+            v = gates.unitary(rotation, (theta,))
             if abs(abs(np.vdot(v, unitary)) - len(unitary)) < 1e-9:  # equal up to global phase
                 return rotation
     return None

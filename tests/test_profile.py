@@ -26,7 +26,6 @@ from noisevault.profile import (
     Profile,
     Ref,
     UnmodeledError,
-    _calibration_fingerprint,
     json_schema,
     load_file,
     parse_ref,
@@ -537,7 +536,6 @@ def test_free_form_data_must_be_json_data(where: str, free: dict, message: str) 
 
 
 def _nested(levels: int, shape: str) -> Any:
-    """``levels`` objects or arrays, each inside the last."""
     value: Any = 0
     for _ in range(levels):
         value = {"a": value} if shape == "object" else [value]
@@ -589,7 +587,7 @@ def test_free_form_data_is_frozen_at_every_level() -> None:
     assert Profile.from_dict(profile.to_dict()).fingerprint == fingerprint
 
 
-CACHED = ("fingerprint", "artifact_hash", "table")
+CACHED = ("fingerprint", "artifact_hash", "calibration_fingerprint", "table")
 
 
 class _Holder(BaseModel):
@@ -647,9 +645,12 @@ def test_hashes_and_table_are_computed_once(monkeypatch) -> None:
     hashed = []
     sha256 = profile_module._sha256
     monkeypatch.setattr(profile_module, "_sha256", lambda data: hashed.append(data) or sha256(data))
-    reads = {(profile.fingerprint, profile.artifact_hash) for _ in range(3)}
+    reads = {
+        (profile.fingerprint, profile.artifact_hash, profile.calibration_fingerprint)
+        for _ in range(3)
+    }
     assert len(reads) == 1
-    assert len(hashed) == 2
+    assert len(hashed) == 3
     assert profile.table is profile.table
 
 
@@ -984,8 +985,6 @@ def test_summary_medians_leave_out_a_disabled_qubit(qubits: list, lines: list) -
     assert [line.strip() for line in summary if "T1" in line or "readout" in line] == lines
 
 
-# unmodeled error ----------------------------------------------------------------------------
-
 COUNTS = "sha256:3fa1c2d4e5b6" + "0" * 52
 FITTED = {
     "gates": {"factor": 1.84, "low": 1.54, "high": 2.12},
@@ -1010,7 +1009,6 @@ FITTED_LINES = (
 
 
 def _block(base: Profile, **fit) -> dict:
-    """FITTED, bound to ``base`` and its qubits, with ``fit`` changed."""
     bound = {"qubits": [0, 1, 2], "calibration": base.fingerprint}
     return {**FITTED, "fit": {**FITTED["fit"], **bound, **fit}}
 
@@ -1037,7 +1035,7 @@ def test_a_factor_is_fingerprinted_and_uncorrected_gives_back_the_calibration() 
     assert what_if.to_dict()["unmodeled_error"] == {"gates": {"factor": 2.3}}
     assert what_if.fingerprint != base.fingerprint
     assert what_if.uncorrected().fingerprint == base.fingerprint
-    assert _calibration_fingerprint(what_if) == _calibration_fingerprint(base) == base.fingerprint
+    assert what_if.calibration_fingerprint == base.calibration_fingerprint == base.fingerprint
     assert what_if.uncorrected().to_dict() == base.to_dict()
     assert base.uncorrected() is base
 

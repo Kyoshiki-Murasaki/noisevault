@@ -1,12 +1,3 @@
-"""The per-operation rules every framework adapter shares.
-
-An adapter maps a circuit operation to a canonical gate name and physical qubits, calls
-:func:`resolve_op` and emits the channels it returns. The lookup rules, the errors and the
-report wording live here, so every framework converts and reports the same way. Idle qubits
-get their relaxation from :func:`idle_channel`. Measurement and reset follow their own rules
-and do not come through here.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Container, Mapping, Sequence
@@ -143,20 +134,15 @@ def _channels(table: NoiseTable, gate: GateNoise, report: Report) -> GateChannel
 def idle_channel(
     table: NoiseTable, qubit: int, duration_ns: float, report: Report, *, label: str = "delay"
 ) -> ChannelSpec | None:
-    """The relaxation and dephasing an idle physical ``qubit`` gets in ``duration_ns``, or None.
-
-    It returns None, which adds no noise, when the qubit has no T1, T2 or dephasing rate, or
-    when the duration is not positive. ``report`` lists a qubit with no such data as unknown and
-    names the idle instruction ``label``. If the T2 exceeds 2*T1, the channel uses 2*T1 and
-    ``report`` records the clamp as the gate path does.
-    """
     noise = table.qubit(qubit)
     if noise.relaxation_unknown:
         report.mark_unknown(f"T1 and T2 of qubit {qubit} (no {label} relaxation)")
         return None
     if noise.t2_clamped:
         report.record_t2_clamp(qubit)
+    if duration_ns <= 0:
+        return None
     kraus = thermal_relaxation_kraus(
         noise.t1_ns, noise.t2_ns, duration_ns, noise.dephasing_rate_per_s
     )
-    return None if len(kraus) == 1 else ChannelSpec("thermal_relaxation", (qubit,), tuple(kraus))
+    return ChannelSpec("thermal_relaxation", (qubit,), tuple(kraus))

@@ -1,10 +1,3 @@
-"""nv compare's fit: recovery, coverage, identifiability, impossible outcomes and the report.
-
-The example counts file is generated. When a test here says it is stale, regenerate it with
-``python tests/test_compare.py``. The 100-seed coverage test takes about 3 minutes, so it runs
-only with NOISEVAULT_SLOW=1, which the CI coverage job sets.
-"""
-
 from __future__ import annotations
 
 import json
@@ -24,11 +17,11 @@ import pytest
 
 import noisevault as nv
 from noisevault import compare as fit
-from noisevault.compare import CircuitScore, Comparison, Estimate, NoEstimate, compare
+from noisevault.compare import CircuitScore, Comparison, NoEstimate, compare
 from noisevault.counts import MeasuredCounts, PlannedCircuit, load_counts, plan, simulate
 from noisevault.errors import CountsError, NoiseVaultError
 from noisevault.metrics import scale_readout
-from noisevault.profile import Profile, _calibration_fingerprint
+from noisevault.profile import ErrorFactor, Profile
 from noisevault.reference import Op
 from noisevault.reference import probabilities as reference
 
@@ -58,12 +51,11 @@ def example_counts() -> MeasuredCounts:
 def written(
     profile: Profile, circuits: Sequence[tuple[str, Sequence[Op], dict[str, int]]]
 ) -> MeasuredCounts:
-    """A hand-written counts file on qubits 0..n-1, bound to ``profile``."""
     return MeasuredCounts.model_validate(
         {
             "nv_counts": "1.0",
             "source": "simulated",
-            "profile": {"id": profile.id, "fingerprint": _calibration_fingerprint(profile)},
+            "profile": {"id": profile.id, "fingerprint": profile.calibration_fingerprint},
             "backend": profile.device.name,
             "run_at": LATER.isoformat(),
             "bit_order": "clbit0_left",
@@ -90,13 +82,11 @@ def written(
 
 
 def rebound(counts: MeasuredCounts, profile: Profile) -> MeasuredCounts:
-    """``counts`` as if planned from ``profile``'s calibration."""
-    binding = {"id": profile.id, "fingerprint": _calibration_fingerprint(profile)}
+    binding = {"id": profile.id, "fingerprint": profile.calibration_fingerprint}
     return counts.model_copy(update={"profile": binding})
 
 
 def moved(counts: MeasuredCounts, circuit: str, source: str, target: str, n: int) -> MeasuredCounts:
-    """``counts`` with ``n`` shots of ``circuit`` moved from outcome ``source`` to ``target``."""
     data = counts.to_dict()
     for entry in data["circuits"]:
         if entry["name"] == circuit:
@@ -105,8 +95,10 @@ def moved(counts: MeasuredCounts, circuit: str, source: str, target: str, n: int
     return MeasuredCounts.model_validate(data)
 
 
-def covers(result: Estimate | NoEstimate, truth: float) -> bool:
-    return isinstance(result, Estimate) and (result.low or 0) <= truth <= (result.high or math.inf)
+def covers(result: ErrorFactor | NoEstimate, truth: float) -> bool:
+    if not isinstance(result, ErrorFactor):
+        return False
+    return (result.low or 0) <= truth <= (result.high or math.inf)
 
 
 def toy() -> Profile:
@@ -128,9 +120,6 @@ def one_qubit(name: str, gates: dict[str, Any], **sections: Any) -> Profile:
 
 
 XX = (Op("x", (0,)), Op("x", (0,)))
-
-
-# recovery and coverage -----------------------------------------------------------------------
 
 
 def test_the_example_counts_give_back_the_factors_they_were_simulated_with() -> None:
@@ -160,8 +149,6 @@ def test_each_interval_covers_its_truth_on_the_plan() -> None:
 
 
 def sparse_counts(errors: int) -> tuple[Profile, MeasuredCounts]:
-    """The review's sparse case: an ideal x, symmetric readout error 0.00055, 2000 shots on
-    each of single_qubit and readout, ``errors`` shots reading 1 in all."""
     profile = one_qubit("sparse", {"x": {"avg_infidelity": 0.0}}, readout={"error": 0.00055})
     circuits = {c.name: c.ops for c in plan(profile)}
     assert list(circuits) == ["single_qubit", "readout"]
@@ -177,7 +164,7 @@ def sparse_counts(errors: int) -> tuple[Profile, MeasuredCounts]:
 
 def test_sparse_counts_with_no_error_keep_an_upper_end_the_chi_square_cutoff_misses() -> None:
     result = compare(*sparse_counts(0))
-    assert isinstance(result.readout, Estimate) and result.readout.bound == "lower"
+    assert isinstance(result.readout, ErrorFactor) and result.readout.bound == "lower"
     assert result.readout.high > 1.3
 
 
@@ -200,9 +187,10 @@ def dense(errors: int) -> tuple[Profile, MeasuredCounts]:
 
 def test_dense_counts_refine_the_maximum_between_grid_points() -> None:
     result = compare(*dense(100698))
-    assert isinstance(result.readout, Estimate)
+    assert isinstance(result.readout, ErrorFactor)
     assert abs(result.readout.factor - 1.007832) < 1e-4
     assert result.readout.low < result.readout.factor < result.readout.high
+    assert result.readout.describe() == "x1.008 (95% interval 1.001 to 1.015)"
     assert result.dof == 0 and result.dispersion == 1
 
 
@@ -212,9 +200,6 @@ def test_dense_counts_cover_the_true_factor_without_wide_intervals() -> None:
         covers(compare(*dense(int(rng.binomial(1_000_000, 0.1)))).readout, 1.0) for _ in range(200)
     )
     assert 180 <= hits <= 199
-
-
-# the surface ---------------------------------------------------------------------------------
 
 
 def test_two_runs_of_one_plan_build_the_surface_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -232,7 +217,6 @@ def test_two_runs_of_one_plan_build_the_surface_once(monkeypatch: pytest.MonkeyP
     for seed in (1, 2):
         compare(profile, simulate(profile, circuits, shots=4000, seed=seed, run_at=LATER))
     assert len(built) == 1
-    assert list(fit._Surface._built) == [(profile.fingerprint, (((0,), XX),))]
 
 
 def test_the_surface_is_the_reference_at_every_node_and_a_distribution_between() -> None:
@@ -240,7 +224,7 @@ def test_the_surface_is_the_reference_at_every_node_and_a_distribution_between()
     circuits = plan(kingston)
     surface = fit._Surface.cached(kingston, circuits)
     readouts = cycle((surface.readout[0], 0.0, surface.readout[-1]))
-    for node, readout in zip(surface.nodes, readouts, strict=False):
+    for node, readout in zip(surface.gate_nodes, readouts, strict=False):
         truth = scaled(kingston, math.exp(node), math.exp(readout))
         expected = np.concatenate(
             [
@@ -250,7 +234,8 @@ def test_the_surface_is_the_reference_at_every_node_and_a_distribution_between()
         )
         assert np.abs(surface.probs_at([node], [readout])[0] - expected).max() < 1e-12
     between = surface.probs_at(
-        (surface.nodes[:-1] + surface.nodes[1:]) / 2, np.zeros(len(surface.nodes) - 1)
+        (surface.gate_nodes[:-1] + surface.gate_nodes[1:]) / 2,
+        np.zeros(len(surface.gate_nodes) - 1),
     )
     assert between.min() >= 0
     for part in surface.slices:
@@ -258,8 +243,6 @@ def test_the_surface_is_the_reference_at_every_node_and_a_distribution_between()
 
 
 def floor_counts(zero: int, one: int) -> tuple[Profile, MeasuredCounts]:
-    """An id gate at its relaxation floor: below a factor near 0.333 it is pure relaxation,
-    which never takes |0> to |1>, so outcome 1 has probability exactly 0 there."""
     profile = one_qubit(
         "idle",
         {"id": {"avg_infidelity": 0.001, "duration_ns": 100}},
@@ -282,9 +265,6 @@ def test_zero_probability_cells_give_finite_likelihoods_in_the_fit_and_every_dra
     above = compare(*floor_counts(3999, 1))
     assert above.gates.factor > floor * 1.01
     assert "NaN" not in json.dumps(above.to_dict())
-
-
-# degrees of freedom and identifiability -------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -310,21 +290,19 @@ def test_a_flat_gate_axis_keeps_the_readout_estimate_and_an_upper_gate_bound() -
     truth = scaled(kingston, 0.05, 1.0)
     result = compare(kingston, simulate(truth, plan(kingston), shots=4000, seed=5, run_at=RUN_AT))
     assert covers(result.readout, 1.0), result.readout
-    assert isinstance(result.gates, Estimate) and result.gates.bound == "lower"
+    assert isinstance(result.gates, ErrorFactor) and result.gates.bound == "lower"
     assert result.gates.low is None and result.gates.high < 1
     lowest_floor = min(fit._floor_factors(kingston, plan(kingston)))
     assert result.gates.factor == pytest.approx(lowest_floor)
 
 
 def test_a_gate_axis_flat_at_the_estimate_is_not_a_collinearity() -> None:
-    """sx states less error than its relaxation gives, so every gate factor up to about 3
-    gives the same counts, and the fit lands on factor 1, where gate error has no slope."""
     gates = {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-4, "duration_ns": 100}}
     idle = {"t1_us": 111, "t2_us": 222}
     profile = one_qubit("slow", gates, readout={"error": 0.01}, idle=idle)
     circuits = plan(profile)
     result = compare(profile, simulate(profile, circuits, shots=4000, seed=0, run_at=LATER))
-    assert isinstance(result.gates, Estimate) and result.gates.bound == "lower"
+    assert isinstance(result.gates, ErrorFactor) and result.gates.bound == "lower"
     assert result.gates.factor == pytest.approx(1.0)
     assert covers(result.readout, 1.0), result.readout
     (floor,) = fit._floor_factors(profile, circuits)
@@ -357,15 +335,12 @@ def test_x_then_x_counts_identify_neither_factor() -> None:
 def test_readout_counts_with_no_observed_error_give_only_an_upper_end() -> None:
     profile = toy()
     result = compare(profile, written(profile, [("readout", (), {"0": 4000})]))
-    assert isinstance(result.readout, Estimate)
+    assert isinstance(result.readout, ErrorFactor)
     assert (result.readout.bound, result.readout.low) == ("lower", None)
     assert result.readout.high is not None
 
 
 def test_notes_name_what_the_factors_cannot_scale_or_charge() -> None:
-    """x has a Pauli channel with a negative Pauli-Lindblad rate, so no gate factor scales it,
-    and no qubit states T1 or T2, so a delay adds no error. The first note wraps where
-    "Pauli-Lindblad" would break at its hyphen."""
     profile = one_qubit("odd", {"x": {"pauli": [0.1, 0.0, 0.1]}}, readout={"error": 0.01})
     profile = profile.model_copy(
         update={"device": {**profile.to_dict()["device"], "num_qubits": 3}}
@@ -386,11 +361,7 @@ def test_notes_name_what_the_factors_cannot_scale_or_charge() -> None:
     ]
 
 
-# goodness of fit and impossible outcomes -------------------------------------------------------
-
-
 def excess_readout(seed: int) -> MeasuredCounts:
-    """Kingston counts whose qubit 150 reads with three times its stated error."""
     kingston = nv.load(KINGSTON)
     data = kingston.to_dict()
     record = next(q for q in data["qubits"] if q["index"] == 150)
@@ -413,7 +384,6 @@ def test_counts_simulated_from_the_factors_fit_within_shot_noise() -> None:
 
 
 def fez_with_impossible_shots(n: int) -> tuple[Profile, MeasuredCounts]:
-    """Fez states P(1|0) = 0 for qubit 136, which heads the chain; n readout shots read it as 1."""
     fez = nv.load("ibm_fez@2025-02-26")
     run_at = datetime(2025, 2, 27, 11, 42, tzinfo=UTC)
     counts = simulate(fez, plan(fez), shots=4000, seed=7, run_at=run_at)
@@ -449,9 +419,6 @@ def test_counts_the_profile_rules_out_entirely_identify_neither_factor() -> None
     result = compare(fez, MeasuredCounts.model_validate(data))
     assert result.gates == result.readout == NoEstimate("the profile rules out every shot")
     assert result.p_value == 0 and result.impossible_shots == 4000
-
-
-# binding --------------------------------------------------------------------------------------
 
 
 def refused(profile: Profile, counts: MeasuredCounts) -> str:
@@ -503,9 +470,6 @@ def test_profile_compare_is_compare_and_import_noisevault_leaves_the_fit_unloade
     assert loaded.stdout.strip() == "False"
 
 
-# determinism and the fitted profile ------------------------------------------------------------
-
-
 def test_the_same_inputs_give_the_same_bytes(tmp_path: Path) -> None:
     kingston, counts = nv.load(KINGSTON), load_counts(EXAMPLE)
     first, second = compare(kingston, counts), compare(kingston, counts)
@@ -547,23 +511,30 @@ def test_a_readout_factor_that_is_not_identified_is_left_out_of_the_fitted_profi
     )
 
 
-# the report -------------------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("estimate", "words"),
     [
-        (Estimate(1.84, 1.54, 2.12, None), "x1.84 (95% interval 1.54 to 2.12)"),
-        (Estimate(0.096, None, 0.311, "lower"), "x0.096 (95% interval, at most 0.311)"),
-        (Estimate(20.0, 11.2, None, "upper"), "x20 (95% interval, at least 11.2)"),
+        (ErrorFactor(factor=1.84, low=1.54, high=2.12), "x1.84 (95% interval 1.54 to 2.12)"),
+        (
+            ErrorFactor(factor=0.096, high=0.311, bound="lower"),
+            "x0.096 (95% interval, at most 0.311)",
+        ),
+        (ErrorFactor(factor=20.0, low=11.2, bound="upper"), "x20 (95% interval, at least 11.2)"),
+        (
+            ErrorFactor(factor=1.00783, low=1.00109, high=1.0146),
+            "x1.008 (95% interval 1.001 to 1.015)",
+        ),
+        (ErrorFactor(factor=1.0, low=1.0, high=1.0004), "x1 (95% interval 1 to 1.0004)"),
+        (ErrorFactor(factor=1.0004), "x1"),
     ],
 )
-def test_an_estimate_reads_as_its_factor_and_interval(estimate: Estimate, words: str) -> None:
+def test_an_estimate_reads_with_the_fewest_digits_that_tell_its_values_apart(
+    estimate: ErrorFactor, words: str
+) -> None:
     assert estimate.describe() == words
 
 
 def layout(result: Comparison) -> list[str]:
-    """The summary, checked against the rules every output follows."""
     lines = result.summary(counts_file="run.counts.json").split("\n")
     assert all(len(line) <= 80 for line in lines), max(lines, key=len)
     assert lines[3] == "" and lines[4].startswith("circuit ")
@@ -579,7 +550,7 @@ def layout(result: Comparison) -> list[str]:
     block = block[: block.index("")] if "" in block else block
     labels = {"gate errors", "readout errors", "fit", "next", "note", ""}
     assert all(line[:16].rstrip() in labels and line[16] != " " for line in block), block
-    fitted = isinstance(result.gates, Estimate) or isinstance(result.readout, Estimate)
+    fitted = isinstance(result.gates, ErrorFactor) or isinstance(result.readout, ErrorFactor)
     assert (lines[-3:] == list(fit.NOTE)) == fitted
     return lines
 
@@ -610,7 +581,6 @@ def test_a_poor_fit_puts_the_verdict_first_and_names_the_circuits_below() -> Non
 
 
 def poor(result: Comparison, scores: Sequence[tuple[str, float, float]]) -> Comparison:
-    """``result`` re-rendered as a poor fit with these (name, fitted TVD, noise TVD) rows."""
     rows = tuple(
         CircuitScore(name, (0, 1), 4000, 0.05, fitted, noise, 0) for name, fitted, noise in scores
     )
@@ -630,7 +600,10 @@ def test_the_flag_follows_the_printed_values() -> None:
 
 def test_a_node_profile_built_without_revalidation_equals_the_validated_one() -> None:
     kingston = nv.load(KINGSTON)
-    built, validated = fit._with_factors(kingston, 1.37, 0.8), scaled(kingston, 1.37, 0.8)
+    built, validated = (
+        fit._scaled_without_revalidation(kingston, 1.37, 0.8),
+        scaled(kingston, 1.37, 0.8),
+    )
     assert built.fingerprint == validated.fingerprint
     assert built.to_dict() == validated.to_dict()
     for c in plan(kingston):

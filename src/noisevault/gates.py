@@ -178,6 +178,13 @@ def lookup(name: str) -> GateInfo | None:
     return GATES.get(name)
 
 
+def unitary(name: str, params: tuple[float, ...] = ()) -> np.ndarray:
+    info = GATES[name]
+    if info.unitary is None:
+        raise ValueError(f"{name!r} has no unitary")
+    return info.unitary(*params)
+
+
 def is_symmetric(name: str) -> bool:
     """Registry default for whether a gate's calibration is shared by both operand orders."""
     info = GATES.get(name)

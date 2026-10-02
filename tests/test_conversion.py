@@ -11,7 +11,7 @@ from conftest import require, toy
 
 from noisevault import gates
 from noisevault.channels import ChannelSpec, superoperator
-from noisevault.conversion import TYPICAL_FIX, resolve_op
+from noisevault.conversion import TYPICAL_FIX, idle_channel, resolve_op
 from noisevault.errors import (
     DisabledGateError,
     LayoutError,
@@ -46,6 +46,15 @@ def test_calibrated_and_ideal_gates_convert_without_approximation() -> None:
         assert _resolve(profile, report, "rz", (2,)).channels == ()
         assert _resolve(profile, report, "t", (2,)).channels == ()  # z-family, virtual rz
     assert report.events == {} and report.approximated == []
+
+
+def test_an_idle_qubit_gets_relaxation_only_for_a_positive_duration() -> None:
+    profile, report = _setup(idle={"t1_us": 100, "t2_us": 250})
+    for duration in (0.0, -5.0):
+        assert idle_channel(profile.table, 0, duration, report) is None
+    assert [a.what for a in report.approximated] == ["T2 of qubit 0"]
+    channel = idle_channel(profile.table, 0, 50.0, report)
+    assert channel is not None and channel.kind == "thermal_relaxation" and channel.wires == (0,)
 
 
 def test_disabled_gate_raises() -> None:

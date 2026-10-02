@@ -281,8 +281,6 @@ def test_t2_is_clamped_only_above_twice_t1(t1_us, t2_us, clamped) -> None:
     assert table.qubit(0).t2_clamped is clamped
 
 
-# unmodeled error ----------------------------------------------------------------------------
-
 QUBIT_FIELDS = {
     "idle": {"t1_us": 100, "t2_us": 80, "dephasing_rate_per_s": 0.3},
     "readout": {"p1_given_0": 0.01, "p0_given_1": 0.03},
@@ -357,7 +355,7 @@ def test_a_gate_error_with_no_valid_power_stays_as_stated_and_is_named(factor: f
     pauli = [0.0] * 15
     for label in ("IX", "IZ", "XI"):
         pauli[metrics.PAULI_2Q.index(label)] = 0.1
-    assert not metrics.pauli_embeddable(pauli)
+    assert metrics.unscalable("pauli", pauli, 2) == "it has a negative Pauli-Lindblad rate"
     records = [
         {"gate": "cz", "qubits": [0, 1], "pauli": pauli},
         {"gate": "sx", "qubits": [2], "avg_infidelity": 0.5},

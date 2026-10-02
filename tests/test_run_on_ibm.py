@@ -22,7 +22,7 @@ from typer.testing import CliRunner
 
 import noisevault as nv
 from noisevault.cli import app
-from noisevault.counts import _SAMPLER_V2_OPTIONS, PlannedCircuit, load_counts, plan
+from noisevault.counts import SAMPLER_V2_OPTIONS, PlannedCircuit, load_counts, plan
 from noisevault.errors import NoiseVaultError, install_hint
 from noisevault.profile import Profile
 
@@ -279,7 +279,7 @@ def test_one_job_carries_every_option_the_counts_format_checks(local_run: LocalR
     (submission,) = local_run.submissions
     recorded = load_counts(local_run.output).execution.options
     paths = {
-        **_SAMPLER_V2_OPTIONS,
+        **SAMPLER_V2_OPTIONS,
         "default_shots": SHOTS,
         "execution.rep_delay": local_run.fake.default_rep_delay,
     }

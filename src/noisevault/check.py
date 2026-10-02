@@ -19,7 +19,7 @@ from collections import Counter
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from math import pi
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
@@ -227,15 +227,8 @@ def check(
     unknown = [n for n in names if n not in FRAMEWORKS]
     if unknown:
         raise ValueError(f"unknown framework {unknown[0]!r}; choose from {', '.join(FRAMEWORKS)}")
-    if not isinstance(shots, int) or shots < 1:
-        raise ValueError(f"shots={shots!r}: give a positive number of shots")
-    chain, circuits = _plan(profile, layout)
-    if not circuits:
-        raise NoiseVaultError(
-            f"{profile.id} has no calibrated native gate with a known unitary on qubits {chain},"
-            " so there is nothing to check",
-            hint=None if layout is None else "pass layout= with other qubits",
-        )
+    validate_shots(shots)
+    chain, circuits = plan_circuits(profile, layout, purpose="check")
     expected = _Expected(profile, chain)
     results, skipped = [], []
     with warnings.catch_warnings():
@@ -266,7 +259,28 @@ def check(
 # circuits -----------------------------------------------------------------------------------
 
 
-def _plan(
+def validate_shots(shots: int) -> None:
+    if not isinstance(shots, int) or shots < 1:
+        raise ValueError(f"shots={shots!r}: give a positive number of shots")
+
+
+def plan_circuits(
+    profile: Profile,
+    layout: Mapping[Hashable, int] | Sequence[int] | None,
+    *,
+    purpose: Literal["check", "run"],
+) -> tuple[list[int], tuple[Circuit, ...]]:
+    chain, circuits = _chain_and_circuits(profile, layout)
+    if not circuits:
+        raise NoiseVaultError(
+            f"{profile.id} has no calibrated native gate with a known unitary on qubits {chain},"
+            f" so there is nothing to {purpose}",
+            hint=None if layout is None else "pass layout= with other qubits",
+        )
+    return chain, circuits
+
+
+def _chain_and_circuits(
     profile: Profile, layout: Mapping[Hashable, int] | Sequence[int] | None
 ) -> tuple[list[int], tuple[Circuit, ...]]:
     if layout is not None:
@@ -405,7 +419,7 @@ def _op(name: str, qubits: tuple[int, ...]) -> Op:
 
 
 def _unitary(op: Op) -> np.ndarray:
-    return gates.GATES[op.name].unitary(*op.params)  # type: ignore[misc]
+    return gates.unitary(op.name, op.params)
 
 
 def _mixes(op: Op) -> bool:

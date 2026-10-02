@@ -35,15 +35,15 @@ from noisevault import catalog, gates  # noqa: E402
 from noisevault.compare import _bind  # noqa: E402
 from noisevault.counts import (  # noqa: E402
     _RUN_RULES,
-    _SAMPLER_V2_OPTIONS,
     COUNTS_FORMAT,
+    SAMPLER_V2_OPTIONS,
     MeasuredCounts,
     PlannedCircuit,
     _duration,
     plan,
 )
 from noisevault.errors import CountsError, NoiseVaultError, install_hint  # noqa: E402
-from noisevault.profile import Profile, _calibration_fingerprint, write_atomically  # noqa: E402
+from noisevault.profile import Profile, write_atomically  # noqa: E402
 from noisevault.sources import ibm_account  # noqa: E402
 
 DEFAULT_SHOTS = 4000
@@ -208,7 +208,7 @@ def isa_circuit(circuit: PlannedCircuit, profile: Profile, target: Any) -> IsaCi
 def sampler_options(shots: int, rep_delay: float) -> dict[str, Any]:
     """The client sends no unset option, and the server would choose its own default for it."""
     options: dict[str, Any] = {"default_shots": shots}
-    for path, value in {**_SAMPLER_V2_OPTIONS, "execution.rep_delay": rep_delay}.items():
+    for path, value in {**SAMPLER_V2_OPTIONS, "execution.rep_delay": rep_delay}.items():
         *parents, leaf = path.split(".")
         node = options
         for part in parents:
@@ -337,7 +337,7 @@ def counts_file(profile: Profile, submitted: Submitted, ran: Ran) -> MeasuredCou
         {
             "nv_counts": COUNTS_FORMAT,
             "source": ran.source,
-            "profile": {"id": profile.id, "fingerprint": _calibration_fingerprint(profile)},
+            "profile": {"id": profile.id, "fingerprint": profile.calibration_fingerprint},
             "backend": profile.device.name,
             "run_at": ran.run_at,
             "bit_order": "qiskit",

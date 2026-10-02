@@ -1,22 +1,13 @@
-"""Score a profile against measured counts, and fit how far its error rates must scale.
-
-``compare`` binds the counts to the profile's calibration, then fits one factor on every gate
-error and one on every readout error by multinomial maximum likelihood over all circuits. Only
-the reference simulator scores the model, so the fit evaluates the same profile, with the same
-factors, that every export applies. Each interval inverts a likelihood-ratio test. Where the
-chi-square cutoff would cover too little, parametric draws recalibrate it.
-"""
-
 from __future__ import annotations
 
 import math
 import textwrap
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Literal
+from functools import lru_cache, partial
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeAlias
 
 import numpy as np
 
@@ -30,18 +21,10 @@ from .errors import (
     MissingCalibrationError,
     NoiseVaultError,
 )
-from .profile import (
-    POOR_FIT_P_VALUE,
-    Bound,
-    ErrorFactor,
-    UnmodeledError,
-    _calibration_fingerprint,
-    _describe_factor,
-    _iso_z,
-)
-from .reference import Op, charged_as, probabilities
+from .profile import POOR_FIT_P_VALUE, Bound, ErrorFactor, UnmodeledError, _iso_z
+from .reference import charged_as, outcome_bits, probabilities
 from .report import Report
-from .table import GateNoise, _no_power, _qubits
+from .table import GateNoise, _qubits, unscaled_phrases
 
 if TYPE_CHECKING:
     from .counts import MeasuredCounts, PlannedCircuit
@@ -77,22 +60,20 @@ _MIN_WINDOW = 0.05
 _SAME_WAY = "gate error and readout error move these counts the same way"
 _LABEL = 16
 _WIDTH = 80
+_TVD_DIGITS = 4
 _CACHE_SIZE = 4
 _CHUNK = 1 << 22
 
-
-@dataclass(frozen=True)
-class Estimate:
-    factor: float
-    low: float | None
-    high: float | None
-    bound: Bound | None
-
-    def describe(self) -> str:
-        """The factor and its 95% interval, such as "x1.84 (95% interval 1.54 to 2.12)"."""
-        return _describe_factor(
-            ErrorFactor(factor=self.factor, low=self.low, high=self.high, bound=self.bound)
-        )
+ByPoint: TypeAlias = np.ndarray
+ByCell: TypeAlias = np.ndarray
+ByColumn: TypeAlias = np.ndarray
+ByPointByCell: TypeAlias = np.ndarray
+ByPointByDraw: TypeAlias = np.ndarray
+ByCellByDraw: TypeAlias = np.ndarray
+ByPointByColumn: TypeAlias = np.ndarray
+ByGateByReadout: TypeAlias = np.ndarray
+ByPointByQubitBit: TypeAlias = np.ndarray
+ByPointByMeasuredByPrepared: TypeAlias = np.ndarray
 
 
 @dataclass(frozen=True)
@@ -100,7 +81,12 @@ class NoEstimate:
     reason: str
 
 
-FactorResult = Estimate | NoEstimate
+FactorResult = ErrorFactor | NoEstimate
+
+
+class SummaryLine(NamedTuple):
+    text: str
+    bold_end: int
 
 
 @dataclass(frozen=True)
@@ -134,7 +120,7 @@ class Comparison:
     @property
     def dispersion(self) -> float:
         """How far the deviance exceeds its degrees of freedom; 1 when it cannot be tested."""
-        return max(1.0, self.deviance / self.dof) if self.dof > 0 else 1.0
+        return _dispersion(self.deviance, self.dof)
 
     @property
     def calibration_age(self) -> timedelta | None:
@@ -151,7 +137,7 @@ class Comparison:
             raise NoiseVaultError("the gate factor is not identified; nothing to save")
         base = self.profile.uncorrected()
         block: dict[str, Any] = {"gates": _saved(self.gates)}
-        if isinstance(self.readout, Estimate):
+        if isinstance(self.readout, ErrorFactor):
             block["readout"] = _saved(self.readout)
         block["fit"] = {
             "counts": self.counts.sha256,
@@ -165,11 +151,15 @@ class Comparison:
         return base.model_copy(update={"unmodeled_error": block})
 
     def summary(self, *, counts_file: str | None = None) -> str:
-        """The text ``nv compare`` prints, every line at most 80 columns for the check plan."""
-        lines = [*self._header(counts_file), "", *self._table(), "", *self._findings()]
+        """The text ``nv compare`` prints, every line at most 80 columns."""
+        return "\n".join(line.text for line in self.summary_lines(counts_file=counts_file))
+
+    def summary_lines(self, *, counts_file: str | None = None) -> tuple[SummaryLine, ...]:
+        blank = SummaryLine("", 0)
+        lines = [*self._header(counts_file), blank, *self._table(), blank, *self._findings()]
         if self._fitted:
-            lines += ["", *NOTE]
-        return "\n".join(lines)
+            lines += [blank, *(SummaryLine(text, 0) for text in NOTE)]
+        return tuple(lines)
 
     __str__ = summary
 
@@ -178,7 +168,7 @@ class Comparison:
         return {
             "profile_id": self.profile.id,
             "fingerprint": self.profile.fingerprint,
-            "calibration": _calibration_fingerprint(self.profile),
+            "calibration": self.profile.calibration_fingerprint,
             "counts": self.counts.sha256,
             "source": self.counts.source,
             "backend": self.counts.backend,
@@ -212,9 +202,9 @@ class Comparison:
 
     @property
     def _fitted(self) -> bool:
-        return isinstance(self.gates, Estimate) or isinstance(self.readout, Estimate)
+        return isinstance(self.gates, ErrorFactor) or isinstance(self.readout, ErrorFactor)
 
-    def _header(self, counts_file: str | None) -> list[str]:
+    def _header(self, counts_file: str | None) -> list[SummaryLine]:
         profile, counts = self.profile, self.counts
         when = profile.device.calibrated_at
         ref = profile.id if when is None else f"{profile.id}@{when.date().isoformat()}"
@@ -231,43 +221,42 @@ class Comparison:
             else f"{_duration(age)} after calibration"
         )
         run = counts.run_at.strftime("%Y-%m-%d %H:%MZ")
+        first = f"{ref} {profile.short_fingerprint} on {_on(counts.qubits)}"
         return [
-            f"{ref} {profile.short_fingerprint} on {_on(counts.qubits)}",
-            source,
-            f"run {run}, {since}",
+            SummaryLine(first, len(ref)),
+            SummaryLine(source, 0),
+            SummaryLine(f"run {run}, {since}", 0),
         ]
 
-    def _table(self) -> list[str]:
+    def _table(self) -> list[SummaryLine]:
         width = max(len("circuit"), *(len(s.name) for s in self.circuits))
         shots = max(len("shots"), *(len(str(s.shots)) for s in self.circuits))
         impossible = self.impossible_shots > 0
         head = f"{'circuit':<{width}}  {'shots':>{shots}}  profile TVD  fitted TVD  noise TVD 95%"
-        rows = [head + ("  impossible shots" if impossible else "")]
+        head += "  impossible shots" if impossible else ""
+        rows = [SummaryLine(head, len(head))]
         for s in self.circuits:
             row = (
-                f"{s.name:<{width}}  {s.shots:>{shots}}  {s.tvd_profile:>11.4f}"
-                f"  {s.tvd_fitted:>10.4f}  {s.shot_noise_95:>13.4f}"
+                f"{s.name:<{width}}  {s.shots:>{shots}}  {s.tvd_profile:>11.{_TVD_DIGITS}f}"
+                f"  {s.tvd_fitted:>10.{_TVD_DIGITS}f}  {s.shot_noise_95:>13.{_TVD_DIGITS}f}"
             )
             if impossible:
                 row += f"  {s.impossible:>16}"
             elif _beyond_noise(s):
                 row += "  beyond noise"
-            rows.append(row)
+            rows.append(SummaryLine(row, 0))
         return rows
 
-    def _findings(self) -> list[str]:
+    def _findings(self) -> list[SummaryLine]:
         gate, readout = self.gates, self.readout
-        shared = (
-            isinstance(gate, NoEstimate)
-            and isinstance(readout, NoEstimate)
-            and gate.reason == readout.reason
-        )
+        gate_reason, readout_reason = _reason(gate), _reason(readout)
+        shared = gate_reason is not None and gate_reason == readout_reason
         entries = [
-            ("gate errors", [_say(gate), *([gate.reason] if _reason(gate) and not shared else [])]),
-            ("readout errors", [_say(readout), *([readout.reason] if _reason(readout) else [])]),
+            ("gate errors", [_say(gate), *([gate_reason] if gate_reason and not shared else [])]),
+            ("readout errors", [_say(readout), *([readout_reason] if readout_reason else [])]),
             ("fit", self._verdict()),
         ]
-        if _SAME_WAY in (_reason(gate), _reason(readout)):
+        if _SAME_WAY in (gate_reason, readout_reason):
             entries.append(("next", list(NEXT_READOUT)))
         if self.notes:
             entries.append(("note", list(self.notes)))
@@ -275,8 +264,9 @@ class Comparison:
         for label, values in entries:
             for i, value in enumerate(values):
                 wrapped = textwrap.wrap(value, _WIDTH - _LABEL, break_on_hyphens=False)
-                lines.append(f"{label if i == 0 else '':<{_LABEL}}{wrapped[0]}")
-                lines += [" " * _LABEL + part for part in wrapped[1:]]
+                shown = label if i == 0 else ""
+                lines.append(SummaryLine(f"{shown:<{_LABEL}}{wrapped[0]}", len(shown)))
+                lines += [SummaryLine(" " * _LABEL + part, 0) for part in wrapped[1:]]
         return lines
 
     def _verdict(self) -> list[str]:
@@ -300,8 +290,8 @@ class Comparison:
         if self.p_value < POOR_FIT_P_VALUE:
             where = [f"on {_words(flagged)}"] if flagged else []
             return [f"beyond shot noise ({p})", *where, "no one pair of factors fits every circuit"]
-        where = "overall" if flagged else "on every circuit"
-        return [f"within shot noise {where} ({p})"]
+        scope = "overall" if flagged else "on every circuit"
+        return [f"within shot noise {scope} ({p})"]
 
 
 def compare(profile: Profile, counts: MeasuredCounts) -> Comparison:
@@ -327,7 +317,7 @@ def compare(profile: Profile, counts: MeasuredCounts) -> Comparison:
     rank = int(np.sum(eigen > SEPARABLE * eigen[-1])) if eigen[-1] > 0 else 0
     dof = int(surface.supported.sum()) - len(circuits) - rank
     deviance = _deviance(observed, fitted, surface.slices)
-    dispersion = max(1.0, deviance / dof) if dof > 0 else 1.0
+    dispersion = _dispersion(deviance, dof)
 
     seed = int(counts.sha256[7:23], 16)
     fit = _Fit(surface, observed, (log_gate, log_readout, best), shots, dispersion, seed)
@@ -383,42 +373,29 @@ def compare(profile: Profile, counts: MeasuredCounts) -> Comparison:
 
 
 class _Surface:
-    """Outcome probabilities at any (log gate factor, log readout factor) point.
-
-    Exact reference runs at the gate nodes give the probabilities before readout. Between
-    nodes they mix linearly in log factor, so every vector stays a distribution.
-    ``metrics.scale_readout`` then applies readout error exactly. An axis that no circuit
-    moves along is None and stays at factor 1.
-    """
-
     _built: OrderedDict[Any, _Surface] = OrderedDict()
 
     def __init__(
         self,
-        nodes: np.ndarray,
-        unread: np.ndarray,
-        pairs: tuple[tuple[tuple[float, float] | None, ...], ...],
+        gate_nodes: ByPoint,
+        before_readout: ByPointByCell,
+        readout_pairs: tuple[tuple[tuple[float, float] | None, ...], ...],
         slices: tuple[slice, ...],
         gate: np.ndarray | None,
         readout: np.ndarray | None,
     ) -> None:
-        self.nodes = nodes
-        self.unread = unread
-        self.pairs = pairs
+        self.gate_nodes = gate_nodes
+        self.before_readout = before_readout
+        self.readout_pairs = readout_pairs
         self.slices = slices
         self.gate = gate
         self.readout = readout
         reads = _grid(readout)
-        peaks = [self.probs_at(np.full(len(reads), x), reads).max(axis=0) for x in nodes]
+        peaks = [self.probs_at(np.full(len(reads), x), reads).max(axis=0) for x in gate_nodes]
         self.supported = np.max(peaks, axis=0) > IMPOSSIBLE
 
     @classmethod
     def cached(cls, base: Profile, circuits: Sequence[PlannedCircuit]) -> _Surface:
-        """The surface for this calibration and these circuit definitions, built once.
-
-        The key holds the circuits' qubits and ops, never their counts, so every run of one
-        plan shares a surface.
-        """
         key = (base.fingerprint, tuple((c.qubits, c.ops) for c in circuits))
         if key in cls._built:
             cls._built.move_to_end(key)
@@ -443,15 +420,15 @@ class _Surface:
         starts = np.cumsum([0, *sizes])
         slices = tuple(slice(int(a), int(b)) for a, b in zip(starts[:-1], starts[1:], strict=True))
 
-        def run(log_gate: float) -> np.ndarray:
+        def run(log_gate: float) -> ByCell:
             return _exact(base, circuits, math.exp(log_gate), None, read=False)
 
         low, high = run(nodes[0]), run(nodes[-1])
         if all(_tvd(low[part], high[part]) < 1e-9 for part in slices):
-            gate, nodes, unread = None, np.zeros(1), run(0.0)[None, :]
+            gate, nodes, before_readout = None, np.zeros(1), run(0.0)[None, :]
         else:
             gate = np.unique(np.concatenate([fine, nodes]))
-            unread = np.array([low, *(run(x) for x in nodes[1:-1]), high])
+            before_readout = np.array([low, *(run(x) for x in nodes[1:-1]), high])
         pairs = tuple(tuple(base.table.qubit(q).readout for q in c.qubits) for c in circuits)
         scales = any(
             pair is not None
@@ -460,22 +437,21 @@ class _Surface:
             for per_circuit in pairs
             for pair in per_circuit
         )
-        return cls(nodes, unread, pairs, slices, gate, fine if scales else None)
+        return cls(nodes, before_readout, pairs, slices, gate, fine if scales else None)
 
     def axis(self, axis: Axis) -> np.ndarray | None:
         return self.gate if axis == "gate" else self.readout
 
-    def probs_at(self, log_gate: np.ndarray, log_readout: np.ndarray) -> np.ndarray:
-        """(points, cells) probabilities at each (log gate, log readout) point."""
-        unread = self._unread_at(np.asarray(log_gate, dtype=float))
+    def probs_at(self, log_gate: ByPoint, log_readout: ByPoint) -> ByPointByCell:
+        unread = self._before_readout_at(np.asarray(log_gate, dtype=float))
         factors, which = np.unique(np.asarray(log_readout, dtype=float), return_inverse=True)
         which = which.ravel()
         matrices = {
             pair: np.array([_confusion(pair, float(x)) for x in factors])[which]
-            for pair in {pair for pairs in self.pairs for pair in pairs if pair is not None}
+            for pair in {pair for pairs in self.readout_pairs for pair in pairs if pair is not None}
         }
         out = np.empty_like(unread)
-        for part, pairs in zip(self.slices, self.pairs, strict=True):
+        for part, pairs in zip(self.slices, self.readout_pairs, strict=True):
             block = unread[:, part].reshape(-1, *(2,) * len(pairs))
             for i, pair in enumerate(pairs):
                 if pair is not None:
@@ -484,12 +460,11 @@ class _Surface:
         return out
 
     def loglik_at(
-        self, log_gate: np.ndarray, log_readout: np.ndarray, counts: np.ndarray
-    ) -> np.ndarray:
+        self, log_gate: ByPoint, log_readout: ByPoint, counts: ByCell | ByCellByDraw
+    ) -> ByPoint | ByPointByDraw:
         return _loglik(self.probs_at(log_gate, log_readout), counts)
 
-    def loglik(self, counts: np.ndarray) -> np.ndarray:
-        """The log-likelihood on the whole fine grid: (gate, readout) or (gate, readout, draws)."""
+    def loglik(self, counts: ByCell | ByCellByDraw) -> ByGateByReadout:
         gate, readout = _grid(self.gate), _grid(self.readout)
         points_gate, points_readout = (a.ravel() for a in np.meshgrid(gate, readout, indexing="ij"))
         counts = np.asarray(counts, dtype=float)
@@ -500,12 +475,7 @@ class _Surface:
             out[part] = self.loglik_at(points_gate[part], points_readout[part], counts)
         return out.reshape(len(gate), len(readout), *counts.shape[1:])
 
-    def maximum(self, counts: np.ndarray) -> tuple[float, float, float]:
-        """(log gate, log readout, log-likelihood) at the maximum, refined between grid points.
-
-        Among equally likely points the one nearest factor 1 on both axes wins, so a plateau
-        gives its edge. Two nested windows then place the maximum within 1/128 of a grid step.
-        """
+    def maximum(self, counts: ByCell) -> tuple[float, float, float]:
         gate, readout = _grid(self.gate), _grid(self.readout)
         values = self.loglik(counts)
         i, j = _nearest_one(values, gate[:, None], readout[None, :])
@@ -521,23 +491,21 @@ class _Surface:
         return best_gate, best_readout, best
 
     def moves(self, axis: Axis) -> list[bool]:
-        """Per circuit, whether its outcomes change between the ends of ``axis``."""
         ends, one = np.array([_LO, _HI]), np.zeros(2)
         probs = self.probs_at(ends, one) if axis == "gate" else self.probs_at(one, ends)
         return [_tvd(probs[0, part], probs[1, part]) > 1e-9 for part in self.slices]
 
-    def _unread_at(self, log_gate: np.ndarray) -> np.ndarray:
-        if len(self.nodes) == 1:
-            return np.repeat(self.unread, len(log_gate), axis=0)
-        x = np.clip(log_gate, self.nodes[0], self.nodes[-1])
-        k = np.clip(np.searchsorted(self.nodes, x, side="right") - 1, 0, len(self.nodes) - 2)
-        w = ((x - self.nodes[k]) / (self.nodes[k + 1] - self.nodes[k]))[:, None]
-        return (1 - w) * self.unread[k] + w * self.unread[k + 1]
+    def _before_readout_at(self, log_gate: ByPoint) -> ByPointByCell:
+        nodes, unread = self.gate_nodes, self.before_readout
+        if len(nodes) == 1:
+            return np.repeat(unread, len(log_gate), axis=0)
+        x = np.clip(log_gate, nodes[0], nodes[-1])
+        k = np.clip(np.searchsorted(nodes, x, side="right") - 1, 0, len(nodes) - 2)
+        w = ((x - nodes[k]) / (nodes[k + 1] - nodes[k]))[:, None]
+        return (1 - w) * unread[k] + w * unread[k + 1]
 
 
 class _Fit:
-    """The profile likelihood around one maximum, and the parametric draws that calibrate it."""
-
     def __init__(
         self,
         surface: _Surface,
@@ -559,7 +527,6 @@ class _Fit:
         self._window: _Window | None = None
 
     def interval(self, axis: Axis) -> FactorResult:
-        """The 95% interval on ``axis`` by test inversion, with the chi-square cutoff as floor."""
         at = self.at[axis]
         ends: dict[int, float | None] = {}
         for side, edge in ((-1, _LO), (1, _HI)):
@@ -569,7 +536,7 @@ class _Fit:
         if low is None and high is None:
             return NoEstimate(f"the counts do not constrain the {axis} factor")
         bound: Bound | None = "lower" if low is None else "upper" if high is None else None
-        return Estimate(
+        return ErrorFactor(
             factor=math.exp(at),
             low=None if low is None else math.exp(low),
             high=None if high is None else math.exp(high),
@@ -577,13 +544,6 @@ class _Fit:
         )
 
     def _end(self, axis: Axis, wilks: float, side: int, edge: float) -> float | None:
-        """One end of the interval. It starts at the Wilks end and moves outward while the
-        draws keep accepting.
-
-        Steps of 0.25, 0.5, 1, ... Wilks half-widths find a rejected point, then bisection
-        closes in to END_TOL of the half-width. The end is None when the test keeps the
-        domain end.
-        """
         half = max(abs(wilks - self.at[axis]), 1e-6)
         tol = max(END_TOL * half, 1e-6)
 
@@ -591,7 +551,7 @@ class _Fit:
             return (x - edge) * side >= 0
 
         inside = edge if beyond(wilks + side * tol) else wilks + side * tol
-        if not self.keep(axis, inside):
+        if not self.accepts(axis, inside):
             return wilks
         step = 0.25 * half
         while True:
@@ -599,39 +559,26 @@ class _Fit:
                 return None
             candidate = inside + side * step
             if beyond(candidate):
-                if self.keep(axis, edge):
+                if self.accepts(axis, edge):
                     return None
                 outside = edge
                 break
-            if not self.keep(axis, candidate):
+            if not self.accepts(axis, candidate):
                 outside = candidate
                 break
             inside, step = candidate, 2 * step
-        while abs(outside - inside) > tol:
-            middle = (inside + outside) / 2
-            if self.keep(axis, middle):
-                inside = middle
-            else:
-                outside = middle
-        return inside
+        return _bisect(inside, outside, partial(self.accepts, axis), tol)
 
     def wilks(self, axis: Axis) -> dict[int, float | None]:
-        """Where the likelihood ratio crosses the chi-square cutoff on each side; None at a
-        domain end it never reaches."""
         if axis not in self._wilks:
-            at, ends = self.at[axis], {}
+            at = self.at[axis]
+            ends: dict[int, float | None] = {}
+
+            def within_cutoff(held: float) -> bool:
+                return self.lr(axis, held) <= self.cutoff
+
             for side, edge in ((-1, _LO), (1, _HI)):
-                if self.lr(axis, edge) <= self.cutoff:
-                    ends[side] = None
-                    continue
-                inside, outside = at, edge
-                while abs(outside - inside) > 1e-6:
-                    middle = (inside + outside) / 2
-                    if self.lr(axis, middle) <= self.cutoff:
-                        inside = middle
-                    else:
-                        outside = middle
-                ends[side] = inside
+                ends[side] = None if within_cutoff(edge) else _bisect(at, edge, within_cutoff, 1e-6)
             self._wilks[axis] = ends
         return self._wilks[axis]
 
@@ -639,7 +586,6 @@ class _Fit:
         return 2 * (self.best - self.restricted(axis, held)[1])
 
     def restricted(self, axis: Axis, held: float) -> tuple[float, float]:
-        """(the other axis at its best, the log-likelihood) with ``axis`` held at ``held``."""
         other = self.surface.axis(_other(axis))
         if other is None:
             return 0.0, float(self._line(axis, held, np.zeros(1), self.observed)[0])
@@ -647,12 +593,10 @@ class _Fit:
         line = np.linspace(max(center - _STEP, _LO), min(center + _STEP, _HI), WINDOW_POINTS)
         values = self._line(axis, held, line, self.observed)[:, None]
         k = np.argmax(values, axis=0)
-        shift, gain = _refine(values, k, line[1] - line[0])
-        return float(line[k[0]] + shift[0]), float(values[k[0], 0] + gain[0])
+        vertex = _refine(values, k, line[1] - line[0])
+        return float(line[k[0]] + vertex.shift[0]), float(values[k[0], 0] + vertex.gain[0])
 
-    def keep(self, axis: Axis, held: float) -> bool:
-        """True when the test does not reject ``held``. Either the chi-square cutoff accepts
-        it, or RESAMPLES draws at ``held`` show that its likelihood ratio is not extreme."""
+    def accepts(self, axis: Axis, held: float) -> bool:
         observed = self.lr(axis, held)
         if observed <= self.cutoff:
             return True
@@ -663,10 +607,9 @@ class _Fit:
         p = (1 + np.sum(drawn >= observed / self.dispersion - 1e-9)) / (1 + RESAMPLES)
         return bool(p > 1 - LEVEL)
 
-    def draw(self, probs: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-        """(cells, RESAMPLES) counts drawn from ``probs`` with the observed supported shots."""
+    def draw(self, probs: ByCell, rng: np.random.Generator) -> ByCellByDraw:
         probs = np.where(self.surface.supported, probs, 0.0)
-        parts = []
+        parts: list[np.ndarray] = []
         for part, shots in zip(self.surface.slices, self.shots, strict=True):
             cell = probs[part]
             if shots:
@@ -675,9 +618,7 @@ class _Fit:
                 parts.append(np.zeros((len(cell), RESAMPLES)))
         return np.concatenate(parts).astype(float)
 
-    def draw_max(self, draws: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Each column's (log-likelihood, log gate, log readout) at its maximum on the window
-        around the estimate, refined by a parabola along each axis."""
+    def draw_max(self, draws: ByCellByDraw) -> tuple[ByColumn, ByColumn, ByColumn]:
         window = self.window()
         gate, readout = window.gate, window.readout
         values = _loglik(window.probs, draws).reshape(len(gate), len(readout), -1)
@@ -685,21 +626,18 @@ class _Fit:
         i, j = np.unravel_index(
             np.argmax(values.reshape(-1, len(columns)), axis=0), values.shape[:2]
         )
-        shift_gate, gain_gate = _refine(values[:, j, columns], i, _spacing(gate))
-        shift_readout, gain_readout = _refine(values[i, :, columns].T, j, _spacing(readout))
-        top = values[i, j, columns] + gain_gate + gain_readout
-        return top, gate[i] + shift_gate, readout[j] + shift_readout
+        along_gate = _refine(values[:, j, columns], i, _spacing(gate))
+        along_readout = _refine(values[i, :, columns].T, j, _spacing(readout))
+        top = values[i, j, columns] + along_gate.gain + along_readout.gain
+        return top, gate[i] + along_gate.shift, readout[j] + along_readout.shift
 
-    def draw_restricted(self, draws: np.ndarray, axis: Axis, held: float) -> np.ndarray:
-        """Each column's maximum on the window's line through ``held``, refined by a parabola."""
+    def draw_restricted(self, draws: ByCellByDraw, axis: Axis, held: float) -> ByColumn:
         line = self.window().gate if axis == "readout" else self.window().readout
         values = self._line(axis, held, line, draws)
         k = np.argmax(values, axis=0)
-        return values[k, np.arange(values.shape[1])] + _refine(values, k, _spacing(line))[1]
+        return values[k, np.arange(values.shape[1])] + _refine(values, k, _spacing(line)).gain
 
     def window(self) -> _Window:
-        """WINDOW_POINTS per axis spanning 4 Wilks half-widths around the estimate, with the
-        probabilities at every window point."""
         if self._window is None:
             spans: dict[Axis, np.ndarray] = {}
             for axis in _AXES:
@@ -716,26 +654,27 @@ class _Fit:
             self._window = _Window(spans["gate"], spans["readout"], self.surface.probs_at(g, r))
         return self._window
 
-    def _line(self, axis: Axis, held: float, others: np.ndarray, counts: np.ndarray) -> np.ndarray:
+    def _line(
+        self, axis: Axis, held: float, others: ByPoint, counts: ByCell | ByCellByDraw
+    ) -> ByPoint | ByPointByDraw:
         return self.surface.loglik_at(*_point(axis, held, others), counts)
 
 
 @dataclass(frozen=True)
 class _Window:
-    gate: np.ndarray
-    readout: np.ndarray
-    probs: np.ndarray
+    gate: ByPoint
+    readout: ByPoint
+    probs: ByPointByCell
 
 
 def _bind(profile: Profile, counts: MeasuredCounts) -> Profile:
-    """The calibration the counts bind to, or CountsError naming why they do not."""
     if counts.backend != profile.device.name:
         raise CountsError(
             f"these counts ran on {counts.backend}, but the profile describes"
             f" {profile.device.name}",
             hint="give the profile the counts were planned from",
         )
-    planned, calibration = counts.profile.fingerprint, _calibration_fingerprint(profile)
+    planned, calibration = counts.profile.fingerprint, profile.calibration_fingerprint
     if planned != calibration:
         raise CountsError(
             f"these counts were planned from nv:{planned[:12]}; this profile's calibration is"
@@ -770,7 +709,7 @@ def _bind(profile: Profile, counts: MeasuredCounts) -> Profile:
             try:
                 resolve_op(
                     table,
-                    charged_as(base, op.name, _unitary(op)),
+                    charged_as(base, op.name, gates.unitary(op.name, op.params)),
                     targets,
                     unknown_gates="error",
                     report=report,
@@ -784,26 +723,32 @@ def _bind(profile: Profile, counts: MeasuredCounts) -> Profile:
 
 
 def _floor_factors(base: Profile, circuits: Sequence[PlannedCircuit]) -> tuple[float, ...]:
-    """Each measured gate's relaxation-floor factor, where its scaled error meets the error of
-    its relaxation alone. A node there keeps the kink in the probabilities on a node."""
     table, floors = base.table, set()
+    for found, infidelity in _calibrated_gates(base, circuits):
+        if found.pauli:
+            continue
+        n = len(found.qubits)
+        built = gate_channels(found, [table.qubit(q) for q in found.qubits])
+        stated = metrics.depolarizing_from_avg(infidelity, n)
+        relaxed = metrics.depolarizing_from_avg(built.relaxation, n)
+        if 0 < relaxed < 1 and 0 < stated < 1:
+            factor = math.log1p(-relaxed) / math.log1p(-stated)
+            if FACTOR_RANGE[0] < factor < FACTOR_RANGE[1]:
+                floors.add(factor)
+    return tuple(sorted(floors))
+
+
+def _calibrated_gates(
+    base: Profile, circuits: Sequence[PlannedCircuit]
+) -> Iterator[tuple[GateNoise, float]]:
     for c in circuits:
         for op in c.ops:
             if op.name == "delay":
                 continue
-            qubits = tuple(c.qubits[q] for q in op.qubits)
-            found = table.gate(charged_as(base, op.name, _unitary(op)), qubits)
-            if not isinstance(found, GateNoise) or found.state != "calibrated" or found.pauli:
-                continue
-            n = len(qubits)
-            built = gate_channels(found, [table.qubit(q) for q in qubits])
-            stated = metrics.depolarizing_from_avg(found.avg_infidelity, n)  # type: ignore[arg-type]
-            relaxed = metrics.depolarizing_from_avg(built.relaxation, n)
-            if 0 < relaxed < 1 and 0 < stated < 1:
-                factor = math.log1p(-relaxed) / math.log1p(-stated)
-                if FACTOR_RANGE[0] < factor < FACTOR_RANGE[1]:
-                    floors.add(factor)
-    return tuple(sorted(floors))
+            name = charged_as(base, op.name, gates.unitary(op.name, op.params))
+            found = base.table.gate(name, tuple(c.qubits[q] for q in op.qubits))
+            if isinstance(found, GateNoise) and found.avg_infidelity is not None:
+                yield found, found.avg_infidelity
 
 
 def _fisher(
@@ -813,8 +758,6 @@ def _fisher(
     gate: float | None,
     readout: float | None,
 ) -> np.ndarray:
-    """The 2 x 2 expected information in (log gate, log readout) at the fitted factors, from
-    central differences of exact probabilities. An absent axis has no information."""
     circuits = counts.circuits
     step = math.exp(FD_STEP)
     slopes = []
@@ -834,8 +777,6 @@ def _fisher(
 def _identify(
     surface: _Surface, counts: np.ndarray, info: np.ndarray
 ) -> dict[Axis, NoEstimate | None]:
-    """Which axes get no estimate, and why; None means fit the axis. The rule is per axis,
-    so a locally flat axis keeps a one-sided interval and the other axis keeps its estimate."""
     shots = [counts[part].sum() for part in surface.slices]
     if not sum(shots):
         every = NoEstimate("the profile rules out every shot")
@@ -865,73 +806,72 @@ def _identify(
 def _absent(surface: _Surface, axis: Axis) -> str:
     if axis == "gate":
         return "no circuit's outcomes move with gate error"
-    if any(pair and sum(pair) for pairs in surface.pairs for pair in pairs):
+    if any(pair and sum(pair) for pairs in surface.readout_pairs for pair in pairs):
         return "the readout error of the measured qubits does not scale"
     return "the measured qubits state no readout error"
 
 
 def _ruled_out(
-    surface: _Surface, circuits: Sequence[PlannedCircuit], impossible: np.ndarray
+    surface: _Surface, circuits: Sequence[PlannedCircuit], impossible: ByCell
 ) -> tuple[str, ...]:
-    """One phrase per stated zero readout error that explains impossible shots."""
     found: dict[tuple[int, int], dict[str, int]] = {}
-    for c, part, pairs in zip(circuits, surface.slices, surface.pairs, strict=True):
+    for c, part, pairs in zip(circuits, surface.slices, surface.readout_pairs, strict=True):
         shots = impossible[part]
         if not shots.any():
             continue
-        n = len(c.qubits)
-        unread = surface.unread[:, part].reshape(-1, *(2,) * n)
+        width = len(c.qubits)
+        unread = surface.before_readout[:, part].reshape(-1, *(2,) * width)
         for i, pair in enumerate(pairs):
             if pair is None:
                 continue
-            marginal = unread.sum(axis=tuple(a for a in range(1, n + 1) if a != i + 1))
+            marginal = unread.sum(axis=tuple(a for a in range(1, width + 1) if a != i + 1))
             for bit, stated in ((1, pair[0]), (0, pair[1])):
                 if stated or marginal[:, bit].max() > IMPOSSIBLE:
                     continue
-                cells = [k for k in np.flatnonzero(shots) if (k >> (n - 1 - i)) & 1 == bit]
+                cells = [k for k in np.flatnonzero(shots) if outcome_bits(k, width)[i] == str(bit)]
                 if cells:
                     per = found.setdefault((c.qubits[i], bit), {})
                     per[c.name] = per.get(c.name, 0) + int(shots[cells].sum())
     phrases = []
     for (qubit, bit), per in sorted(found.items()):
-        stated = "P(1|0)" if bit else "P(0|1)"
-        runs = _words([f"{_count(n, 'shot', c)}" for c, n in per.items()])
-        phrases.append(f"qubit {qubit} has {stated} = 0, and {runs} read it as {bit}")
+        error = "P(1|0)" if bit else "P(0|1)"
+        runs = _words([_count(n, "shot", name) for name, n in per.items()])
+        phrases.append(f"qubit {qubit} has {error} = 0, and {runs} read it as {bit}")
     return tuple(phrases)
 
 
 def _notes(base: Profile, circuits: Sequence[PlannedCircuit]) -> tuple[str, ...]:
-    """What the fit cannot scale or charge on the measured qubits."""
     table = base.table
-    unscaled: dict[tuple[str, str], list[tuple[int, ...]]] = {}
-    idle: set[int] = set()
-    for c in circuits:
-        for op in c.ops:
-            qubits = tuple(c.qubits[q] for q in op.qubits)
-            if op.name == "delay":
-                if table.qubit(qubits[0]).relaxation_unknown:
-                    idle.add(qubits[0])
-                continue
-            found = table.gate(charged_as(base, op.name, _unitary(op)), qubits)
-            if not isinstance(found, GateNoise) or found.state != "calibrated":
-                continue
-            reason = _no_power(found.spec.metric, len(qubits))
-            if reason and qubits not in unscaled.setdefault((found.gate, reason), []):
-                unscaled[(found.gate, reason)].append(qubits)
-    notes = [
-        f"{name} on {_qubits(on)} is not scaled ({reason})"
-        for (name, reason), on in unscaled.items()
+    gates_left = [
+        (found.gate, found.qubits, reason)
+        for found, _ in _calibrated_gates(base, circuits)
+        if (reason := _why_unscaled(found))
     ]
     measured = sorted({q for c in circuits for q in c.qubits})
-    chance = [(q,) for q in measured if sum(table.qubit(q).readout or (0, 0)) >= 1]
-    if chance:
-        notes.append(f"readout of {_qubits(chance)} is not scaled (no better than chance)")
+    pairs = [(q, table.qubit(q).readout) for q in measured]
+    chance = [
+        (q, reason)
+        for q, pair in pairs
+        if pair is not None and (reason := metrics.readout_unscalable(pair))
+    ]
+    notes = unscaled_phrases(gates_left, chance)
+    idle = sorted(
+        {
+            c.qubits[op.qubits[0]]
+            for c in circuits
+            for op in c.ops
+            if op.name == "delay" and table.qubit(c.qubits[op.qubits[0]]).relaxation_unknown
+        }
+    )
     if idle:
-        notes.append(
-            f"delays on {_qubits([(q,) for q in sorted(idle)])} add no idle error"
-            " (no T1 or T2 stated)"
-        )
+        on = _qubits([(q,) for q in idle])
+        notes.append(f"delays on {on} add no idle error (no T1 or T2 stated)")
     return tuple(notes)
+
+
+def _why_unscaled(found: GateNoise) -> str | None:
+    metric = found.spec.metric
+    return None if metric is None else metrics.unscalable(*metric, len(found.qubits))
 
 
 def _exact(
@@ -941,15 +881,9 @@ def _exact(
     readout: float | None,
     *,
     read: bool = True,
-) -> np.ndarray:
-    """Reference probabilities of every circuit, with the factors applied to ``base``.
-
-    One report started from ``base`` serves every circuit. A report started from the scaled
-    profile would list what its factors leave unscaled, which reads every calibration record
-    and costs more than the runs.
-    """
-    scaled = _with_factors(base, gate, readout)
-    report = Report.start(base, "reference", None)
+) -> ByCell:
+    scaled = _scaled_without_revalidation(base, gate, readout)
+    report = Report.start(scaled, "reference", None)
     return np.concatenate(
         [
             probabilities(
@@ -966,30 +900,20 @@ def _exact(
     )
 
 
-def _with_factors(base: Profile, gate: float | None, readout: float | None) -> Profile:
-    """``base`` carrying these factors, without validating the whole profile again.
-
-    ``base`` is valid and the factors are validated on their own. A readout factor comes only
-    when the measured qubits state readout error, so the profile rule that refuses one
-    without readout data cannot apply. Skipping the full validation halves each exact run.
-    """
-    factors = {
-        name: {"factor": value}
-        for name, value in (("gates", gate), ("readout", readout))
-        if value is not None
-    }
-    if not factors:
+def _scaled_without_revalidation(
+    base: Profile, gate: float | None, readout: float | None
+) -> Profile:
+    if gate is None and readout is None:
         return base
+    unmodeled = UnmodeledError(
+        gates=None if gate is None else ErrorFactor(factor=gate),
+        readout=None if readout is None else ErrorFactor(factor=readout),
+    )
     fields = {name: getattr(base, name) for name in type(base).model_fields}
-    return type(base).model_construct(**{**fields, "unmodeled_error": UnmodeledError(**factors)})
+    return type(base).model_construct(**{**fields, "unmodeled_error": unmodeled})
 
 
-def _loglik(probs: np.ndarray, counts: np.ndarray) -> np.ndarray:
-    """sum n log p over cells, with 0 log 0 = 0 and n log 0 = -inf for n > 0.
-
-    probs (points, cells) and counts (cells,) or (cells, draws) give (points,) or
-    (points, draws). Observed and drawn counts go through this one kernel.
-    """
+def _loglik(probs: ByPointByCell, counts: ByCell | ByCellByDraw) -> ByPoint | ByPointByDraw:
     counts = np.asarray(counts, dtype=float)
     zero = probs <= 0
     with np.errstate(divide="ignore"):
@@ -999,7 +923,11 @@ def _loglik(probs: np.ndarray, counts: np.ndarray) -> np.ndarray:
     return out
 
 
-def _deviance(counts: np.ndarray, probs: np.ndarray, slices: Sequence[slice]) -> float:
+def _dispersion(deviance: float, dof: int) -> float:
+    return max(1.0, deviance / dof) if dof > 0 else 1.0
+
+
+def _deviance(counts: ByCell, probs: ByCell, slices: Sequence[slice]) -> float:
     total = 0.0
     for part in slices:
         n, p = counts[part], probs[part]
@@ -1009,8 +937,7 @@ def _deviance(counts: np.ndarray, probs: np.ndarray, slices: Sequence[slice]) ->
     return total
 
 
-def _saturated(counts: np.ndarray, slices: Sequence[slice]) -> np.ndarray:
-    """Each column's log-likelihood at its own frequencies."""
+def _saturated(counts: ByCellByDraw, slices: Sequence[slice]) -> ByColumn:
     total = np.zeros(counts.shape[1])
     for part in slices:
         n = counts[part]
@@ -1020,7 +947,6 @@ def _saturated(counts: np.ndarray, slices: Sequence[slice]) -> np.ndarray:
 
 
 def _nearest_one(values: np.ndarray, gate: np.ndarray, readout: np.ndarray) -> tuple[int, int]:
-    """The best point; among ties, the one nearest factor 1 on both axes."""
     top = float(values.max())
     ties = values >= top - max(1e-9, 1e-12 * abs(top))
     distance = np.where(ties, np.abs(gate) + np.abs(readout), np.inf)
@@ -1028,24 +954,27 @@ def _nearest_one(values: np.ndarray, gate: np.ndarray, readout: np.ndarray) -> t
     return int(i), int(j)
 
 
-def _refine(line: np.ndarray, k: np.ndarray, step: float) -> tuple[np.ndarray, np.ndarray]:
-    """Per column of ``line`` (points, columns), the (shift, gain) of the parabola through
-    its best point ``k`` and that point's neighbours; 0 at an end of the line."""
+class _Vertex(NamedTuple):
+    shift: ByColumn
+    gain: ByColumn
+
+
+def _refine(line: ByPointByColumn, best: ByColumn, step: float) -> _Vertex:
     zero = np.zeros(line.shape[1])
     if len(line) < 3:
-        return zero, zero
+        return _Vertex(zero, zero)
     columns = np.arange(line.shape[1])
-    inner = np.clip(k, 1, len(line) - 2)
+    inner = np.clip(best, 1, len(line) - 2)
     left, mid, right = (line[inner + d, columns] for d in (-1, 0, 1))
     curve = 2 * mid - left - right
-    usable = (k == inner) & (curve > 0) & np.isfinite(left) & np.isfinite(right)
+    usable = (best == inner) & (curve > 0) & np.isfinite(left) & np.isfinite(right)
     with np.errstate(invalid="ignore", divide="ignore"):
         shift = np.where(usable, 0.5 * (right - left) / curve * step, 0.0)
         gain = np.where(usable, (right - left) ** 2 / (8 * curve), 0.0)
-    return shift, gain
+    return _Vertex(shift, gain)
 
 
-def _point(axis: Axis, held: float, others: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _point(axis: Axis, held: float, others: ByPoint) -> tuple[ByPoint, ByPoint]:
     fixed = np.full(len(others), held)
     return (fixed, others) if axis == "gate" else (others, fixed)
 
@@ -1069,8 +998,9 @@ def _spacing(line: np.ndarray) -> float:
     return float(line[1] - line[0]) if len(line) > 1 else 0.0
 
 
-def _read(block: np.ndarray, axis: int, matrices: np.ndarray) -> np.ndarray:
-    """Apply one qubit's confusion matrix per point: M[measured, prepared] along ``axis``."""
+def _read(
+    block: ByPointByQubitBit, axis: int, matrices: ByPointByMeasuredByPrepared
+) -> ByPointByQubitBit:
     m = matrices.reshape(len(matrices), 2, 2, *(1,) * (block.ndim - 2))
     zero, one = np.take(block, 0, axis=axis), np.take(block, 1, axis=axis)
     return np.stack(
@@ -1084,15 +1014,21 @@ def _confusion(pair: tuple[float, float], log_factor: float) -> np.ndarray:
     return np.array([[1 - a, b], [a, 1 - b]])
 
 
-def _unitary(op: Op) -> np.ndarray:
-    return gates.GATES[op.name].unitary(*op.params)  # type: ignore[misc]
+def _bisect(inside: float, outside: float, accepts: Callable[[float], bool], tol: float) -> float:
+    while abs(outside - inside) > tol:
+        middle = (inside + outside) / 2
+        if accepts(middle):
+            inside = middle
+        else:
+            outside = middle
+    return inside
 
 
 def _tvd(p: np.ndarray, q: np.ndarray) -> float:
     return 0.5 * float(np.abs(np.asarray(p) - np.asarray(q)).sum())
 
 
-def _saved(estimate: Estimate) -> dict[str, Any]:
+def _saved(estimate: ErrorFactor) -> dict[str, Any]:
     def rounded(value: float | None) -> float | None:
         return None if value is None else float(f"{value:.6g}")
 
@@ -1107,16 +1043,15 @@ def _saved(estimate: Estimate) -> dict[str, Any]:
 def _factor_dict(result: FactorResult) -> dict[str, Any]:
     if isinstance(result, NoEstimate):
         return {"not_identified": result.reason}
-    return {"factor": result.factor, "low": result.low, "high": result.high, "bound": result.bound}
+    return result.model_dump()
 
 
 def _beyond_noise(score: CircuitScore) -> bool:
-    """Decided on the values as printed, so a flagged row always shows the larger TVD."""
-    return round(score.tvd_fitted, 4) > round(score.shot_noise_95, 4)
+    return round(score.tvd_fitted, _TVD_DIGITS) > round(score.shot_noise_95, _TVD_DIGITS)
 
 
 def _say(result: FactorResult) -> str:
-    return result.describe() if isinstance(result, Estimate) else "not identified"
+    return result.describe() if isinstance(result, ErrorFactor) else "not identified"
 
 
 def _reason(result: FactorResult) -> str | None:

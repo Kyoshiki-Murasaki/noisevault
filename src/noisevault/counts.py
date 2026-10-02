@@ -46,14 +46,13 @@ from .profile import (
     Profile,
     QubitIndex,
     UtcDatetime,
-    _calibration_fingerprint,
     _Model,
     _readable_json,
     _sha256,
     _string_keys,
     write_atomically,
 )
-from .reference import MAX_QUBITS, Op, charged_as, probabilities
+from .reference import MAX_QUBITS, Op, charged_as, outcome_bits, probabilities
 from .table import GateNoise
 
 COUNTS_FORMAT = "1.0"
@@ -72,13 +71,10 @@ _OP_NAMES = sorted(["delay", *(n for n, g in gates.GATES.items() if g.unitary is
 
 
 def _op_from_wire(value: Any) -> Op:
-    """["sx", [0], []] -> Op("sx", (0,), ()). A delay's single parameter is nanoseconds."""
     if isinstance(value, Op):
-        name, qubits, params = value.name, value.qubits, value.params
-    elif isinstance(value, list | tuple) and len(value) == 3:
-        name, qubits, params = value
-    else:
-        name = qubits = params = None
+        value = (value.name, value.qubits, value.params)
+    shaped = isinstance(value, list | tuple) and len(value) == 3
+    name, qubits, params = value if shaped else (None, None, None)
     if not (
         isinstance(name, str)
         and isinstance(qubits, list | tuple)
@@ -149,17 +145,11 @@ WireOp = Annotated[Op, BeforeValidator(_op_from_wire), PlainSerializer(_op_to_wi
 
 @dataclass(frozen=True)
 class _RunRule:
-    """A property of every run format 1.0 admits, as an Execution flag and a SamplerV2 option.
-
-    ``otherwise`` says what a run without the property did, and ``run`` how to run the circuits
-    again with it.
-    """
-
     flag: str | None
     option: str | None
     required: bool | str
-    otherwise: str
-    run: str
+    consequence: str
+    remedy: str
 
 
 _RUN_RULES = (
@@ -207,8 +197,7 @@ _RUN_RULES = (
     ),
 )
 
-# Option paths and defaults verified in qiskit-ibm-runtime 0.40.0 and 0.49.0 (options/*.py).
-_SAMPLER_V2_OPTIONS: Mapping[str, Any] = MappingProxyType(
+SAMPLER_V2_OPTIONS: Mapping[str, Any] = MappingProxyType(
     {rule.option: rule.required for rule in _RUN_RULES if rule.option}
 )
 
@@ -240,7 +229,6 @@ class Execution(_Model):
     @model_validator(mode="before")
     @classmethod
     def _flags(cls, data: Any) -> Any:
-        """Refuse a flag that is not a bool, and name what a run with a flag the other way did."""
         if not isinstance(data, Mapping):
             return data
         for rule in _RUN_RULES:
@@ -251,8 +239,8 @@ class Execution(_Model):
                 raise CountsError(f"{rule.flag} is {_shown(value)}; give true or false")
             if value != rule.required:
                 raise CountsError(
-                    f"{rule.flag} is {_shown(value)}, so {rule.otherwise}",
-                    hint=f"run the circuits again {rule.run}",
+                    f"{rule.flag} is {_shown(value)}, so {rule.consequence}",
+                    hint=f"run the circuits again {rule.remedy}",
                 )
         return data
 
@@ -266,7 +254,7 @@ class Execution(_Model):
                     _shown(rule.required) if isinstance(rule.required, str) else rule.required
                 )
                 raise CountsError(
-                    f"options.{path} is {_shown(value)}, so {rule.otherwise}",
+                    f"options.{path} is {_shown(value)}, so {rule.consequence}",
                     hint=f"run the circuits again with the SamplerV2 option {rule.option}"
                     f" set to {required}",
                 )
@@ -274,21 +262,16 @@ class Execution(_Model):
 
 
 def _option(options: Mapping[str, Any], path: str) -> tuple[str, Any] | None:
-    """The value recorded at a dotted option path and the path that holds it; None when unset.
-
-    A value where the path expects an object stands for the whole path, so a recorded
-    ``"twirling": true`` reads as twirling on.
-    """
+    parts = path.split(".")
     value: Any = options
-    walked = []
-    for part in path.split("."):
+    for depth, part in enumerate(parts):
         if not isinstance(value, Mapping):
-            break
+            stands_for_the_whole_path = ".".join(parts[:depth])
+            return stands_for_the_whole_path, value
         if part not in value:
             return None
         value = value[part]
-        walked.append(part)
-    return ".".join(walked), value
+    return path, value
 
 
 class PlannedCircuit(_Model):
@@ -328,7 +311,6 @@ class MeasuredCircuit(PlannedCircuit):
     @field_validator("counts")
     @classmethod
     def _canonical_counts(cls, counts: dict[str, int], info: ValidationInfo) -> FrozenDict:
-        """One bit per circuit qubit, sorted, zero entries dropped."""
         width = len(info.data.get("qubits", ()))
         for key in counts:
             if not set(key) <= {"0", "1"}:
@@ -357,10 +339,9 @@ class MeasuredCircuit(PlannedCircuit):
         """A fresh int64 array of 2**n counts, big-endian: circuit qubit 0 is the most
         significant bit, the reference's order. Fresh on each call, so the model stays
         immutable and its hash stays true."""
-        out = np.zeros(2 ** len(self.qubits), dtype=np.int64)
-        for key, count in self.counts.items():
-            out[int(key, 2)] = count
-        return out
+        width = len(self.qubits)
+        keys = (outcome_bits(index, width) for index in range(2**width))
+        return np.array([self.counts.get(key, 0) for key in keys], dtype=np.int64)
 
 
 class MeasuredCounts(_Model):
@@ -379,7 +360,6 @@ class MeasuredCounts(_Model):
     @model_validator(mode="before")
     @classmethod
     def _canonical_bits(cls, data: Any) -> Any:
-        """Counts written with clbit 0 on the right are stored with it on the left."""
         if not isinstance(data, Mapping) or data.get("bit_order") != "qiskit":
             return data
         circuits = data.get("circuits")
@@ -417,11 +397,7 @@ class MeasuredCounts(_Model):
 
     @property
     def sha256(self) -> str:
-        """``sha256:`` and the hex SHA-256 of the canonical JSON of :meth:`to_dict`.
-
-        Computed on each read: a cached value would sit beside the fields, and revalidating the
-        model would refuse it as an extra key.
-        """
+        """``sha256:`` and the hex SHA-256 of the canonical JSON of :meth:`to_dict`."""
         return "sha256:" + _sha256(self.to_dict())
 
     @property
@@ -523,7 +499,6 @@ def _first_issue(exc: ValidationError) -> tuple[str, str | None]:
 
 
 def _not_json_hint(path: Path) -> str:
-    """A file named like a counts file has damaged content; any other file is the wrong kind."""
     if path.name.endswith((".json", ".json.gz")):
         return "the file is damaged or cut short; save the counts again"
     return "give a counts file (.json or .json.gz)"
@@ -541,21 +516,13 @@ def plan(
     factors plans the run of its calibration.
     """
     base = profile.uncorrected()
-    chain, circuits = check._plan(base, layout)
-    if not circuits:
-        raise NoiseVaultError(
-            f"{base.id} has no calibrated native gate with a known unitary on qubits {chain},"
-            " so there is nothing to run",
-            hint=None if layout is None else "pass layout= with other qubits",
-        )
+    chain, circuits = check.plan_circuits(base, layout, purpose="run")
     return tuple(_scheduled(base, c.name, tuple(chain[: c.num_qubits]), c.ops) for c in circuits)
 
 
 def _scheduled(
     profile: Profile, name: str, qubits: tuple[int, ...], ops: Sequence[Op]
 ) -> PlannedCircuit:
-    """``ops`` as soon as possible, each wait a delay. Durations add as exact fractions, so two
-    paths of equal length leave no sliver of delay between them."""
     free = [Fraction(0)] * len(qubits)
     timed = []
     for op in ops:
@@ -573,8 +540,7 @@ def _scheduled(
 
 
 def _duration(profile: Profile, op: Op, qubits: tuple[int, ...]) -> Fraction:
-    """The stated duration of the gate the exports charge ``op`` as, on its physical qubits."""
-    unitary = gates.GATES[op.name].unitary(*op.params)  # type: ignore[misc]
+    unitary = gates.unitary(op.name, op.params)
     found = profile.table.gate(
         charged_as(profile, op.name, unitary), [qubits[q] for q in op.qubits]
     )
@@ -597,8 +563,7 @@ def simulate(
     ``run_at`` defaults to the current UTC time. The same ``seed`` and ``run_at`` give the same
     counts and the same ``sha256``.
     """
-    if not isinstance(shots, int) or shots < 1:
-        raise ValueError(f"shots={shots!r}: give a positive number of shots")
+    check.validate_shots(shots)
     rng = np.random.default_rng(seed)
     measured = []
     for circuit in circuits:
@@ -607,7 +572,7 @@ def simulate(
             truth, circuit.ops, n, layout=circuit.qubits, readout=True, unknown_gates="error"
         )
         draws = rng.multinomial(shots, probs)
-        counts = {format(i, f"0{n}b"): int(k) for i, k in enumerate(draws)}
+        counts = {outcome_bits(i, n): int(k) for i, k in enumerate(draws)}
         measured.append(
             {
                 "name": circuit.name,
@@ -617,23 +582,25 @@ def simulate(
                 "counts": counts,
             }
         )
-    return MeasuredCounts(
-        nv_counts=COUNTS_FORMAT,
-        source="simulated",
-        profile=ProfileBinding(id=truth.id, fingerprint=_calibration_fingerprint(truth)),
-        backend=truth.device.name,
-        run_at=datetime.now(UTC) if run_at is None else run_at,
-        bit_order="clbit0_left",
-        execution=Execution(
-            client=f"noisevault {__version__} simulate",
-            transpiled=False,
-            gate_twirling=False,
-            measure_twirling=False,
-            dynamical_decoupling=False,
-            init_qubits=True,
-            options={"seed": seed, "unmodeled_error": truth.to_dict().get("unmodeled_error")},
-        ),
-        circuits=tuple(measured),
+    return MeasuredCounts.model_validate(
+        {
+            "nv_counts": COUNTS_FORMAT,
+            "source": "simulated",
+            "profile": ProfileBinding(id=truth.id, fingerprint=truth.calibration_fingerprint),
+            "backend": truth.device.name,
+            "run_at": datetime.now(UTC) if run_at is None else run_at,
+            "bit_order": "clbit0_left",
+            "execution": Execution(
+                client=f"noisevault {__version__} simulate",
+                transpiled=False,
+                gate_twirling=False,
+                measure_twirling=False,
+                dynamical_decoupling=False,
+                init_qubits=True,
+                options={"seed": seed, "unmodeled_error": truth.to_dict().get("unmodeled_error")},
+            ),
+            "circuits": measured,
+        }
     )
 
 
@@ -645,7 +612,6 @@ def _real(value: int | float) -> float:
 
 
 def _shown(value: Any, limit: int = 40) -> str:
-    """``value`` as JSON for a message, cut to ``limit`` characters."""
     text = json.dumps(value, ensure_ascii=False, default=repr)
     return text if len(text) <= limit else text[: limit - 3] + "..."
 

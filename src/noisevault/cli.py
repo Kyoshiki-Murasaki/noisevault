@@ -64,6 +64,7 @@ from .table import GateNoise
 
 if TYPE_CHECKING:
     from .check import CheckResult, FrameworkCheck
+    from .compare import SummaryLine
     from .counts import MeasuredCounts
 
 # Click's UsageError; typer exports only this subclass of it.
@@ -1110,7 +1111,7 @@ def compare(
         with err.status("Fitting the gate and readout factors..."):
             result = profile.compare(measured)
         if not as_json:
-            _print_comparison(result.summary(counts_file=counts))
+            _print_comparison(result.summary_lines(counts_file=counts))
         written: dict[str, str] | None = None
         failure: NoiseVaultError | None = None
         if output is not None:
@@ -1178,23 +1179,11 @@ def _read_counts(path: Path) -> MeasuredCounts:
         ) from None
 
 
-_LABEL = re.compile(r"\S+(?: \S+)*(?=  )")
-
-
-def _print_comparison(summary: str) -> None:
-    """``Comparison.summary()`` with the ref, the table header and each label in bold."""
-    lines = summary.split("\n")
-    table = lines.index("") + 1
-    block = lines.index("", table) + 1
-    end = lines.index("", block) if "" in lines[block:] else len(lines)
-    for i, line in enumerate(lines):
-        text = Text(line)
-        if i == 0:
-            text.stylize("bold", 0, line.find(" "))
-        elif i == table:
-            text.stylize("bold")
-        elif block <= i < end and (label := _LABEL.match(line)):
-            text.stylize("bold", 0, label.end())
+def _print_comparison(lines: Sequence[SummaryLine]) -> None:
+    for line in lines:
+        text = Text(line.text)
+        if line.bold_end:
+            text.stylize("bold", 0, line.bold_end)
         out.print(text, soft_wrap=True)
 
 

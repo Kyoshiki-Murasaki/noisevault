@@ -8,9 +8,8 @@ import noisevault as nv
 from noisevault import metrics
 from noisevault.catalog import ProfileInfo, bundled_profiles
 from noisevault.channels import pauli_twirl
-from noisevault.check import FRAMEWORKS, Circuit, check
+from noisevault.check import FRAMEWORKS, check, plan_circuits
 from noisevault.conversion import resolve_op
-from noisevault.profile import Profile
 from noisevault.reference import probabilities
 from noisevault.report import Report
 from noisevault.table import GateNoise
@@ -19,16 +18,11 @@ KINGSTON = "ibm_kingston@2026-04-15"
 FACTORS = (0, 0.5, 20, 1e3)
 
 
-def _check_plan(profile: Profile) -> tuple[list[int], tuple[Circuit, ...]]:
-    planned = check(profile, frameworks=[])
-    return list(planned.layout.values()), planned.circuits
-
-
 @pytest.mark.slow
 @pytest.mark.parametrize("info", bundled_profiles(), ids=lambda info: info.id)
 def test_every_bundled_profile_stays_physical_at_any_factor(info: ProfileInfo) -> None:
     base = info.load()
-    chain, circuits = _check_plan(base)
+    chain, circuits = plan_circuits(base, None, purpose="check")
     loci = {(r.gate, r.qubits) for r in base.calibrations}
     loci |= {(op.name, tuple(chain[q] for q in op.qubits)) for c in circuits for op in c.ops}
     for axis in ("gates", "readout"):
@@ -55,7 +49,7 @@ def test_every_gate_on_a_bundled_check_chain_twirls_to_a_channel_that_scales() -
     twirls = {}
     for info in bundled_profiles():
         profile = info.load()
-        chain, circuits = _check_plan(profile)
+        chain, circuits = plan_circuits(profile, None, purpose="check")
         report = Report.start(profile, "reference", None)
         for op in {op for circuit in circuits for op in circuit.ops}:
             wires = tuple(chain[q] for q in op.qubits)
@@ -63,7 +57,11 @@ def test_every_gate_on_a_bundled_check_chain_twirls_to_a_channel_that_scales() -
             if built.channels:
                 twirls[info.id, op.name, wires] = pauli_twirl(built.channels, wires)
     assert len(twirls) == 283
-    assert [locus for locus, pauli in twirls.items() if not metrics.pauli_embeddable(pauli)] == []
+    assert [
+        locus
+        for locus, pauli in twirls.items()
+        if metrics.unscalable("pauli", pauli, len(locus[2]))
+    ] == []
 
 
 def test_every_enabled_kingston_cz_twirls_to_a_channel_that_scales() -> None:
@@ -78,7 +76,7 @@ def test_every_enabled_kingston_cz_twirls_to_a_channel_that_scales() -> None:
         if table.allowed("cz", pair)
     }
     assert len(twirls) == 169
-    assert [pair for pair, pauli in twirls.items() if not metrics.pauli_embeddable(pauli)] == []
+    assert [pair for pair, pauli in twirls.items() if metrics.unscalable("pauli", pauli, 2)] == []
 
 
 @pytest.mark.parametrize("framework", FRAMEWORKS)

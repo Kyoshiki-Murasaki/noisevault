@@ -389,6 +389,25 @@ class ErrorFactor(_Model):
             raise ValueError(f"factor {self.factor} is above high {self.high}")
         return self
 
+    def describe(self) -> str:
+        """The factor and its 95% interval, such as "x1.84 (95% interval 1.54 to 2.12)"."""
+        values = [v for v in (self.factor, self.low, self.high) if v is not None]
+        digits = 3
+        while len({f"{v:.{digits}g}" for v in values}) < len(set(values)):
+            digits += 1
+
+        def shown(value: float | None) -> str:
+            return f"{value:.{digits}g}"
+
+        text = f"x{shown(self.factor)}"
+        if self.bound == "lower":
+            return f"{text} (95% interval, at most {shown(self.high)})"
+        if self.bound == "upper":
+            return f"{text} (95% interval, at least {shown(self.low)})"
+        if self.low is not None:
+            return f"{text} (95% interval {shown(self.low)} to {shown(self.high)})"
+        return text
+
 
 class CountsFit(_Model):
     """The counts the factors were fitted to. Every field is required, ``p_value`` included."""
@@ -411,8 +430,7 @@ class CountsFit(_Model):
         return self
 
     @model_serializer(mode="wrap")
-    def _every_field(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """Keep a null p_value, which a profile's exclude_none dump would otherwise drop."""
+    def _keep_nulls(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data = handler(self)
         return {name: data.get(name) for name in type(self).model_fields}
 
@@ -450,7 +468,7 @@ class UnmodeledError(_Model):
 
     def lines(self) -> tuple[str, ...]:
         """The phrases ``nv show`` prints one per line and reports join with "; "."""
-        phrases = [f"{axis} errors {_describe_factor(f)}" for axis, f in self._factors()]
+        phrases = [f"{axis} errors {f.describe()}" for axis, f in self._factors()]
         fit = self.fit
         if fit is not None:
             short = fit.counts.removeprefix("sha256:")[:12]
@@ -470,18 +488,6 @@ class UnmodeledError(_Model):
         return tuple((axis, factor) for axis, factor in named if factor is not None)
 
 
-def _describe_factor(factor: ErrorFactor) -> str:
-    """The factor and its interval in words, such as "x0.096 (95% interval, at most 0.311)"."""
-    text = f"x{factor.factor:.3g}"
-    if factor.bound == "lower":
-        return f"{text} (95% interval, at most {factor.high:.3g})"
-    if factor.bound == "upper":
-        return f"{text} (95% interval, at least {factor.low:.3g})"
-    if factor.low is not None:
-        return f"{text} (95% interval {factor.low:.3g} to {factor.high:.3g})"
-    return text
-
-
 POOR_FIT_P_VALUE = 0.01
 
 
@@ -492,7 +498,6 @@ def _describe_p(p_value: float | None) -> str:
 
 
 def _unmodeled_clause(unmodeled: UnmodeledError | None) -> str:
-    """What a citation adds after the fingerprint for a profile with unmodeled-error factors."""
     if unmodeled is None:
         return ""
     rates = ", ".join(f"{axis} error rates x{f.factor:.3g}" for axis, f in unmodeled._factors())
@@ -614,7 +619,7 @@ class Profile(_Model):
         return profile_id(self.device.vendor, self.device.name)
 
     # pydantic revalidates, copies and pickles an instance through __dict__, so caches use slots
-    __slots__ = ("_fingerprint", "_artifact_hash", "_table")
+    __slots__ = ("_fingerprint", "_artifact_hash", "_table", "_calibration_fingerprint")
 
     @property
     def fingerprint(self) -> str:
@@ -625,6 +630,17 @@ class Profile(_Model):
             physics = {k: v for k, v in self.to_dict().items() if k not in _NOT_PHYSICS}
             object.__setattr__(self, "_fingerprint", _sha256(physics))
             return self._fingerprint
+
+    @property
+    def calibration_fingerprint(self) -> str:
+        """The fingerprint without ``unmodeled_error``: ``uncorrected().fingerprint``."""
+        try:
+            return self._calibration_fingerprint
+        except AttributeError:
+            skip = (*_NOT_PHYSICS, "unmodeled_error")
+            physics = {k: v for k, v in self.to_dict().items() if k not in skip}
+            object.__setattr__(self, "_calibration_fingerprint", _sha256(physics))
+            return self._calibration_fingerprint
 
     @property
     def artifact_hash(self) -> str:
@@ -1085,7 +1101,7 @@ def _profile_issues(profile: Profile) -> list[str]:
     issues += [
         f"unmodeled_error.fit.qubits: qubit {q} is outside 0..{n - 1}" for q in fit.qubits if q >= n
     ]
-    calibration = _calibration_fingerprint(profile)
+    calibration = profile.calibration_fingerprint
     if fit.calibration != calibration:
         issues.append(
             f"unmodeled_error.fit.calibration: fitted to calibration nv:{fit.calibration[:12]},"
@@ -1098,14 +1114,7 @@ def _profile_issues(profile: Profile) -> list[str]:
 _NOT_PHYSICS = ("provenance", "extensions")
 
 
-def _calibration_fingerprint(profile: Profile) -> str:
-    """``profile.uncorrected().fingerprint``, computed without building a second profile."""
-    skip = (*_NOT_PHYSICS, "unmodeled_error")
-    return _sha256({k: v for k, v in profile.to_dict().items() if k not in skip})
-
-
 def unmodeled_note(profile: Profile) -> tuple[str, ...]:
-    """The unmodeled-error phrases ``nv show``, reports and ``summary()`` print; () without it."""
     if profile.unmodeled_error is None:
         return ()
     return (*profile.unmodeled_error.lines(), *profile.table.unscaled())
@@ -1174,9 +1183,8 @@ _NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
 def write_atomically(path: Path, data: bytes) -> None:
     """Replace ``path`` with ``data``: a failed write leaves the old file whole.
 
-    The temporary file gets the mode of the file it replaces, so nobody who cannot read the
-    old file can read the new contents. Python can read the umask only by setting it, and all
-    threads share one umask, so this function never touches the umask.
+    Python can read the umask only by setting it, and all threads share one umask, so this
+    function never touches the umask.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
