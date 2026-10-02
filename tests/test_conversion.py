@@ -147,6 +147,19 @@ def test_bad_physical_qubits_are_layout_errors(qubits, match, hint) -> None:
     assert caught.value.hint == hint
 
 
+def test_messages_name_qubits_the_way_the_cli_does() -> None:
+    profile, report = _setup()
+    with pytest.raises(LayoutError) as twice:
+        _resolve(profile, report, "cz", (1, 1))
+    assert twice.value.message == "cz acts on qubits 1-1; its targets must be distinct"
+    with pytest.raises(MissingCalibrationError) as one:
+        _resolve(profile, report, "h", (0,), "error")
+    assert one.value.message.startswith("h on qubit 0: ")
+    with pytest.raises(MissingCalibrationError) as pair:
+        _resolve(profile, report, "cz", (0, 2), "error")
+    assert pair.value.message.startswith("cz on qubits 0-2: ")
+
+
 def test_misuse_by_an_adapter_is_a_plain_error() -> None:
     profile, report = _setup()
     with pytest.raises(ValueError, match="unknown_gates"):

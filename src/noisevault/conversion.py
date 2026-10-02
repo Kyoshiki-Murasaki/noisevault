@@ -6,7 +6,7 @@ from typing import Literal
 
 from . import gates
 from .channels import ChannelSpec, GateChannels, gate_channels, thermal_relaxation_kraus
-from .errors import LayoutError, MissingCalibrationError
+from .errors import LayoutError, MissingCalibrationError, qubit_loci
 from .report import Report
 from .table import GateNoise, NoiseTable, Unavailable
 
@@ -80,7 +80,7 @@ def resolve_op(
     if isinstance(found, Unavailable) and found.kind == "bad_target":
         raise ValueError(found.reason)
     why = found.reason if isinstance(found, Unavailable) else f"{name} has no error metric"
-    where = f"{name} on qubits {list(qubits)}"
+    where = f"{name} on {qubit_loci(qubits)}"
     if (info is not None and info.multi_entangler) or len(qubits) > 2:
         raise MissingCalibrationError(
             f"{where}: {name} needs more than one native entangling gate, so no single"
@@ -109,7 +109,7 @@ def resolve_op(
 
 def _check_qubits(table: NoiseTable, name: str, qubits: tuple[int, ...]) -> None:
     if len(set(qubits)) != len(qubits):
-        raise LayoutError(f"{name} acts on qubits {list(qubits)}; its targets must be distinct")
+        raise LayoutError(f"{name} acts on {qubit_loci(qubits)}; its targets must be distinct")
     for q in qubits:
         if not 0 <= q < table.num_qubits:
             raise LayoutError(

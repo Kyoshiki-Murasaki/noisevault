@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-import textwrap
+import re
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -63,6 +63,8 @@ _MIN_WINDOW = 0.05
 _SAME_WAY = "gate error and readout error move these counts the same way"
 _LABEL = 16
 _WIDTH = 80
+_DROPPABLE = ("shots", "profile TVD")
+_WORD = re.compile(r"\([^()]*\)|\S+")
 _TVD_DIGITS = 4
 _CACHE_SIZE = 4
 _CHUNK = 1 << 22
@@ -153,15 +155,30 @@ class Comparison:
         }
         return base.model_copy(update={"unmodeled_error": block})
 
-    def summary(self, *, counts_file: str | None = None) -> str:
-        """The text ``nv compare`` prints, every line at most 80 columns."""
-        return "\n".join(line.text for line in self.summary_lines(counts_file=counts_file))
+    def summary(self, *, counts_file: str | None = None, width: int = _WIDTH) -> str:
+        """The text ``nv compare`` prints in a terminal ``width`` columns wide, 80 at most.
 
-    def summary_lines(self, *, counts_file: str | None = None) -> tuple[SummaryLine, ...]:
+        Lines break between words. Below 80 columns the table drops its shots column, then its
+        profile TVD column, until it fits.
+        """
+        lines = self.summary_lines(counts_file=counts_file, width=width)
+        return "\n".join(line.text for line in lines)
+
+    def summary_lines(
+        self, *, counts_file: str | None = None, width: int = _WIDTH
+    ) -> tuple[SummaryLine, ...]:
+        width = min(width, _WIDTH)
         blank = SummaryLine("", 0)
-        lines = [*self._header(counts_file), blank, *self._table(), blank, *self._findings()]
+        lines = [
+            *self._header(counts_file, width),
+            blank,
+            *self._table(width),
+            blank,
+            *self._findings(width),
+        ]
         if self._fitted:
-            lines += [blank, *(SummaryLine(text, 0) for text in NOTE)]
+            note = NOTE if width == _WIDTH else _wrap(" ".join(NOTE), width)
+            lines += [blank, *(SummaryLine(text, 0) for text in note)]
         return tuple(lines)
 
     __str__ = summary
@@ -207,7 +224,7 @@ class Comparison:
     def _fitted(self) -> bool:
         return isinstance(self.gates, ErrorFactor) or isinstance(self.readout, ErrorFactor)
 
-    def _header(self, counts_file: str | None) -> list[SummaryLine]:
+    def _header(self, counts_file: str | None, width: int) -> list[SummaryLine]:
         profile, counts = self.profile, self.counts
         ref = ref_on_day(profile.id, profile.device.calibrated_at)
         digest = counts.sha256.removeprefix("sha256:")[:12]
@@ -224,32 +241,47 @@ class Comparison:
         )
         run = counts.run_at.strftime("%Y-%m-%d %H:%MZ")
         first = f"{ref} {profile.short_fingerprint} on {qubit_loci(counts.qubits)}"
-        return [
-            SummaryLine(first, len(ref)),
-            SummaryLine(source, 0),
-            SummaryLine(f"run {run}, {since}", 0),
-        ]
+        texts = (first, source, f"run {run}, {since}")
+        lines = [SummaryLine(part, 0) for text in texts for part in _wrap(text, width, "  ")]
+        lines[0] = SummaryLine(lines[0].text, len(ref))
+        return lines
 
-    def _table(self) -> list[SummaryLine]:
-        width = max(len("circuit"), *(len(s.name) for s in self.circuits))
-        shots = max(len("shots"), *(len(str(s.shots)) for s in self.circuits))
+    def _table(self, width: int) -> list[SummaryLine]:
+        dropped: list[str] = []
+        rows = self._table_rows(dropped)
+        for column in _DROPPABLE:
+            if max(len(row.text) for row in rows) <= width:
+                break
+            dropped.append(column)
+            rows = self._table_rows(dropped)
+        return rows
+
+    def _table_rows(self, dropped: Sequence[str]) -> list[SummaryLine]:
         impossible = self.impossible_shots > 0
-        head = f"{'circuit':<{width}}  {'shots':>{shots}}  profile TVD  fitted TVD  noise TVD 95%"
-        head += "  impossible shots" if impossible else ""
+        cells: dict[str, Callable[[CircuitScore], str]] = {
+            "shots": lambda s: str(s.shots),
+            "profile TVD": lambda s: f"{s.tvd_profile:.{_TVD_DIGITS}f}",
+            "fitted TVD": lambda s: f"{s.tvd_fitted:.{_TVD_DIGITS}f}",
+            "noise TVD 95%": lambda s: f"{s.shot_noise_95:.{_TVD_DIGITS}f}",
+            **({"impossible shots": lambda s: str(s.impossible)} if impossible else {}),
+        }
+        columns = {
+            title: [cell(s) for s in self.circuits]
+            for title, cell in cells.items()
+            if title not in dropped
+        }
+        widths = {title: max(map(len, [title, *values])) for title, values in columns.items()}
+        name = max(len("circuit"), *(len(s.name) for s in self.circuits))
+        head = "circuit".ljust(name) + "".join(f"  {t:>{widths[t]}}" for t in columns)
         rows = [SummaryLine(head, len(head))]
-        for s in self.circuits:
-            row = (
-                f"{s.name:<{width}}  {s.shots:>{shots}}  {s.tvd_profile:>11.{_TVD_DIGITS}f}"
-                f"  {s.tvd_fitted:>10.{_TVD_DIGITS}f}  {s.shot_noise_95:>13.{_TVD_DIGITS}f}"
-            )
-            if impossible:
-                row += f"  {s.impossible:>16}"
-            elif _beyond_noise(s):
+        for i, s in enumerate(self.circuits):
+            row = s.name.ljust(name) + "".join(f"  {v[i]:>{widths[t]}}" for t, v in columns.items())
+            if not impossible and _beyond_noise(s):
                 row += "  beyond noise"
             rows.append(SummaryLine(row, 0))
         return rows
 
-    def _findings(self) -> list[SummaryLine]:
+    def _findings(self, width: int) -> list[SummaryLine]:
         gate, readout = self.gates, self.readout
         gate_reason, readout_reason = _reason(gate), _reason(readout)
         shared = gate_reason is not None and gate_reason == readout_reason
@@ -265,7 +297,7 @@ class Comparison:
         lines = []
         for label, values in entries:
             for i, value in enumerate(values):
-                wrapped = textwrap.wrap(value, _WIDTH - _LABEL, break_on_hyphens=False)
+                wrapped = _wrap(value, width - _LABEL)
                 shown = label if i == 0 else ""
                 lines.append(SummaryLine(f"{shown:<{_LABEL}}{wrapped[0]}", len(shown)))
                 lines += [SummaryLine(" " * _LABEL + part, 0) for part in wrapped[1:]]
@@ -294,6 +326,18 @@ class Comparison:
             return [f"beyond shot noise ({p})", *where, "no one pair of factors fits every circuit"]
         scope = "overall" if flagged else "on every circuit"
         return [f"within shot noise {scope} ({p})"]
+
+
+def _wrap(text: str, width: int, indent: str = "") -> list[str]:
+    """``text`` in lines of at most ``width`` that break between words and keep each group in
+    parentheses whole, with ``indent`` before every line after the first."""
+    lines: list[str] = []
+    for word in _WORD.findall(text):
+        if lines and len(lines[-1]) + 1 + len(word) <= width:
+            lines[-1] += f" {word}"
+        else:
+            lines.append(f"{indent if lines else ''}{word}")
+    return lines or [""]
 
 
 def compare(profile: Profile, counts: MeasuredCounts) -> Comparison:

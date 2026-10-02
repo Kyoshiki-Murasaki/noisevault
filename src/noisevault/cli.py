@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import sys
 import warnings
 import zlib
@@ -39,7 +40,6 @@ from .diff import (
     fmt_error,
     fmt_metric,
     fmt_relative,
-    fmt_time,
     fmt_us,
 )
 from .errors import (
@@ -50,6 +50,7 @@ from .errors import (
     install_hint,
     joined,
     plural,
+    qubit_loci,
 )
 from .profile import (
     POOR_FIT_P_VALUE,
@@ -380,7 +381,7 @@ def _list_table(rows: list[dict[str, Any]], columns: list[str]) -> Table:
         justify = "right" if column == "qubits" else "left"
         table.add_column(column, justify=justify, no_wrap=True)
     for technology in sorted({row["technology"] for row in rows}):
-        table.add_row(f"[bold]{technology}[/bold]")
+        table.add_row(f"[bold]{_words(technology)}[/bold]")
         for row in (r for r in rows if r["technology"] == technology):
             mark = "* " if row["location"] == "vault" else "  "
             cells = {
@@ -699,7 +700,10 @@ def _coherence(data: dict[str, Any]) -> str:
     t1, t2 = data["median_t1_us"], data["median_t2_us"]
     if t1 is None and t2 is None:
         return "T1 and T2 unknown (gates get no relaxation)"
-    return f"median T1 {fmt_time(t1)} us, median T2 {fmt_time(t2)} us"
+    return ", ".join(
+        f"{name} unknown" if value is None else f"median {name} {fmt_us(value)} us"
+        for name, value in (("T1", t1), ("T2", t2))
+    )
 
 
 def _readout(data: dict[str, Any]) -> str:
@@ -991,14 +995,15 @@ def check(
             skipped=tuple(s for part in parts for s in part.skipped),
         )
         missing = [n for n, why in result.skipped if why.startswith("not installed")]
+        named = ",".join(names) if framework is not None else None
         if as_json:
             _echo_json(result.to_dict())
         elif len(missing) < len(names):
-            chain = "-".join(str(result.layout[i]) for i in range(len(result.layout)))
+            qubits = qubit_loci([result.layout[i] for i in range(len(result.layout))])
             on_hand = _on_hand(ref, profile)
             newest = f" (newest of {on_hand.count})" if on_hand else ""
             title = Text(exact_ref(profile.id, profile.device.calibrated_at), style="bold")
-            _emit(Text.assemble(title, f"{newest} {profile.short_fingerprint} on qubits {chain}"))
+            _emit(Text.assemble(title, f"{newest} {profile.short_fingerprint} on {qubits}"))
             _emit(f"{len(result.circuits)} circuits: {', '.join(c.name for c in result.circuits)}")
             rows = [_check_row(f, result) for f in result.frameworks]
             rows += [
@@ -1017,10 +1022,11 @@ def check(
             if missing:
                 command = install_hint(",".join(missing))
                 out.print(f"To add the missing frameworks: {command}", markup=False, soft_wrap=True)
+                uvx = _uvx_hint(",".join(names), _check_command(ref, named))
+                out.print(f"Or, with uv and no install: {uvx}", markup=False, soft_wrap=True)
             if any(f.passed for f in result.frameworks):
                 _emit(NOTE)
         if len(missing) == len(names):
-            named = ",".join(names) if framework is not None else None
             _none_installed(missing, ref=ref, framework=named)
         if not result.frameworks:
             raise NoiseVaultError("no framework could run the check")
@@ -1069,14 +1075,17 @@ def _none_installed(missing: list[str], *, ref: str, framework: str | None) -> N
             install_hint(first),
             f"(or {joined(others, 'or')}, or several, as in noisevault[{first},{others[-1]}])",
         ]
-        command = f"nv check {ref}"
     else:
         error = f"{joined(missing)} {'is' if len(missing) == 1 else 'are'} not installed"
         extra = ",".join(missing)
         lines = [install_hint(extra)]
-        command = f"nv check {ref} --framework {framework}"
-    lines.append(f"or, with uv and no install: {_uvx_hint(extra, command)}")
+    lines.append(f"or, with uv and no install: {_uvx_hint(extra, _check_command(ref, framework))}")
     _fail(f"nv check needs a framework to check, and {error}", "\n      ".join(lines))
+
+
+def _check_command(ref: str, framework: str | None) -> str:
+    command = f"nv check {shlex.quote(ref)}"
+    return command if framework is None else f"{command} --framework {framework}"
 
 
 def _uvx_hint(extra: str, command: str) -> str:
@@ -1110,7 +1119,7 @@ def compare(
         with err.status("Fitting the gate and readout factors..."):
             result = profile.compare(measured)
         if not as_json:
-            _print_comparison(result.summary_lines(counts_file=counts))
+            _print_comparison(result.summary_lines(counts_file=counts, width=out.width))
         written: dict[str, str] | None = None
         failure: NoiseVaultError | None = None
         if output is not None:
@@ -1253,7 +1262,7 @@ def doctor() -> None:
     vault = catalog.vault_dir()
     with _friendly():
         count = len(catalog.vault_profiles()) if vault.is_dir() else 0
-    out.print(f"vault: {vault} ({count} profiles)", markup=False, soft_wrap=True)
+    out.print(f"vault: {vault} ({plural(count, 'profile')})", markup=False, soft_wrap=True)
     _emit(f"bundled profiles: {len(catalog.bundled_profiles())}")
     extras = sorted({extra for p in missing if (extra := _PACKAGES[p])})
     if extras:
@@ -1261,9 +1270,8 @@ def doctor() -> None:
         out.print(
             f"To add the missing packages: {install_hint(extra)}", markup=False, soft_wrap=True
         )
-    for_check = [name for name in extras if name in FRAMEWORKS]
-    if for_check:
-        uvx = _uvx_hint(",".join(for_check), "nv check ibm_fez")
+    if any(name in FRAMEWORKS for name in extras):
+        uvx = _uvx_hint(",".join(FRAMEWORKS), "nv check ibm_fez")
         out.print(f"Or, with uv and no install: {uvx}", markup=False, soft_wrap=True)
     loose = [package for package in missing if _PACKAGES[package] is None]
     if loose:
@@ -1447,5 +1455,7 @@ def _soft_issues(profile: Profile) -> list[str]:
             notes.append(f"qubit {i}: T2 exceeds 2*T1; conversions clamp it to 2*T1")
     for record in profile.calibrations:
         if record.scope == "cycle":
-            notes.append(f"{record.gate} {list(record.qubits)}: error is per cycle, not per gate")
+            notes.append(
+                f"{record.gate} on {qubit_loci(record.qubits)}: error is per cycle, not per gate"
+            )
     return notes

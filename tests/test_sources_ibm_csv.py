@@ -179,7 +179,7 @@ def test_a_pair_repeated_with_the_same_value_is_read_once(tmp_path: Path) -> Non
 
 def test_conflicting_pair_across_rows_names_both_lines(tmp_path: Path) -> None:
     path = _edited(tmp_path, EAGLE, "2_3:1,2_3:600", "2_3:1; 1_2:0.05,2_3:600; 1_2:560")
-    with pytest.raises(nv.SourceDataError, match=r"line 5.*ecr on qubits \(1, 2\).*line 4"):
+    with pytest.raises(nv.SourceDataError, match=r"line 5.*: ecr on qubits 1-2 has error .*line 4"):
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
 
 

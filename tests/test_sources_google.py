@@ -292,7 +292,7 @@ def test_a_calibration_value_a_profile_cannot_hold_names_the_file_and_the_value(
     with pytest.raises(nv.SourceDataError) as info:
         nv.from_cirq_google("rainbow")
     assert (info.value.message, info.value.hint) == (
-        f"cirq-google {cirq_google.__version__} {file_name}: calibrations (r on [0]):"
+        f"cirq-google {cirq_google.__version__} {file_name}: calibrations (r on qubit 0):"
         " process_infidelity of a 1-qubit gate must be in [0, 1], got 1.5",
         None,
     )

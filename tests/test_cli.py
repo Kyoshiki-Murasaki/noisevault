@@ -114,6 +114,21 @@ def test_validate_notes_t2_clamps(tmp_path: Path) -> None:
     assert result.exit_code == 0 and "T2 exceeds 2*T1" in result.stderr
 
 
+def test_validate_names_the_qubits_of_a_per_cycle_record_in_words(tmp_path: Path) -> None:
+    records = [
+        {"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.02, "scope": "cycle"},
+        {"gate": "sx", "qubits": [2], "avg_infidelity": 0.002, "scope": "cycle"},
+    ]
+    path = tmp_path / "cycle.json"
+    path.write_text(json.dumps(toy(calibrations=records)))
+    result = runner.invoke(app, ["validate", str(path)])
+    assert result.exit_code == 0, result.output
+    assert result.stderr.splitlines() == [
+        "warning: cz on qubits 0-1: error is per cycle, not per gate",
+        "warning: sx on qubit 2: error is per cycle, not per gate",
+    ]
+
+
 def test_validate_says_what_an_unknown_or_a_missing_key_means(tmp_path: Path) -> None:
     data = toy(unknown_field=1)
     del data["device"]
@@ -179,7 +194,7 @@ def test_list_keeps_every_cell_whole_with_a_pulled_profile(monkeypatch, columns:
     result = runner.invoke(app, ["list"], env={"COLUMNS": str(columns)})
     lines = result.stdout.splitlines()
     assert max(map(len, lines)) <= columns
-    group = lines.index(next(line for line in lines if line.strip() == "trapped_ion"))
+    group = lines.index("trapped ion")
     first = lines[group + 1].split()
     assert first == [
         "*",
@@ -336,7 +351,9 @@ def test_list_groups_profiles_by_technology() -> None:
     assert lines[0].split() == ["id", "date", "qubits", "processor", "source"]
     row = next(line for line in lines if line.strip().startswith("ibm_fez "))
     assert row.split() == ["ibm_fez", "2025-02-26", "156", "Heron", "r2", "SDK"]
-    assert lines.index("superconducting") < lines.index(row) < lines.index("trapped_ion")
+    groups = [line for line in lines[1:-2] if not line.startswith((" ", "*"))]
+    assert groups == ["superconducting", "trapped ion"]
+    assert lines.index("superconducting") < lines.index(row) < lines.index("trapped ion")
     assert lines[-2:] == [
         f"{len(nv.profiles())} profiles, all Apache-2.0. See one with nv show <id>.",
         'Load one in Python with nv.load("<id>").',
@@ -685,7 +702,28 @@ def test_show_qubits_prints_microseconds_with_one_decimal() -> None:
     out = runner.invoke(app, ["show", "ibm_fez", "--qubits", "0,5"], env={"COLUMNS": "80"}).stdout
     rows = out.splitlines()[-2:]
     assert [row.split()[:3] for row in rows] == [["0", "48.8", "42.4"], ["5", "190.0", "208.7"]]
-    assert "coherence     median T1 144.9 us, median T2 87.95 us" in out
+    assert "coherence     median T1 144.9 us, median T2 88.0 us" in out
+
+
+@pytest.mark.parametrize(
+    ("idle", "coherence"),
+    [
+        ({"t1_us": 300, "t2_us": 87.95}, "median T1 300.0 us, median T2 88.0 us"),
+        ({"t1_us": 1e8, "t2_us": 1e6}, "median T1 100000000.0 us, median T2 1000000.0 us"),
+        ({"t1_us": 50}, "median T1 50.0 us, T2 unknown"),
+        ({"t2_us": 40}, "T1 unknown, median T2 40.0 us"),
+    ],
+    ids=["superconducting", "trapped_ion", "no_t2", "no_t1"],
+)
+def test_show_prints_coherence_in_microseconds_with_one_decimal(
+    tmp_path: Path, idle: dict[str, float], coherence: str
+) -> None:
+    path = tmp_path / "idle.json"
+    path.write_text(json.dumps(toy(idle=idle)))
+    out = runner.invoke(app, ["show", str(path)], env={"COLUMNS": "80"}).stdout
+    assert next(line for line in out.splitlines() if line.startswith("coherence")) == (
+        f"coherence     {coherence}"
+    )
 
 
 def _manila_in_the_vault(calibrated_at: str, **provenance: str) -> Profile:
@@ -1156,19 +1194,70 @@ def test_check_counts_a_reduced_circuit_apart_and_names_its_missing_gates(tmp_pa
     assert entry["ran_without"] == ["rxx", "ryy", "rzz"]
 
 
-def test_check_names_one_whole_install_command_for_the_missing_frameworks(monkeypatch) -> None:
-    require("cirq")
-    monkeypatch.setitem(sys.modules, "pennylane", None)
-    monkeypatch.setitem(sys.modules, "stim", None)
-    result = runner.invoke(
-        app, ["check", "ibm_manila", "--framework", "cirq,pennylane,stim"], env={"COLUMNS": "80"}
+def _uvx(extra: str, command: str) -> str:
+    return (
+        f'Or, with uv and no install: uvx --from "noisevault[{extra}] @ git+{REPOSITORY}" {command}'
     )
+
+
+@pytest.mark.parametrize(
+    ("args", "missing", "uvx"),
+    [
+        (
+            ["ibm_manila"],
+            "cirq,pennylane,stim",
+            _uvx("qiskit,cirq,pennylane,stim", "nv check ibm_manila"),
+        ),
+        (
+            ["ibm_manila", "--framework", "stim,qiskit"],
+            "stim",
+            _uvx("stim,qiskit", "nv check ibm_manila --framework stim,qiskit"),
+        ),
+    ],
+    ids=["every_framework", "named_frameworks"],
+)
+def test_check_without_some_frameworks_gives_a_pip_and_a_whole_uvx_command(
+    monkeypatch, args: list[str], missing: str, uvx: str
+) -> None:
+    require("qiskit")
+    for module in ("cirq", "pennylane", "stim"):
+        monkeypatch.setitem(sys.modules, module, None)
+    result = runner.invoke(app, ["check", *args], env={"COLUMNS": "80"})
     assert result.exit_code == 0, result.output
     lines = result.stdout.splitlines()
-    assert f"To add the missing frameworks: {install_hint('pennylane,stim')}" in lines
-    assert result.stdout.count("pip install") == 1
+    pip = lines.index(f"To add the missing frameworks: {install_hint(missing)}")
+    assert lines[pip + 1] == uvx
+    assert result.stdout.count("pip install") == result.stdout.count("uvx") == 1
     rows = {line.split()[0]: line for line in lines if line}
     assert rows["stim"].split()[1:] == ["not", "installed"]
+
+
+def test_check_quotes_a_profile_path_with_a_space_in_its_uvx_command(
+    monkeypatch, tmp_path: Path
+) -> None:
+    require("qiskit")
+    monkeypatch.setitem(sys.modules, "stim", None)
+    folder = tmp_path / "my profiles"
+    folder.mkdir()
+    path = nv.load("ibm_manila").save(folder / "manila.json")
+    args = ["check", str(path), "--framework", "qiskit,stim"]
+    result = runner.invoke(app, args, env={"COLUMNS": "80"})
+    assert result.exit_code == 0, result.output
+    command = f"nv check '{path}' --framework qiskit,stim"
+    assert _uvx("qiskit,stim", command) in result.stdout.splitlines()
+
+
+def test_check_names_a_one_qubit_layout_in_the_singular(tmp_path: Path) -> None:
+    require("stim")
+    one_qubit = {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3, "duration_ns": 35}}
+    data = toy(gates=one_qubit, connectivity={"edges": []})
+    data["device"]["num_qubits"] = 1
+    path = tmp_path / "one.json"
+    path.write_text(json.dumps(data))
+    result = runner.invoke(app, ["check", str(path), "--framework", "stim"])
+    assert result.exit_code == 0, result.output
+    short = Profile.from_dict(data).short_fingerprint
+    assert result.stdout.splitlines()[0] == f"test_toy {short} on qubit 0"
 
 
 def test_check_keeps_each_row_whole_at_60_columns_and_names_a_skip_once() -> None:
@@ -1335,11 +1424,7 @@ def test_doctor_gives_a_whole_install_command_for_missing_packages(monkeypatch) 
 
     monkeypatch.setattr(cli, "version", without_stim)
     lines = runner.invoke(app, ["doctor"], env={"COLUMNS": "80"}).stdout.splitlines()
-    assert lines[-2:] == [
-        f"To add the missing packages: {install_hint('stim')}",
-        f'Or, with uv and no install: uvx --from "noisevault[stim] @ git+{REPOSITORY}"'
-        " nv check ibm_fez",
-    ]
+    assert lines[-2:] == [f"To add the missing packages: {install_hint('stim')}", _TRY]
 
 
 def test_check_with_no_framework_installed_is_one_error_and_one_install_command(
@@ -1680,29 +1765,34 @@ def _install(extra: str) -> str:
     return f"To add the missing packages: {install_hint(extra)}"
 
 
-def _try(extra: str) -> str:
-    return (
-        f'Or, with uv and no install: uvx --from "noisevault[{extra}] @ git+{REPOSITORY}"'
-        " nv check ibm_fez"
-    )
+_TRY = _uvx("qiskit,cirq,pennylane,stim", "nv check ibm_fez")
 
 
 @pytest.mark.parametrize(
     ("absent", "advice"),
     [
         ((), []),
-        (("stim",), [_install("stim"), _try("stim")]),
-        (("pyarrow",), [_install("hf")]),
+        (("stim",), [_install("stim"), _TRY]),
         (
-            ("cirq-google", "stim", "pymatching"),
-            [_install("google,stim"), _try("stim"), _PYMATCHING],
+            ("cirq-core", "cirq-google", "pennylane", "stim"),
+            [_install("cirq,google,pennylane,stim"), _TRY],
         ),
+        (("pyarrow",), [_install("hf")]),
+        (("cirq-google", "stim", "pymatching"), [_install("google,stim"), _TRY, _PYMATCHING]),
         (("qiskit-ibm-runtime", "cirq-google", "pyarrow"), [_install("google,hf,ibm")]),
-        (tuple(_PACKAGES), [_install("all"), _try("cirq,pennylane,qiskit,stim"), _PYMATCHING]),
+        (tuple(_PACKAGES), [_install("all"), _TRY, _PYMATCHING]),
     ],
-    ids=["nothing", "stim", "only_hf", "google_and_stim", "no_check_framework", "everything"],
+    ids=[
+        "nothing",
+        "stim",
+        "only_qiskit",
+        "only_hf",
+        "google_and_stim",
+        "no_check_framework",
+        "everything",
+    ],
 )
-def test_doctor_installs_what_is_missing_and_tries_nv_check_with_what_it_uses(
+def test_doctor_installs_what_is_missing_and_tries_nv_check_with_every_framework(
     monkeypatch, absent, advice
 ) -> None:
     lines = _doctor_without(monkeypatch, *absent).splitlines()
@@ -2023,6 +2113,38 @@ def test_the_pinned_compare_inputs_are_current(tmp_path: Path) -> None:
         assert made.save(tmp_path / name).read_bytes() == (FITS / name).read_bytes(), (
             f"tests/fixtures/compare/{name} is stale; regenerate it with python tests/test_cli.py"
         )
+
+
+_NARROW_HEADS = {
+    ("poor-fit", 60): "circuit       fitted TVD  noise TVD 95%",
+    ("poor-fit", 72): "circuit       profile TVD  fitted TVD  noise TVD 95%",
+    ("ruled-out", 60): "circuit       fitted TVD  noise TVD 95%  impossible shots",
+    ("ruled-out", 72): "circuit       profile TVD  fitted TVD  noise TVD 95%  impossible shots",
+}
+
+
+@pytest.mark.parametrize("columns", [60, 72])
+@pytest.mark.parametrize("name", list(_PINNED))
+def test_a_narrow_terminal_gets_compare_lines_that_fit_and_break_between_words(
+    name: str, columns: int, monkeypatch
+) -> None:
+    ref, counts, cwd = _PINNED[name]
+    result = _compare([ref, counts], cwd, monkeypatch, columns)
+    assert result.exit_code == 0, result.output
+    lines = _unstyled(result.stdout).splitlines()
+    wide = (FITS / f"{name}.txt").read_text(encoding="utf-8").splitlines()
+    assert max(map(len, lines)) <= columns, max(lines, key=len)
+    assert set(" ".join(lines).split()) <= set(" ".join(wide).split())
+    assert all(line.count("(") == line.count(")") for line in lines), lines
+    head = lines.index(next(line for line in lines if line.startswith("circuit ")))
+    wide_head = wide.index(next(line for line in wide if line.startswith("circuit ")))
+    assert lines[head] == _NARROW_HEADS.get((name, columns), wide[wide_head])
+    flagged = [row.split()[0] for row in lines[head:] if row.endswith("  beyond noise")]
+    assert flagged == [row.split()[0] for row in wide if row.endswith("  beyond noise")]
+    block = lines[lines.index("", head) + 1 :]
+    block = block[: block.index("")] if "" in block else block
+    labels = {"gate errors", "readout errors", "fit", "next", "note", ""}
+    assert all(line[:16].rstrip() in labels and line[16] != " " for line in block), block
 
 
 def test_compare_prints_the_ref_the_table_header_and_each_label_in_bold(monkeypatch) -> None:

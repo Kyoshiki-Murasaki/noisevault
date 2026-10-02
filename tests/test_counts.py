@@ -201,6 +201,11 @@ _REFUSALS: dict[str, _Refusal] = {
         " qubits 0 and 1",
         "circuit qubit i is qubits[i]",
     ),
+    "op on one qubit twice": _Refusal(
+        _set("circuits", 0, "ops", 2, value=["cz", [1, 1], []]),
+        "circuits[0].ops[2]: cz acts on qubits 1-1; its targets must be distinct",
+        None,
+    ),
     "measure in ops": _Refusal(
         _set("circuits", 0, "ops", 3, value=["measure", [0], []]),
         "circuits[0].ops[3]: ops cannot hold measure, because every circuit qubit is measured",

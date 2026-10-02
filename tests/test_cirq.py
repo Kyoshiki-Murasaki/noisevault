@@ -627,7 +627,8 @@ def test_unknown_gate_gets_typical_noise_with_one_warning() -> None:
 def test_non_native_cirq_gates_are_unknown(gate, name) -> None:
     model = to_cirq(_distinct(), unknown_gates="error")
     qids = cirq.LineQubit.range(cirq.num_qubits(gate))
-    with pytest.raises(MissingCalibrationError, match=rf"^{name.replace('*', '[*]')} on qubits"):
+    locus = "qubit 0" if len(qids) == 1 else "qubits 0-1"
+    with pytest.raises(MissingCalibrationError, match=rf"^{name.replace('*', '[*]')} on {locus}: "):
         model.noisy_operation(gate.on(*qids))
 
 
@@ -701,7 +702,7 @@ def test_first_call_just_works_on_a_bundled_profile() -> None:
     circuit = cirq.Circuit(cirq.H(q[0]), cirq.CNOT(q[0], q[1]), cirq.CNOT(q[1], q[2]))
     circuit.append(cirq.measure(*q, key="m"))
     shots = 20_000
-    with pytest.warns(NoiseApproximationWarning, match="h on qubits"):
+    with pytest.warns(NoiseApproximationWarning, match="h on qubit 0: "):
         result = cirq.DensityMatrixSimulator(noise=model, seed=1).run(circuit, repetitions=shots)
     counts = np.bincount(result.measurements["m"] @ [4, 2, 1], minlength=8) / shots
     with warnings.catch_warnings():

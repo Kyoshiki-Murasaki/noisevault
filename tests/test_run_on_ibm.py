@@ -5,9 +5,11 @@ import copy
 import functools
 import importlib.util
 import io
+import re
 import subprocess
 import sys
 import time
+import tomllib
 import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -23,7 +25,7 @@ from typer.testing import CliRunner
 import noisevault as nv
 from noisevault.cli import app
 from noisevault.counts import SAMPLER_V2_OPTIONS, PlannedCircuit, load_counts, plan
-from noisevault.errors import NoiseVaultError, install_hint
+from noisevault.errors import REPOSITORY, NoiseVaultError, install_hint
 from noisevault.profile import Profile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -293,6 +295,21 @@ def test_one_job_carries_every_option_the_counts_format_checks(local_run: LocalR
     assert any("have no effect in local testing mode" in w for w in local_run.warned)
 
 
+_PEP_723 = re.compile(r"(?m)^# /// script$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
+
+
+def test_uv_runs_the_script_from_a_url_with_noisevault_from_the_repository() -> None:
+    block = _PEP_723.search(SCRIPT.read_text(encoding="utf-8"))
+    assert block, "scripts/run_on_ibm.py needs a # /// script block for uv run"
+    lines = block["content"].splitlines(keepends=True)
+    metadata = tomllib.loads("".join(line[2:] if line.startswith("# ") else "\n" for line in lines))
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert metadata == {
+        "requires-python": project["requires-python"],
+        "dependencies": [f"noisevault[ibm] @ git+{REPOSITORY}"],
+    }
+
+
 def test_the_run_ends_with_its_files_and_a_command_that_scores_them(local_run: LocalRun) -> None:
     counts = load_counts(local_run.output)
     profile = _fez_profile()
@@ -307,9 +324,10 @@ def test_the_run_ends_with_its_files_and_a_command_that_scores_them(local_run: L
     ]
     result = CliRunner().invoke(app, ["compare", ref, str(local_run.output)], env={"COLUMNS": "80"})
     assert result.exit_code == 0, result.output
-    header = result.output.splitlines()[:2]
-    assert header[0].split()[1] == profile.short_fingerprint
-    assert header[1].startswith(f"counts {local_run.output}, simulated, sha256:")
+    lines = result.output.splitlines()
+    header = " ".join(line.strip() for line in lines[: lines.index("")])
+    assert header.split()[1] == profile.short_fingerprint
+    assert f" counts {local_run.output}, simulated, sha256:" in header
 
 
 def test_the_summary_shows_the_circuits_and_the_usage_and_a_no_submits_nothing(

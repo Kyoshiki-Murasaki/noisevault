@@ -770,7 +770,7 @@ def test_unknown_gate_warns_once_and_counts_every_use(qml, manila) -> None:
         warnings.simplefilter("always")
         qml.add_noise(circuit, model)()
     messages = [str(w.message) for w in caught if issubclass(w.category, NoiseApproximationWarning)]
-    assert len(messages) == 1 and "h on qubits [0]" in messages[0]
+    assert len(messages) == 1 and "h on qubit 0: " in messages[0]
     assert model.report.events["typical_noise_used"]["h"] == 3
 
 
@@ -782,7 +782,7 @@ def test_unknown_gates_error_raises(qml, manila) -> None:
         qml.Hadamard(0)
         return qml.probs(wires=[0])
 
-    with pytest.raises(MissingCalibrationError, match="h on qubits"):
+    with pytest.raises(MissingCalibrationError, match="h on qubit 0: "):
         qml.add_noise(circuit, to_pennylane(manila, unknown_gates="error"))()
     with pytest.raises(ValueError, match="choose 'typical' or 'error'"):
         to_pennylane(manila, unknown_gates="ignore")
@@ -1013,10 +1013,10 @@ def test_uncalibrated_gates_in_a_product_warn_or_raise(qml, manila) -> None:
         qml.prod(qml.Hadamard(0), qml.X(0))
 
     model = to_pennylane(manila, readout=False)
-    with pytest.warns(NoiseApproximationWarning, match="h on qubits"):
+    with pytest.warns(NoiseApproximationWarning, match="h on qubit 0: "):
         _noisy_qnode_probs(qml, model, apply, 1)
     assert dict(model.report.events["typical_noise_used"]) == {"h": 1}
-    with pytest.raises(MissingCalibrationError, match="h on qubits"):
+    with pytest.raises(MissingCalibrationError, match="h on qubit 0: "):
         _noisy_qnode_probs(qml, to_pennylane(manila, unknown_gates="error"), apply, 1)
 
 

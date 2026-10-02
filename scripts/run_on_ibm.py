@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["noisevault[ibm] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"]
+# ///
 """Run the nv compare circuits on an IBM device and save the counts for nv compare.
 
     python scripts/run_on_ibm.py ibm_kingston --shots 4000 -o kingston-0416.counts.json

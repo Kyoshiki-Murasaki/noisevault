@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import units
-from ..errors import SourceDataError, plural
+from ..errors import SourceDataError, plural, qubit_loci
 from ..profile import Profile
 from . import Origin, csv_by_line, source_text
 from .qiskit_backend import (
@@ -313,7 +313,7 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
         first, first_where = found.setdefault((inst.name, inst.qubits), (inst, where))
         if first != inst:
             raise SourceDataError(
-                f"{where}: {inst.name} on qubits {inst.qubits} has error {inst.error} and"
+                f"{where}: {inst.name} on {qubit_loci(inst.qubits)} has error {inst.error} and"
                 f" duration {inst.duration_ns} ns, but {first_where} gives error {first.error}"
                 f" and duration {first.duration_ns} ns"
             )

@@ -185,5 +185,5 @@ def test_list_and_doctor_name_a_dangling_vault_link_in_one_line(vault: Path) -> 
     assert listed.exit_code == 0 and "* ibm_manila" in listed.stdout
     assert listed.stderr == expected
     doctor = runner.invoke(app, ["doctor"], env={"COLUMNS": "200"})
-    assert doctor.exit_code == 0 and f"vault: {vault} (1 profiles)" in doctor.stdout
+    assert doctor.exit_code == 0 and f"vault: {vault} (1 profile)" in doctor.stdout
     assert doctor.stderr == expected

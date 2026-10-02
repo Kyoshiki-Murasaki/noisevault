@@ -354,9 +354,9 @@ def test_notes_name_what_the_factors_cannot_scale_or_charge() -> None:
     )
     assert result.gates == NoEstimate("no circuit's outcomes move with gate error")
     lines = str(result).split("\n")
-    note = lines.index("note            x on qubits 0, 1 and 2 is not scaled (it has a negative")
+    note = lines.index("note            x on qubits 0, 1 and 2 is not scaled")
     assert lines[note + 1 : note + 3] == [
-        "                Pauli-Lindblad rate)",
+        "                (it has a negative Pauli-Lindblad rate)",
         "                delays on qubit 0 add no idle error (no T1 or T2 stated)",
     ]
 
@@ -456,7 +456,7 @@ def test_an_op_the_profile_does_not_calibrate_on_its_qubits_is_refused() -> None
     data = load_counts(EXAMPLE).to_dict()
     data["circuits"][0]["ops"].append(["cz", [0, 2], []])
     message = refused(kingston, MeasuredCounts.model_validate(data))
-    assert message.startswith("circuit ghz_chain: cz on qubits [148, 150]")
+    assert message.startswith("circuit ghz_chain: cz on qubits 148-150: ")
 
 
 def test_profile_compare_is_compare_and_import_noisevault_leaves_the_fit_unloaded() -> None:

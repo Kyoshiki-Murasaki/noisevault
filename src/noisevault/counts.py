@@ -34,7 +34,7 @@ from pydantic import (
 )
 
 from . import __version__, check, gates
-from .errors import CountsError, NoiseVaultError, did_you_mean, plural
+from .errors import CountsError, NoiseVaultError, did_you_mean, plural, qubit_loci
 from .profile import (
     Count,
     CountsSource,
@@ -127,7 +127,7 @@ def _check_gate(op: Op) -> None:
         raise CountsError(f"{op.name} acts on {plural(info.arity, 'qubit')}, not {len(op.qubits)}")
     if len(set(op.qubits)) != len(op.qubits):
         raise CountsError(
-            f"{op.name} acts on qubits {list(op.qubits)}; its targets must be distinct"
+            f"{op.name} acts on {qubit_loci(op.qubits)}; its targets must be distinct"
         )
     if len(op.params) != len(info.params):
         names = f" ({', '.join(info.params)})" if info.params else ""

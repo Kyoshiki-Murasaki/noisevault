@@ -101,7 +101,10 @@ def test_section_rules(section: str, value, match: str) -> None:
 @pytest.mark.parametrize(
     ("record", "match"),
     [
-        ({"gate": "ecr", "qubits": [0, 1], "avg_infidelity": 1e-2}, "not defined in gates"),
+        (
+            {"gate": "ecr", "qubits": [0, 1], "avg_infidelity": 1e-2},
+            r"calibrations \(ecr on qubits 0-1\): gate 'ecr' is not defined in gates",
+        ),
         ({"gate": "cz", "qubits": [0], "avg_infidelity": 1e-2}, "acts on 2 qubits"),
         ({"gate": "cz", "qubits": [1, 1], "avg_infidelity": 1e-2}, "distinct"),
         ({"gate": "cz", "qubits": [1, 3], "avg_infidelity": 1e-2}, "outside 0..2"),

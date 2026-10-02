@@ -216,9 +216,17 @@ framework, so it also runs with no install. Put
 `uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault` in front of it.
 
 `nv compare ... -o fitted.json` saves the profile with the fitted factors, and every export then
-applies them. With the `ibm` extra and a saved IBM Quantum account,
-`python scripts/run_on_ibm.py ibm_kingston -o kingston.counts.json` runs the circuits on that
-device and prints the `nv compare` command for its counts.
+applies them.
+
+To measure an IBM device yourself, put your IBM Quantum API key in `IBM_QUANTUM_TOKEN` and run
+the `nv compare` circuits on it with uv. The script needs no clone or install:
+
+```bash
+uv run https://raw.githubusercontent.com/Kyoshiki-Murasaki/noisevault/main/scripts/run_on_ibm.py ibm_kingston -o kingston.counts.json
+```
+
+It shows IBM's estimate of the QPU time, asks before it submits the job, and prints the
+`nv compare` command for the counts.
 [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware) shows how
 to plan and record a run. [Counts format](docs/counts-format.md) describes the file, and
 [Limitations](docs/limitations.md#what-the-unmodeled-error-factors-absorb) lists what the factors

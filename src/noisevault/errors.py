@@ -86,6 +86,7 @@ def parse_json(raw: bytes) -> Any:
 
 
 _STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
+_DIGIT_LIMIT = re.compile(r"\((\d+) digits\).* has (\d+) digits")
 
 
 def unreadable(source: str, exc: Exception) -> str:
@@ -93,12 +94,21 @@ def unreadable(source: str, exc: Exception) -> str:
         line = exc.object.count(b"\n", 0, exc.start) + 1
         return f"{source} is not UTF-8 text (byte {exc.object[exc.start]:#04x} on line {line})"
     if isinstance(exc, json.JSONDecodeError):
-        reason = exc.msg.removesuffix(" at")
-        where = f"{reason[:1].lower()}{reason[1:]} at line {exc.lineno}, column {exc.colno}"
-        return f"{source} is not JSON ({where})"
+        where = f"{exc.msg.removesuffix(' at')} at line {exc.lineno}, column {exc.colno}"
+        return f"{source} is not JSON ({_lower_first(where)})"
     if isinstance(exc, ValueError):
-        return f"{source} is not JSON ({exc})"
-    return f"{source} is a damaged gzip file ({exc})"
+        digits = _DIGIT_LIMIT.search(str(exc))
+        reason = (
+            f"a number has {digits[2]} digits, over the {digits[1]}-digit limit"
+            if digits
+            else str(exc)
+        )
+        return f"{source} is not JSON ({_lower_first(reason)})"
+    return f"{source} is a damaged gzip file ({_lower_first(str(exc))})"
+
+
+def _lower_first(text: str) -> str:
+    return text[:1].lower() + text[1:]
 
 
 def did_you_mean(given: str, choices: Iterable[str]) -> str:

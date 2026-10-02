@@ -1063,7 +1063,7 @@ def _profile_issues(profile: Profile) -> list[str]:
 
     seen_loci: set[tuple[str, tuple[int, ...]]] = set()
     for record in profile.calibrations:
-        where = f"calibrations ({record.gate} on {list(record.qubits)})"
+        where = f"calibrations ({record.gate} on {qubit_loci(record.qubits)})"
         if record.gate not in profile.gates:
             issues.append(f"{where}: gate {record.gate!r} is not defined in gates")
             continue

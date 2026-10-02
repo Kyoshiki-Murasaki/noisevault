@@ -293,13 +293,14 @@ one pair of factors explains every circuit.
 [How nv compare fits the factors](limitations.md#how-nv-compare-fits-the-factors) explains the
 fit and how its intervals were tested.
 
-On an IBM device, `scripts/run_on_ibm.py` runs the circuits and saves the counts file. It needs a
-clone of this repository with the `ibm` extra installed, and an IBM Quantum account that you
-saved once with `QiskitRuntimeService.save_account(token=...)`. From the clone, run:
+On an IBM device, `scripts/run_on_ibm.py` runs the circuits and saves the counts file. It needs
+[uv](https://docs.astral.sh/uv/) and an IBM Quantum account. Put your API key in
+`IBM_QUANTUM_TOKEN`, or save the account once with `QiskitRuntimeService.save_account(token=...)`.
+uv reads the script's dependencies from its first lines and installs them, so the script needs no
+clone or install:
 
 ```bash
-pip install -e ".[ibm]"
-python scripts/run_on_ibm.py ibm_kingston --shots 4000 -o kingston-0416.counts.json
+uv run https://raw.githubusercontent.com/Kyoshiki-Murasaki/noisevault/main/scripts/run_on_ibm.py ibm_kingston --shots 4000 -o kingston-0416.counts.json
 ```
 
 The script pulls the calibration in effect now through your account and plans the circuits from
