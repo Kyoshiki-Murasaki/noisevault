@@ -11,6 +11,7 @@ import threading
 import time
 import warnings
 import zlib
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -240,14 +241,20 @@ def test_vault_profile_shadows_a_bundled_one_of_the_same_time(vault: Path) -> No
     )
 
 
+def test_a_vault_profile_shadows_only_a_bundled_one_of_its_id_and_time() -> None:
+    (manila,) = [i for i in bundled_profiles() if i.id == "ibm_manila"]
+    mine, lima = replace(manila, location="vault"), replace(manila, id="ibm_lima")
+    undated = replace(manila, calibrated_at=None)
+    assert catalog._unshadowed([mine, manila, lima, undated]) == [mine, lima, undated]
+
+
 def _later_manila() -> Profile:
     data = _changed_manila(5e-4).to_dict()
     data["device"]["calibrated_at"] = "2024-06-03T10:00:00Z"
     return Profile.model_validate(data)
 
 
-def _follow(hint: str | None) -> Profile:
-    """Load what a FingerprintMismatch hint says to load, exactly as it says it."""
+def _load_as_hint_says(hint: str | None) -> Profile:
     assert hint is not None
     target = re.search(r"load[ (]'?([^\s',]+)", hint)
     pin = re.search(r"expect='([^']+)'", hint)
@@ -255,8 +262,7 @@ def _follow(hint: str | None) -> Profile:
     return nv.load(target.group(1), expect=pin.group(1) if pin else None)
 
 
-def _shadowed_manila() -> Profile:
-    """A vault copy of Manila's bundled calibration with qubit 0's T1 at 99 us, and a newer one."""
+def _save_vault_copy_and_later_manila() -> Profile:
     data = nv.load("ibm_manila").to_dict()
     data["qubits"][0]["t1_us"] = 99.0
     mine = Profile.model_validate(data)
@@ -270,12 +276,12 @@ def test_following_a_mismatch_hint_loads_the_pinned_profile_past_a_vault_copy(
     vault: Path,
 ) -> None:
     bundled = nv.load("ibm_manila")
-    mine = _shadowed_manila()
+    mine = _save_vault_copy_and_later_manila()
     ref, pin = "ibm_manila@2024-05-27T18:27:23Z", bundled.short_fingerprint
     assert nv.load(ref).fingerprint == mine.fingerprint
     with pytest.raises(FingerprintMismatch) as info:
         nv.load("ibm_manila", expect=pin)
-    assert _follow(info.value.hint).fingerprint == bundled.fingerprint
+    assert _load_as_hint_says(info.value.hint).fingerprint == bundled.fingerprint
     hint = f"nv.load('{ref}', expect='{pin}') loads the profile with that fingerprint"
     assert info.value.hint == hint
     assert str(info.value) == f"{info.value.message}; {hint}"
@@ -288,14 +294,14 @@ def test_a_mismatch_hint_names_the_file_of_an_undated_profile(vault: Path) -> No
     pin = undated.short_fingerprint
     with pytest.raises(FingerprintMismatch) as info:
         nv.load("test_toy@2025-01-01", expect=pin)
-    assert _follow(info.value.hint).fingerprint == undated.fingerprint
+    assert _load_as_hint_says(info.value.hint).fingerprint == undated.fingerprint
     assert info.value.hint == (
         f"nv.load('{path}', expect='{pin}') loads the profile with that fingerprint"
     )
 
 
 def test_a_missed_date_lists_each_ref_once_past_a_vault_copy(vault: Path) -> None:
-    _shadowed_manila()
+    _save_vault_copy_and_later_manila()
     error = (
         "no ibm_manila profile calibrated on 2025-01-01 UTC;"
         " you have ibm_manila@2024-05-27T18:27:23Z, ibm_manila@2024-06-03T10:00:00Z"
@@ -415,9 +421,7 @@ def _serve(monkeypatch: pytest.MonkeyPatch, profile: Profile) -> None:
     monkeypatch.setattr(ibm_public, "pull", lambda device, at=None: profile)
 
 
-def _serve_history(monkeypatch: pytest.MonkeyPatch, *stamps: str) -> None:
-    """IBM's public endpoint with ibm_manila calibrated at these times. A pull gets the newest
-    calibration older than ``at``."""
+def _serve_manila_calibrated_at(monkeypatch: pytest.MonkeyPatch, *stamps: str) -> None:
     from noisevault.sources import ibm_public
 
     def pull(device: str, at: datetime | None = None) -> Profile:
@@ -440,7 +444,7 @@ def _serve_history(monkeypatch: pytest.MonkeyPatch, *stamps: str) -> None:
 def test_following_the_hint_of_a_missed_date_ends_with_a_profile_that_loads(
     monkeypatch: pytest.MonkeyPatch, history: tuple[str, ...], printed: str
 ) -> None:
-    _serve_history(monkeypatch, *history)
+    _serve_manila_calibrated_at(monkeypatch, *history)
     runner = CliRunner()
     asked = ["show", "ibm_manila@2024-06-01"]
     missed = runner.invoke(app, asked)

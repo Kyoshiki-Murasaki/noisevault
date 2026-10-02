@@ -1,6 +1,3 @@
-"""A failed command prints an error line and, when there is a next step, a hint line after it.
-An odd vault entry prints one warning line."""
-
 from __future__ import annotations
 
 import json
@@ -22,7 +19,6 @@ runner = CliRunner()
 
 
 def _error_and_hint(args: list[str], code: int = 1) -> str:
-    """The error line and, when there is a next step, the hint line after it."""
     result = runner.invoke(app, args, env={"COLUMNS": "80"}, prog_name="nv")
     assert result.exit_code == code and result.stdout == ""
     first, *rest = result.stderr.splitlines()

@@ -266,9 +266,6 @@ def test_replacing_a_file_keeps_its_mode(tmp_path: Path, umask: int, mode: int) 
 def test_saving_leaves_the_process_umask_alone(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, umask: int, savers: int
 ) -> None:
-    """The savers meet at each umask change and at each rename. The test reads the umask while
-    they wait there and again after they finish, so a save that changes the umask fails on
-    every run."""
     set_umask, rename = os.umask, os.replace
     seen = []
 

@@ -128,8 +128,7 @@ def upgrade_v01(old: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class _InvalidV01(NoiseVaultError, ValueError):
-    """A 0.1 file the upgrade cannot read."""
+class _InvalidV01(NoiseVaultError, ValueError): ...
 
 
 def _check_shape(old: dict[str, Any]) -> None:

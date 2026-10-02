@@ -56,12 +56,10 @@ _ENTRY_TYPES: dict[str, Any] = {
 }
 
 
-class _BadArgument(NoiseVaultError, ValueError):
-    """A ``source`` or ``expect`` value that names nothing NoiseVault knows."""
+class _BadArgument(NoiseVaultError, ValueError): ...
 
 
-class _FileInTheWay(NoiseVaultError, FileExistsError):
-    """A vault file at the path where a pull would save its calibration."""
+class _FileInTheWay(NoiseVaultError, FileExistsError): ...
 
 
 @dataclass(frozen=True)
@@ -504,8 +502,10 @@ def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> ProfileNotFound:
 
 
 def _unshadowed(infos: list[ProfileInfo]) -> list[ProfileInfo]:
-    shadowed = {_epoch(i.calibrated_at) for i in infos if i.location == "vault"}
-    return [i for i in infos if i.location == "vault" or _epoch(i.calibrated_at) not in shadowed]
+    shadowed = {(i.id, _epoch(i.calibrated_at)) for i in infos if i.location == "vault"}
+    return [
+        i for i in infos if i.location == "vault" or (i.id, _epoch(i.calibrated_at)) not in shadowed
+    ]
 
 
 def _dedupe(infos: list[ProfileInfo]) -> list[ProfileInfo]:

@@ -948,16 +948,14 @@ _NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
 def write_atomically(path: Path, data: bytes) -> None:
     """Replace ``path`` with ``data``: a failed write leaves the old file whole.
 
-    The temporary file has a dot name, so vault listings skip it. A new file gets mode 0o666
-    less the umask, which the OS applies when it creates the temporary file. A replaced file
-    keeps its mode. Python can read the umask only by setting it, and all threads share one
-    umask, so this function never touches the umask.
+    Python can read the umask only by setting it, and all threads share one umask, so this
+    function never touches the umask.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     while True:
-        tmp = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
+        hidden_tmp = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
         try:
-            fd = os.open(tmp, _NEW_FILE, 0o666)
+            fd = os.open(hidden_tmp, _NEW_FILE, 0o666)
         except FileExistsError:
             continue
         break
@@ -965,10 +963,10 @@ def write_atomically(path: Path, data: bytes) -> None:
         with open(fd, "wb") as handle:
             handle.write(data)
         if path.exists():
-            shutil.copymode(path, tmp)
-        os.replace(tmp, path)
+            shutil.copymode(path, hidden_tmp)
+        os.replace(hidden_tmp, path)
     except BaseException:
-        tmp.unlink(missing_ok=True)
+        hidden_tmp.unlink(missing_ok=True)
         raise
 
 
