@@ -105,20 +105,20 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: str | datetime
             hint="use nv.pull(<name>) for a device, or from_qiskit_backend(<backend>) for a Qiskit"
             " backend",
         )
-    reader = csv.DictReader(io.StringIO(text, newline=""))
-    try:
-        headers = reader.fieldnames or []
-        records = list(reader)
-    except csv.Error as exc:
-        raise SourceDataError(
-            f"{path.name} line {reader.reader.line_num} is not valid CSV: {exc}"
-        ) from None
+    headers, *records = _lines(text, path.name) or [[]]
     columns, ignored = _columns(headers, path.name)
-    rows = [
-        _row(row, columns, path.name, line)
-        for line, row in enumerate(records, start=2)
-        if any(_cell(row, column) for column in columns.values())
-    ]
+    rows = []
+    for line, cells in enumerate(records, start=2):
+        if not cells:
+            continue
+        if len(cells) != len(headers):
+            raise SourceDataError(
+                f"{path.name} line {line} has {len(cells)} cell{'s' if len(cells) != 1 else ''},"
+                f" but the header has {len(headers)} columns"
+            )
+        row = dict(zip(headers, cells, strict=True))
+        if any(_cell(row, column) for column in columns.values()):
+            rows.append(_row(row, columns, path.name, line))
     if not rows:
         raise SourceDataError(f"{path.name} has a header but no qubit rows")
     cal = _calibration(rows, device, as_utc(calibrated_at, name="calibrated_at"))
@@ -135,6 +135,18 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: str | datetime
             "notes": notes,
         },
     )
+
+
+def _lines(text: str, name: str) -> list[list[str]]:
+    """The cells on each line of ``text``; a quoted cell cannot run on to the next line."""
+    lines = []
+    for number, line in enumerate(io.StringIO(text, newline=""), start=1):
+        try:
+            [cells] = csv.reader([line], strict=True)
+        except csv.Error as exc:
+            raise SourceDataError(f"{name} line {number} is not valid CSV: {exc}") from None
+        lines.append(cells)
+    return lines
 
 
 def _columns(headers: list[str], name: str) -> tuple[dict[str, _Column], list[str]]:
@@ -209,9 +221,7 @@ class _Row:
 _TWO_QUBIT_KEYS = {"error:cx", "error:ecr", "error:cz", "error:rzz", "gate_length_2q"}
 
 
-def _row(
-    row: Mapping[str, str | None], columns: Mapping[str, _Column], name: str, line: int
-) -> _Row:
+def _row(row: Mapping[str, str], columns: Mapping[str, _Column], name: str, line: int) -> _Row:
     where = f"{name} line {line}"
     text = _cell(row, columns["qubit"])
     qubit = columns["qubit"].header.strip()
@@ -248,8 +258,8 @@ def _row(
     return _Row(where, index, values, operational, packed)
 
 
-def _cell(row: Mapping[str, str | None], column: _Column) -> str:
-    text = (row.get(column.header) or "").strip()
+def _cell(row: Mapping[str, str], column: _Column) -> str:
+    text = row[column.header].strip()
     return "" if text == "undefined" else text
 
 

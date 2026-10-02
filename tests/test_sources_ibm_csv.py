@@ -403,6 +403,73 @@ def test_a_cell_too_long_for_csv_names_its_line(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("source", "edits", "message"),
+    [
+        pytest.param(
+            EAGLE,
+            [("false,\n", 'false,"\n')],
+            "line 2 is not valid CSV: unexpected end of data",
+            id="quote never closed",
+        ),
+        pytest.param(
+            EAGLE,
+            [("false,\n", 'false,"\n'), ("620,true,\n", '620,true,"\n')],
+            "line 2 is not valid CSV: unexpected end of data",
+            id="quote closed two lines down",
+        ),
+        pytest.param(
+            HERON,
+            [('"0","300"', '"0","300"0')],
+            "line 2 is not valid CSV: ',' expected after '\"'",
+            id="text after a closing quote",
+        ),
+    ],
+)
+def test_a_damaged_quote_names_its_line(
+    tmp_path: Path, source: Path, edits: list[tuple[str, str]], message: str
+) -> None:
+    path = source
+    for old, new in edits:
+        path = _edited(tmp_path, path, old, new)
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert str(info.value) == f"{source.name} {message}"
+
+
+_HERON_LAST_ROW = HERON.read_text(encoding="utf-8").splitlines()[-1]
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "shown"),
+    [
+        pytest.param(_HERON_LAST_ROW, '"3","240"', "line 5 has 2 cells", id="cut short"),
+        pytest.param(_HERON_LAST_ROW, '"3"', "line 5 has 1 cell", id="one cell"),
+        pytest.param(
+            '"0.010","Yes"', '"0.010","Yes","x"', "line 3 has 18 cells", id="one cell too many"
+        ),
+    ],
+)
+def test_a_line_with_missing_or_extra_cells_names_it(
+    tmp_path: Path, old: str, new: str, shown: str
+) -> None:
+    path = _edited(tmp_path, HERON, old, new)
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert str(info.value) == f"{HERON.name} {shown}, but the header has 17 columns"
+
+
+def test_a_line_number_counts_blank_lines(tmp_path: Path) -> None:
+    header, *rows = HERON.read_text(encoding="utf-8").replace('"No"', '"Maybe"').splitlines()
+    path = tmp_path / HERON.name
+    path.write_text("\n".join([header, "", *rows]) + "\n", encoding="utf-8")
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert str(info.value) == (
+        f"{HERON.name} line 6, 'Operational': 'Maybe' is not yes/no or true/false"
+    )
+
+
 def _rows(source: Path) -> list[list[str]]:
     return list(csv.reader(io.StringIO(source.read_text(encoding="utf-8"), newline="")))
 
