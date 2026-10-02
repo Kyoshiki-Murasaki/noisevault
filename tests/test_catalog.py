@@ -168,12 +168,12 @@ def test_pulling_a_bundled_device_no_source_serves_says_how_to_load_it() -> None
     assert str(info.value).endswith(f"; {info.value.hint}")
 
 
-def test_pulling_from_a_vendor_no_live_source_serves_says_how_to_list_its_profiles() -> None:
+def test_pulling_from_a_vendor_no_source_serves_says_how_to_list_its_profiles() -> None:
     with pytest.raises(ValueError) as info:
         nv.pull("ibm_fez", source="google")
     assert isinstance(info.value, nv.NoiseVaultError)
     assert (info.value.message, info.value.hint) == (
-        "unknown source 'google'; no live source serves google devices",
+        "unknown source 'google'; no source serves google devices",
         "run nv list --vendor google to see the google profiles you can load offline",
     )
 
@@ -631,6 +631,50 @@ def test_an_index_this_noisevault_did_not_write_is_ignored_and_rewritten(
     assert writes == [index]
 
 
+@pytest.mark.parametrize(
+    "damaged",
+    [
+        '"num_qubits": 1e309',
+        '"num_qubits": NaN',
+        '"num_qubits": -Infinity',
+        '"num_qubits": "\\ud800"',
+        '"\\udfff": 5',
+        '"num_qubits": ' + "[" * 100_000 + "]" * 100_000,
+    ],
+    ids=["1e309", "NaN", "-Infinity", "lone surrogate", "lone surrogate key", "deep nesting"],
+)
+def test_an_index_that_cannot_be_hashed_is_ignored_and_rewritten(vault: Path, damaged: str) -> None:
+    manila = nv.load("ibm_manila")
+    manila.save(vault / "current.json.gz")
+    catalog.vault_profiles()
+    index = vault / ".index.json"
+    written = index.read_text()
+    index.write_text(written.replace('"num_qubits": 5', damaged, 1))
+    runner = CliRunner()
+    for args in (["list"], ["show", "ibm_manila"]):
+        result = runner.invoke(app, args)
+        assert (result.exit_code, result.stderr) == (0, ""), args
+    assert index.read_text() == written
+
+
+def test_a_pipe_named_like_the_index_does_not_block_the_listing(vault: Path) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    profile.save(vault_path(profile))
+    pipe = vault / ".index.json"
+    os.mkfifo(pipe)
+    listed: list[set[str]] = []
+    reader = threading.Thread(target=lambda: listed.append({i.id for i in nv.profiles()}))
+    reader.start()
+    reader.join(timeout=5)
+    blocked = reader.is_alive()
+    if blocked:
+        os.close(os.open(pipe, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join()
+    assert not blocked, "listing the vault waited on the pipe"
+    assert "test_toy" in listed[0]
+    assert pipe.is_file()
+
+
 def test_an_index_entry_time_is_read_as_utc() -> None:
     (manila,) = [i for i in bundled_profiles() if i.id == "ibm_manila"]
     entry = {**catalog.index_entry(manila.load()), "calibrated_at": "2024-05-28T01:27:23+07:00"}
@@ -734,6 +778,117 @@ def test_a_pull_does_not_trust_a_stale_index_entry(
     assert (pulled.path, pulled.written) == (vault_path(second), True)
     assert nv.load("test_toy@2025-01-01") == first
     assert nv.load("test_toy@2025-01-02") == second
+
+
+def _saved_while_loading(
+    monkeypatch: pytest.MonkeyPatch, path: Path, saved: Profile, then: Profile | None = None
+) -> None:
+    """Another writer saves ``saved`` to ``path`` after a load resolves that file and before the
+    load reads it. With ``then``, it saves ``then`` right after the read."""
+    real = catalog.ProfileInfo.load
+
+    def load(self: catalog.ProfileInfo) -> Profile:
+        if self.path != path:
+            return real(self)
+        saved.save(path)
+        try:
+            return real(self)
+        finally:
+            if then is not None:
+                then.save(path)
+
+    monkeypatch.setattr(catalog.ProfileInfo, "load", load)
+
+
+def _january_manila() -> Profile:
+    data = nv.load("ibm_manila").to_dict()
+    data["device"]["calibrated_at"] = "2025-01-01T00:00:00Z"
+    data["qubits"][0]["t1_us"] = 99.0
+    return Profile.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("ref", "pinned", "saved"),
+    [
+        ("ibm_manila@2024-05-27", False, _january_manila),
+        ("ibm_manila@2024-05-27T18:27:23Z", False, _january_manila),
+        ("ibm_manila@2024-05-27", True, _january_manila),
+        ("ibm_manila@2024-05-27", True, lambda: _changed_manila(5e-4)),
+    ],
+    ids=["date", "timestamp", "pinned date", "pinned, converted again"],
+)
+def test_a_load_answers_its_ref_and_pin_when_the_file_it_resolved_is_saved_over(
+    monkeypatch: pytest.MonkeyPatch, vault: Path, ref: str, pinned: bool, saved
+) -> None:
+    may = nv.load("ibm_manila")
+    current = may.save(vault / "current.json.gz")
+    catalog.vault_profiles()
+    _saved_while_loading(monkeypatch, current, saved())
+    loaded = nv.load(ref, expect=may.short_fingerprint if pinned else None)
+    assert (loaded.device.calibrated_at.isoformat(), loaded.qubits[0].t1_us) == (
+        "2024-05-27T18:27:23+00:00",
+        may.qubits[0].t1_us,
+    )
+    assert loaded == may
+
+
+def test_a_vault_file_saved_over_after_it_resolved_leaves_its_day_not_found(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    first = _dated("2025-01-01T00:00:00Z")
+    later = _dated("2025-02-01T00:00:00Z", error=2e-3)
+    path = first.save(vault / "current.json.gz")
+    catalog.vault_profiles()
+    _saved_while_loading(monkeypatch, path, later)
+    with pytest.raises(ProfileNotFound) as info:
+        nv.load("test_toy@2025-01-01")
+    assert info.value.message == (
+        "no test_toy profile calibrated on 2025-01-01 UTC; you have test_toy@2025-02-01T00:00:00Z"
+    )
+
+
+def test_a_file_that_changes_under_both_reads_of_a_load_is_not_found(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    first = _dated("2025-01-01T00:00:00Z")
+    later = _dated("2025-02-01T00:00:00Z", error=2e-3)
+    path = first.save(vault / "current.json.gz")
+    catalog.vault_profiles()
+    _saved_while_loading(monkeypatch, path, later, then=first)
+    with pytest.raises(ProfileNotFound) as info:
+        nv.load("test_toy@2025-01-01")
+    assert (info.value.message, info.value.hint) == (
+        f"{path} holds test_toy@2025-02-01T00:00:00Z, not test_toy@2025-01-01;"
+        " the file changed during this load",
+        "load test_toy@2025-01-01 again",
+    )
+
+
+def test_a_load_rereads_the_files_when_the_index_misdescribes_an_unchanged_one(
+    vault: Path,
+) -> None:
+    may = nv.load("ibm_manila")
+    current = _january_manila().save(vault / "current.json.gz")
+    catalog.vault_profiles()
+    entry = _indexed(vault)[current.name]
+    claimed = {**entry, **catalog.index_entry(may)}
+    catalog._write_vault_index(vault, {current.name: claimed})
+    assert nv.load("ibm_manila@2024-05-27") == may
+    assert _indexed(vault) == {current.name: entry}
+
+
+def test_a_load_through_the_index_reads_only_the_file_it_resolves(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    days = [_dated(f"2025-01-0{day}T00:00:00Z", error=day * 1e-4) for day in range(1, 6)]
+    for profile in days:
+        profile.save(vault_path(profile))
+    catalog.vault_profiles()
+    reads: list[Path] = []
+    real = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda self: reads.append(self) or real(self))
+    assert nv.load("test_toy@2025-01-03") == days[2]
+    assert reads == [vault_path(days[2])]
 
 
 def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:

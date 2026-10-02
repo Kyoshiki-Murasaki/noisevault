@@ -182,17 +182,18 @@ _VAULT_INDEX = ".index.json"
 _INDEX_VERSION = 1
 
 
-def vault_profiles() -> list[ProfileInfo]:
+def vault_profiles(*, reread: bool = False) -> list[ProfileInfo]:
     """Profiles in the vault, indexed by file name so unchanged files are not parsed again.
 
     The index (``.index.json`` in the vault) is only a cache. The listing reuses an entry
     while its file's size, modification time and change time (moved by chmod and chown, which
     can make it unreadable) are unchanged. The index names its format version and a digest of
     its entries, so the listing ignores and replaces an index that this NoiseVault did not
-    write. Losing the index costs one re-read of each file.
+    write. Losing the index costs one re-read of each file. With ``reread=True`` the listing
+    reads every file and replaces the index.
     """
     folder = vault_dir()
-    cached = _read_vault_index(folder)
+    cached = {} if reread else _read_vault_index(folder)
     index: dict[str, dict[str, Any]] = {}
     out = []
     for path in sorted(folder.glob("*.json*")):
@@ -246,16 +247,21 @@ def _skipped(path: Path, exc: Exception) -> str:
 def _read_vault_index(folder: Path) -> dict[str, dict[str, Any]]:
     """The index entries, or nothing when the file is not one this NoiseVault wrote.
 
-    Increase ``_INDEX_VERSION`` whenever :func:`index_entry` changes what an entry means.
+    This code writes only regular files that it can parse and hash again, so a file that cannot
+    be read, parsed or hashed is not one. Increase ``_INDEX_VERSION`` whenever
+    :func:`index_entry` changes what an entry means.
     """
+    path = folder / _VAULT_INDEX
     try:
-        data = json.loads((folder / _VAULT_INDEX).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict) or data.get("version") != _INDEX_VERSION:
-        return {}
-    entries = data.get("entries")
-    if not isinstance(entries, dict) or data.get("digest") != _digest(entries):
+        if not S_ISREG(path.stat().st_mode):
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("version") != _INDEX_VERSION:
+            return {}
+        entries = data.get("entries")
+        if not isinstance(entries, dict) or data.get("digest") != _digest(entries):
+            return {}
+    except (OSError, ValueError, RecursionError):
         return {}
     return entries
 
@@ -299,8 +305,8 @@ def resolve(ref: str | Ref, *, expect: str | None = None) -> ProfileInfo:
     return _pick(ref, _known(), expect)
 
 
-def _known() -> list[ProfileInfo]:
-    return _dedupe(vault_profiles() + bundled_profiles())
+def _known(*, reread: bool = False) -> list[ProfileInfo]:
+    return _dedupe(vault_profiles(reread=reread) + bundled_profiles())
 
 
 def _pick(ref: Ref, known: list[ProfileInfo], expect: str | None) -> ProfileInfo:
@@ -314,13 +320,11 @@ def _pick(ref: Ref, known: list[ProfileInfo], expect: str | None) -> ProfileInfo
             f"no profile with id {ref.id!r}",
             hint="run nv list to see every profile you can load offline",
         )
-    if ref.timestamp is not None:
-        matches = [i for i in candidates if i.calibrated_at == ref.timestamp]
-    elif ref.date is not None:
-        matches = [i for i in candidates if i.calibrated_at and i.calibrated_at.date() == ref.date]
-    else:
+    if ref.timestamp is None and ref.date is None:
         newest = max(_epoch(i.calibrated_at) for i in candidates)
         matches = [i for i in candidates if _epoch(i.calibrated_at) == newest]
+    else:
+        matches = [i for i in candidates if _names(ref, i.calibrated_at)]
     if not matches:
         raise _no_calibration(ref, candidates)
     if expect is not None:
@@ -356,7 +360,10 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
     """Load a profile by path, ``id``, ``id@YYYY-MM-DD`` or ``id@<timestamp>``, offline.
 
     ``expect`` pins the fingerprint (full hex, ``sha256:<hex>`` or ``nv:<12 hex>``); a different
-    profile raises FingerprintMismatch.
+    profile raises FingerprintMismatch. Loading a catalog ref checks the profile it reads
+    against the ref and the pin. If the file does not match, because another process saved over
+    it or the index described it wrongly, the load reads every vault file again and resolves the
+    ref once more.
     """
     named = parse_ref_preferring_id(ref)
     if isinstance(named, Path):
@@ -365,10 +372,45 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
         path, profile = named, load_file(named)
     else:
         info = resolve(named, expect=expect)
-        path, profile = info.path, info.load()
+        profile = info.load()
+        if not (_answers(named, profile) and _pinned(profile, expect)):
+            info = _pick(named, _known(reread=True), expect)
+            profile = info.load()
+            if not _answers(named, profile):
+                raise _changed(named, profile, info.path)
+        path = info.path
     if expect is not None:
         _check_expect(profile, expect, path)
     return profile
+
+
+def _names(ref: Ref, when: datetime | None) -> bool:
+    """Whether a UTC calibration time is on the ref's date or at its timestamp.
+
+    A ref with neither accepts any time.
+    """
+    if ref.timestamp is not None:
+        return when == ref.timestamp
+    if ref.date is not None:
+        return when is not None and when.date() == ref.date
+    return True
+
+
+def _answers(ref: Ref, profile: Profile) -> bool:
+    return profile.id == ref.id and _names(ref, profile.device.calibrated_at)
+
+
+def _pinned(profile: Profile, expect: str | None) -> bool:
+    return expect is None or profile.fingerprint.startswith(_expect_prefix(expect))
+
+
+def _changed(ref: Ref, profile: Profile, path: Path | Traversable) -> ProfileNotFound:
+    said = _said(ref)
+    held = _ref(profile.id, profile.device.calibrated_at)
+    return ProfileNotFound(
+        f"{path} holds {held}, not {said}; the file changed during this load",
+        hint=f"load {said} again",
+    )
 
 
 class Pulled(NamedTuple):
@@ -476,7 +518,7 @@ def _unknown_source(source: str) -> _BadArgument:
     vendor = next((v for v in offline if did_you_mean(source, [v])), None)
     if vendor and not guess:
         return _BadArgument(
-            f"unknown source {source!r}; no live source serves {vendor} devices",
+            f"unknown source {source!r}; no source serves {vendor} devices",
             hint=f"run nv list --vendor {vendor} to see the {vendor} profiles you can load offline",
         )
     return _BadArgument(f"unknown source {source!r}; {guess}choose one of {choices}")
@@ -496,14 +538,18 @@ def _expect_prefix(expect: str) -> str:
 
 
 def _check_expect(profile: Profile, expect: str, path: Path | Traversable) -> None:
-    if not profile.fingerprint.startswith(_expect_prefix(expect)):
+    if not _pinned(profile, expect):
         held = _ref(profile.id, profile.device.calibrated_at)
         loaded = f"{path} holds {held} ({profile.short_fingerprint})"
         raise _mismatch(loaded, expect, profile.id, profiles())
 
 
+def _said(ref: Ref) -> str:
+    return f"{ref.id}@{ref.date}" if ref.date else _ref(ref.id, ref.timestamp)
+
+
 def _loaded(ref: Ref, held: list[ProfileInfo]) -> str:
-    said = f"{ref.id}@{ref.date}" if ref.date else _ref(ref.id, ref.timestamp)
+    said = _said(ref)
     newest = said if ref.date or ref.timestamp else held[0].ref
     found = " or ".join(f"nv:{i.fingerprint[:12]}" for i in held)
     return f"{said} is {found}" if newest == said else f"{said} loads {newest} ({found})"

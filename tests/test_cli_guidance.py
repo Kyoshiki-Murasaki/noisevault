@@ -107,7 +107,7 @@ def test_a_failed_pull_puts_its_next_step_on_a_hint_line(
 
 
 _NO_LIVE_GOOGLE = (
-    "error: unknown source '{source}'; no live source serves google devices\n"
+    "error: unknown source '{source}'; no source serves google devices\n"
     "hint: run nv list --vendor google to see the google profiles you can load offline\n"
 )
 
