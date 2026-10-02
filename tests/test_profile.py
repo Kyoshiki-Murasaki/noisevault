@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
+import pickle
 import random
 import re
 import stat
@@ -13,9 +15,10 @@ from pathlib import Path
 
 import pytest
 from conftest import toy
-from pydantic import ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import noisevault as nv
+from noisevault import profile as profile_module
 from noisevault.catalog import bundled_profiles
 from noisevault.profile import (
     ErrorFactor,
@@ -532,17 +535,77 @@ def test_free_form_data_is_frozen_at_every_level() -> None:
     assert Profile.from_dict(profile.to_dict()).fingerprint == fingerprint
 
 
-def test_copies_and_pickles_keep_the_profile() -> None:
-    import copy
-    import pickle
+CACHED = ("fingerprint", "artifact_hash", "table")
 
+
+class _Holder(BaseModel):
+    profile: Profile
+
+
+REVALIDATIONS = {
+    "model_validate": Profile.model_validate,
+    "model field": lambda profile: _Holder(profile=profile).profile,
+    "TypeAdapter": lambda profile: TypeAdapter(list[Profile]).validate_python([profile])[0],
+    "dict(profile)": lambda profile: Profile(**dict(profile)),
+}
+
+
+@pytest.mark.parametrize("member", CACHED)
+@pytest.mark.parametrize("revalidate", REVALIDATIONS.values(), ids=REVALIDATIONS.keys())
+def test_a_profile_revalidates_after_a_cached_member_is_read(member, revalidate) -> None:
+    profile = Profile.model_validate(toy())
+    getattr(profile, member)
+    again = revalidate(profile)
+    assert again == profile
+    assert again.fingerprint == profile.fingerprint
+
+
+def test_a_profile_that_skipped_validation_is_checked_when_nested() -> None:
+    profile = Profile.model_validate(toy())
+    unchecked = Profile.model_construct(**{**dict(profile), "noisevault": "0.1"})
+    with pytest.raises(ValidationError, match="noisevault"):
+        _Holder(profile=unchecked)
+
+
+CLONES = {
+    "copy": copy.copy,
+    "deepcopy": copy.deepcopy,
+    "pickle": lambda profile: pickle.loads(pickle.dumps(profile)),
+    "model_copy": Profile.model_copy,
+    "model_copy deep": lambda profile: profile.model_copy(deep=True),
+}
+
+
+@pytest.mark.parametrize("clone", CLONES.values(), ids=CLONES.keys())
+def test_a_clone_of_a_used_profile_owns_its_table_and_revalidates(clone) -> None:
     profile = Profile.model_validate(toy(benchmarks={"eplg": {"value": 3e-3}}))
-    for clone in (
-        copy.deepcopy(profile),
-        pickle.loads(pickle.dumps(profile)),
-        profile.model_copy(deep=True),
-    ):
-        assert clone == profile and clone.fingerprint == profile.fingerprint
+    for member in CACHED:
+        getattr(profile, member)
+    twin = clone(profile)
+    assert twin == profile
+    assert twin.fingerprint == profile.fingerprint
+    assert twin.table.profile is twin
+    assert Profile.model_validate(twin) == profile
+
+
+def test_hashes_and_table_are_computed_once(monkeypatch) -> None:
+    profile = Profile.model_validate(toy())
+    hashed = []
+    sha256 = profile_module._sha256
+    monkeypatch.setattr(profile_module, "_sha256", lambda data: hashed.append(data) or sha256(data))
+    reads = {(profile.fingerprint, profile.artifact_hash) for _ in range(3)}
+    assert len(reads) == 1
+    assert len(hashed) == 2
+    assert profile.table is profile.table
+
+
+@pytest.mark.parametrize("member", CACHED)
+def test_cached_members_cannot_be_assigned(member) -> None:
+    profile = Profile.model_validate(toy())
+    value = getattr(profile, member)
+    with pytest.raises(ValidationError, match="frozen"):
+        setattr(profile, member, "0" * 64)
+    assert getattr(profile, member) is value
 
 
 def test_model_copy_with_update_is_validated() -> None:

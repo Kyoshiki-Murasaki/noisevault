@@ -18,7 +18,6 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from functools import cached_property
 from itertools import permutations
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -606,34 +605,47 @@ class Profile(_Model):
     def id(self) -> str:
         return profile_id(self.device.vendor, self.device.name)
 
-    @cached_property
+    # pydantic revalidates, copies and pickles an instance through __dict__, so caches use slots
+    __slots__ = ("_fingerprint", "_artifact_hash", "_table")
+
+    @property
     def fingerprint(self) -> str:
         """sha256 of the canonical physics: everything except provenance and extensions."""
-        physics = {k: v for k, v in self.to_dict().items() if k not in _NOT_PHYSICS}
-        return _sha256(physics)
+        try:
+            return self._fingerprint
+        except AttributeError:
+            physics = {k: v for k, v in self.to_dict().items() if k not in _NOT_PHYSICS}
+            object.__setattr__(self, "_fingerprint", _sha256(physics))
+            return self._fingerprint
 
-    @cached_property
+    @property
     def artifact_hash(self) -> str:
         """sha256 of the canonical JSON of the whole profile."""
-        return _sha256(self.to_dict())
+        try:
+            return self._artifact_hash
+        except AttributeError:
+            object.__setattr__(self, "_artifact_hash", _sha256(self.to_dict()))
+            return self._artifact_hash
 
     @property
     def short_fingerprint(self) -> str:
         return "nv:" + self.fingerprint[:12]
 
-    @cached_property
+    @property
     def table(self) -> NoiseTable:
-        from .table import NoiseTable
+        try:
+            return self._table
+        except AttributeError:
+            from .table import NoiseTable
 
-        return NoiseTable(self)
+            object.__setattr__(self, "_table", NoiseTable(self))
+            return self._table
 
     def model_copy(self, *, update: dict[str, Any] | None = None, deep: bool = False) -> Profile:
         """A copy; with ``update`` the result is validated like any new profile."""
         if update:
             return type(self).model_validate({**self.to_dict(), **update})
-        copy = super().model_copy(deep=deep)
-        copy.__dict__.pop("table", None)  # the cached table points at the original
-        return copy
+        return super().model_copy(deep=deep)
 
     def uncorrected(self) -> Profile:
         """This profile without ``unmodeled_error``: the calibration as stated."""
