@@ -192,7 +192,9 @@ fit             within shot noise on every circuit (p = 0.66)
 
 NoiseVault has not yet been compared with counts from a real device. The example counts come
 from a simulation with gate errors x1.8 and readout errors x1.3, and the fitted intervals contain
-both.
+both. With the `ibm` extra and a saved IBM Quantum account,
+`python scripts/run_on_ibm.py ibm_kingston -o kingston.counts.json` runs the circuits on that
+device and prints the `nv compare` command for its counts.
 
 A factor multiplies the profile's error rates, so x2 means about twice the stated errors.
 `nv compare ... -o fitted.json` saves the profile with the fitted factors, and every export then

@@ -291,6 +291,56 @@ profile on their counts. `nv compare` fits two factors, one on every gate error 
 every readout error rate. Each factor has a 95% interval, and a goodness-of-fit test says whether
 one pair of factors explains every circuit.
 
+On an IBM device, `scripts/run_on_ibm.py` runs the circuits and saves the counts file. It needs a
+clone of this repository with the `ibm` extra installed, and an IBM Quantum account that you
+saved once with `QiskitRuntimeService.save_account(token=...)`. From the clone, run:
+
+```bash
+pip install -e ".[ibm]"
+python scripts/run_on_ibm.py ibm_kingston --shots 4000 -o kingston-0416.counts.json
+```
+
+The script pulls the calibration in effect now through your account and plans the circuits from
+it. It checks every gate, gate duration and delay against the backend, and it refuses a plan that
+the backend would run differently. Before it submits anything, it shows the circuits and IBM's
+estimate of the QPU time they use, and asks you to confirm. For the calibration of 2026-04-15 it
+shows:
+
+```text
+ibm_kingston@2026-04-15 nv:a6bcc38ccc1b on qubits 148-149-150-151
+
+circuit            qubits           gates  duration
+ghz_chain          148-149-150-151     11    268 ns
+mirror             148-149-150         49    752 ns
+single_qubit       148-149             16    256 ns
+two_qubit_natives  148-149              6    200 ns
+readout            148-149-150-151      0      0 ns
+
+shots           4000 per circuit, 5 circuits in one job
+usage           about 7.1 s of QPU time (IBM's estimate)
+counts file     kingston-0416.counts.json
+
+Submit the job to ibm_kingston? [y/N]
+```
+
+`--yes` submits without asking. The script then submits one job and waits for IBM to run it. The
+wait depends on the device's queue. If you press Ctrl-C or the connection drops during the wait,
+the job keeps running at IBM. Run the same command again to collect its counts instead of
+submitting another job. When the job has run, the script saves the counts file and ends with the
+command that scores it:
+
+```text
+next            nv compare ibm_kingston@2026-04-15 kingston-0416.counts.json
+```
+
+The counts bind to the calibration in effect when the job started running, which can be newer
+than the one the script planned from. When the newer calibration still calibrates every gate in
+the circuits with the same duration, the counts bind to it, and the script says that IBM
+recalibrated. When it does not, the counts bind to the planned calibration, and a warning names
+both fingerprints, says what changed and suggests running the script again.
+
+On another device, take steps 1 to 3 by hand. Step 4 is the same for every device.
+
 1. Plan the circuits. `plan(profile)` from `noisevault.counts` returns the `nv check` circuits on
    the qubits that `nv check` picks. It schedules each gate as soon as its qubits are free and
    writes every wait as a `delay`, so the device and the model see the same idle time.
@@ -302,8 +352,8 @@ one pair of factors explains every circuit.
 4. Score the profile, then save it with the fitted factors:
 
    ```bash
-   nv compare ibm_kingston@2026-04-15 kingston.counts.json
-   nv compare ibm_kingston@2026-04-15 kingston.counts.json -o kingston-fitted.json
+   nv compare ibm_kingston@2026-04-15 kingston-0416.counts.json
+   nv compare ibm_kingston@2026-04-15 kingston-0416.counts.json -o kingston-fitted.json
    nv check kingston-fitted.json
    nv cite kingston-fitted.json
    ```
