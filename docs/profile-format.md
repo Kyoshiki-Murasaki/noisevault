@@ -449,6 +449,10 @@ part of the fingerprint.
 angles. It is excluded from the fingerprint. Data for out-of-scope technologies goes here (see
 [How technologies map](#how-technologies-map)).
 
+`benchmarks`, `extensions` and `provenance.extra` hold JSON nested at most 64 levels deep. The
+field's own object is level 1, so `"extensions": {"fsim": {"theta": 0.1}}` is two levels deep. A
+profile with deeper data is invalid, and `nv validate` names the field.
+
 ## Provenance
 
 | Field | Content |

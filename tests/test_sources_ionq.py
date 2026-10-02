@@ -6,12 +6,15 @@ shape) in place of the network.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import urllib.error
 import urllib.request
 import warnings
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -259,6 +262,110 @@ def test_a_reply_that_is_not_json_says_to_try_again(served, url: str, body: str)
         ionq.pull("forte-1")
     assert (info.value.message, info.value.hint) == (
         f"IonQ's API answered {url} with something other than JSON",
+        "try again later",
+    )
+
+
+_LISTING = f"{ionq.API}/backends"
+_PAGE = ionq._page_url("qpu.forte-1", limit=10)
+_CHOSEN = ionq._page_url("qpu.forte-1", limit=1, end="2026-09-27T00:00:00Z")
+
+
+def _edited(url: str, edit: Callable[[Any], object]) -> bytes:
+    body = copy.deepcopy(RESPONSES[url])
+    edit(body)
+    return json.dumps(body).encode()
+
+
+def _first_record_with(url: str, **fields: Any) -> bytes:
+    return _edited(url, lambda body: body["characterizations"][0].update(fields))
+
+
+_WRONG_SHAPE = {
+    "listing as text": (_LISTING, b'"maintenance"', ""),
+    "a backend without a name": (
+        _LISTING,
+        _edited(_LISTING, lambda body: body[0].pop("backend")),
+        " at [0].backend",
+    ),
+    "a qubit count as text in the listing": (
+        _LISTING,
+        _edited(_LISTING, lambda body: body[0].update(qubits="four")),
+        " at [0].qubits",
+    ),
+    "native gates as text": (
+        _LISTING,
+        _edited(_LISTING, lambda body: body[0].update(supported_native_gates="zz")),
+        " at [0].supported_native_gates",
+    ),
+    "native gates as null": (
+        _LISTING,
+        _edited(_LISTING, lambda body: body[0].update(supported_native_gates=None)),
+        " at [0].supported_native_gates",
+    ),
+    "page as a list": (_PAGE, b"[]", ""),
+    "records as text": (
+        _PAGE,
+        _edited(_PAGE, lambda body: body.update(characterizations="x")),
+        " at characterizations",
+    ),
+    "a record without a date": (
+        _PAGE,
+        _edited(_PAGE, lambda body: body["characterizations"][2].pop("date")),
+        " at characterizations[2].date",
+    ),
+    "fidelity as a list": (
+        _PAGE,
+        _first_record_with(_PAGE, fidelity=[0.99]),
+        " at characterizations[0].fidelity",
+    ),
+    "a page count as text": (
+        _PAGE,
+        _edited(_PAGE, lambda body: body.update(pages="four")),
+        " at pages",
+    ),
+    "record as text": (_CHOSEN, b'"maintenance"', ""),
+    "an id as a number": (
+        _CHOSEN,
+        _first_record_with(_CHOSEN, id=3),
+        " at characterizations[0].id",
+    ),
+    "a backend as a number": (
+        _CHOSEN,
+        _first_record_with(_CHOSEN, backend=1),
+        " at characterizations[0].backend",
+    ),
+    "a date that is not a date": (
+        _CHOSEN,
+        _first_record_with(_CHOSEN, date="yesterday"),
+        " at characterizations[0].date",
+    ),
+    "a qubit count as text": (
+        _CHOSEN,
+        _first_record_with(_CHOSEN, qubits="four"),
+        " at characterizations[0].qubits",
+    ),
+    "a pair of three qubits": (
+        _CHOSEN,
+        _first_record_with(_CHOSEN, connectivity=[[0, 1, 2]]),
+        " at characterizations[0].connectivity[0]",
+    ),
+    "timing as a list": (
+        _CHOSEN,
+        _first_record_with(_CHOSEN, timing=[1e-4]),
+        " at characterizations[0].timing",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_WRONG_SHAPE))
+def test_a_reply_of_the_wrong_shape_says_where_and_to_try_again(served, case: str) -> None:
+    url, raw, where = _WRONG_SHAPE[case]
+    served[url] = raw
+    with pytest.raises(SourceUnavailable) as info:
+        ionq.pull("forte-1")
+    assert (info.value.message, info.value.hint) == (
+        f"IonQ's API answered {url} with JSON of the wrong shape{where}",
         "try again later",
     )
 

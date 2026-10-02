@@ -82,11 +82,22 @@ All notable changes to NoiseVault. Versions follow [Semantic Versioning](https:/
     empty first zone gave 0.5. It now refuses a shot count that is not a positive whole number, a
     count outside 0 to the shot count, a sequence length that is not a whole number, a zone with
     no sequence lengths, and an empty or misshapen map.
-- **A profile file nested deeper than the JSON parser takes.** Loading one raised
-  `RecursionError`, so `nv show`, `nv validate` and the other commands that read a file printed
-  an unexpected error and asked for a bug report. Loading now raises the `json.JSONDecodeError`
-  that any damaged file gives, with the depth and the position of the deepest bracket, and the
-  commands call the file damaged.
+- **Damaged profiles and vendor replies.** Each case below now gives one error that names the
+  damaged input. Before, a command printed an unexpected error and asked for a bug report, or
+  printed a message such as `Expecting value: line 1 column 1 (char 0)` that named nothing.
+  - A profile file nested deeper than the JSON parser takes. Loading one raises the
+    `json.JSONDecodeError` that any damaged file gives, with the depth and the position of the
+    deepest bracket, and the commands call the file damaged.
+  - Free-form data in `benchmarks`, `extensions` or `provenance.extra` nested more than 256
+    levels deep. The format now limits that data to 64 levels, so a profile nested deeper is
+    invalid and `nv validate` names the field. A profile nested 65 to 256 levels deep loaded
+    before and is now refused too.
+  - A reply from IBM's public endpoint or IonQ's API that is not JSON, or is JSON of the wrong
+    shape such as `[]` or `"maintenance"`. The error names the URL, and the first wrong field
+    when there is one. The hint says to try again later. A damaged IBM device list or
+    configuration is the exception. Those replies only add detail, such as the processor name,
+    so `nv pull` leaves the detail out and gives no error. Before, some IonQ replies of the wrong
+    shape gave a profile from an older record, or one dated 1970, with no error.
 - **Format 0.1 files that mark a gate or qubit not operational with a string.** The upgrade read
   `operational` by truthiness, so `"false"`, `"no"`, `"off"` and `"0"` left the gate or qubit
   enabled. It now reads the flag as NoiseVault 0.1 did, so these values disable it. A value that

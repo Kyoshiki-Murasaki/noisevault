@@ -861,6 +861,46 @@ def test_pull_network_failure_gives_one_piece_of_advice(monkeypatch) -> None:
     assert "Traceback" not in result.output
 
 
+_IBM_PROPERTIES = "https://quantum.cloud.ibm.com/api/v1/public/backends/ibm_fez/properties"
+_IBM_AGAIN = "try again later, or pull through your IBM account with --source ibm-account"
+
+
+@pytest.mark.parametrize(
+    ("device", "body", "error", "hint"),
+    [
+        (
+            "ibm_fez",
+            b"<!DOCTYPE html><html><body>502 Bad Gateway</body></html>",
+            f"IBM's public endpoint answered {_IBM_PROPERTIES} with something other than JSON",
+            _IBM_AGAIN,
+        ),
+        (
+            "ibm_fez",
+            b"[]",
+            f"IBM's public endpoint answered {_IBM_PROPERTIES} with JSON of the wrong shape",
+            _IBM_AGAIN,
+        ),
+        (
+            "ionq_forte-1",
+            b'"maintenance"',
+            "IonQ's API answered https://api.ionq.co/v0.4/backends with JSON of the wrong shape",
+            "try again later",
+        ),
+    ],
+    ids=["ibm-html", "ibm-list", "ionq-string"],
+)
+def test_pull_of_a_reply_that_is_not_calibration_data_names_it_and_says_to_try_again(
+    monkeypatch, device: str, body: bytes, error: str, hint: str
+) -> None:
+    from noisevault.sources import ibm_public, ionq
+
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: body)
+    monkeypatch.setattr(ionq, "_get", lambda url: body)
+    result = runner.invoke(app, ["pull", device])
+    assert (result.exit_code, result.stdout) == (1, "")
+    assert result.stderr == f"error: {error}\nhint: {hint}\n"
+
+
 def test_pull_errors_name_flags_not_python_arguments(monkeypatch) -> None:
     from noisevault.sources import ibm_account, ibm_public
 
@@ -1251,12 +1291,15 @@ def test_check_states_what_a_pass_means_only_after_a_pass() -> None:
 
 _PROFILE_FILE = "give a profile file (.json or .json.gz)"
 _DAMAGED_FILE = "the file is damaged or cut short; pull or export it again"
+_TOY_XX_COUNTS = Path(__file__).parent / "fixtures/compare/toy-xx.counts.json"
+_NESTED_64 = "[" * 64 + "]" * 64
 
 
 class _Damage(NamedTuple):
     text: str
     error: str
     hint: str | None
+    listed: str | None = None
 
 
 _DAMAGED = {
@@ -1282,6 +1325,13 @@ _DAMAGED = {
         json.dumps(toy(gates=None)),
         "is not a valid profile (1 problem)",
         "run nv validate {path} to list them",
+        listed="gates: Input should be a valid dictionary",
+    ),
+    "extensions-too-deep": _Damage(
+        json.dumps(toy(extensions={"deep": json.loads(_NESTED_64)})),
+        "is not a valid profile (1 problem)",
+        "run nv validate {path} to list them",
+        listed="extensions: nested more than 64 levels deep",
     ),
 }
 _COMMANDS = {
@@ -1291,11 +1341,7 @@ _COMMANDS = {
     "diff-before": lambda f: ["diff", f, "ibm_manila"],
     "diff-after": lambda f: ["diff", "ibm_manila", f],
     "validate": lambda f: ["validate", f],
-    "compare": lambda f: [
-        "compare",
-        f,
-        str(Path(__file__).parent / "fixtures/compare/toy-xx.counts.json"),
-    ],
+    "compare": lambda f: ["compare", f, str(_TOY_XX_COUNTS)],
 }
 
 
@@ -1304,24 +1350,45 @@ _COMMANDS = {
 def test_every_command_names_a_damaged_file_and_what_is_wrong(
     tmp_path: Path, command: str, damage: str
 ) -> None:
-    text, error, hint = _DAMAGED[damage]
+    text, error, hint, listed = _DAMAGED[damage]
     path = tmp_path / f"{damage}.json"
     path.write_text(text)
     result = runner.invoke(app, _COMMANDS[command](str(path)), env={"COLUMNS": "80"})
     assert result.exit_code == 1 and result.stdout == ""
     assert "Traceback" not in result.output
-    if command == "validate" and damage == "invalid":
-        assert result.stderr == "error: gates: Input should be a valid dictionary\n"
+    if command == "validate" and listed:
+        assert result.stderr == f"error: {listed}\n"
         return
     first, *rest = result.stderr.splitlines()
     assert first.startswith(f"error: {path}") and error in first
     assert rest == ([f"hint: {hint.format(path=path)}"] if hint else [])
 
 
+@pytest.mark.parametrize("command", list(_COMMANDS))
+def test_every_command_says_a_counts_file_is_not_a_profile(tmp_path: Path, command: str) -> None:
+    path = tmp_path / "run.counts.json"
+    shutil.copy(_TOY_XX_COUNTS, path)
+    result = runner.invoke(app, _COMMANDS[command](str(path)), env={"COLUMNS": "80"})
+    assert (result.exit_code, result.stdout) == (1, "")
+    hint = {
+        "validate": _PROFILE_FILE,
+        "compare": "nv compare takes the profile first and the counts file second",
+    }.get(command, f"{_PROFILE_FILE} or a profile id such as ibm_fez")
+    assert result.stderr == f"error: {path} is a counts file, not a profile\nhint: {hint}\n"
+
+
 _COUNTS_DAMAGED_FILE = "the file is damaged or cut short; save the counts again"
 _DAMAGED_COUNTS = {
     "not-json": _Damage("{not json", "is not JSON (Expecting property name", _COUNTS_DAMAGED_FILE),
     "empty": _Damage("", "is not JSON (Expecting value", _COUNTS_DAMAGED_FILE),
+    "cut-string": _Damage(
+        '{"nv_counts": "1.',
+        "is not JSON (Unterminated string starting at line 1, column 15)",
+        _COUNTS_DAMAGED_FILE,
+    ),
+    "too-deep": _Damage(
+        deeper_than_the_parser_takes(), "is not JSON (nested ", _COUNTS_DAMAGED_FILE
+    ),
     "profile": _Damage(
         json.dumps(toy()),
         "is a profile, not a counts file",
@@ -1333,18 +1400,21 @@ _DAMAGED_COUNTS = {
         'give a counts file, which holds "nv_counts": "1.0"',
     ),
     "invalid": _Damage(
-        (Path(__file__).parent / "fixtures/compare/toy-xx.counts.json")
-        .read_text()
-        .replace('"shots": 4000', '"shots": 3999'),
+        _TOY_XX_COUNTS.read_text().replace('"shots": 4000', '"shots": 3999'),
         ": circuits[0]: counts sum to 4000, but shots is 3999",
         "give the count of every outcome, so they add up to shots",
+    ),
+    "options-too-deep": _Damage(
+        _TOY_XX_COUNTS.read_text().replace('"options": {', f'"options": {{"deep": {_NESTED_64}, '),
+        ": execution.options: nested more than 64 levels deep",
+        None,
     ),
 }
 
 
 @pytest.mark.parametrize("damage", list(_DAMAGED_COUNTS))
 def test_compare_names_a_damaged_counts_file_and_what_is_wrong(tmp_path: Path, damage: str) -> None:
-    text, error, hint = _DAMAGED_COUNTS[damage]
+    text, error, hint, _ = _DAMAGED_COUNTS[damage]
     path = tmp_path / f"{damage}.json"
     path.write_text(text)
     toy_xx = Path(__file__).parent / "fixtures/compare/toy.json"
@@ -1353,7 +1423,7 @@ def test_compare_names_a_damaged_counts_file_and_what_is_wrong(tmp_path: Path, d
     assert "Traceback" not in result.output
     first, *rest = result.stderr.splitlines()
     assert first.startswith(f"error: {path}") and error in first
-    assert rest == [f"hint: {hint}"]
+    assert rest == ([f"hint: {hint}"] if hint else [])
 
 
 def test_a_cut_profile_file_is_called_damaged_and_another_file_type_is_named(

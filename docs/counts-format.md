@@ -89,7 +89,7 @@ with the other value.
 | `dynamical_decoupling` | `false`. Dynamical decoupling adds pulses on idle qubits that the ops do not list. |
 | `init_qubits` | `true`. Without it, a shot may start where the previous one ended, not from 0. |
 | `job_ids` | The ids of the jobs that ran the circuits. Optional, default `[]`. |
-| `options` | The options the run was submitted with, as JSON. Optional, default `{}`. |
+| `options` | The options the run was submitted with, as a JSON object nested at most 64 levels deep. `options` itself is level 1. Optional, default `{}`. |
 
 When `options` holds one of these Qiskit Runtime `SamplerV2` options, the option must have the
 value shown, or `load_counts` refuses the file:

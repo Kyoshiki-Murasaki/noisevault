@@ -1236,6 +1236,8 @@ def validate(
         except FileNotFoundError:
             _fail(f"no file {path}", "check the path")
         except ValidationError as exc:
+            if _holds_counts(path):
+                _fail(f"{path} is a counts file, not a profile", _PROFILE_FILE)
             for line in _validation_lines(exc):
                 err.print(f"error: {line}", markup=False)
             raise typer.Exit(1) from None

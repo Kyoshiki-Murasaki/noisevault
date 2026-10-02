@@ -16,7 +16,9 @@ import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import AfterValidator, BaseModel, Field, TypeAdapter, ValidationError
 
 from .. import __version__
 from ..errors import SourceUnavailable, did_you_mean, parse_json
@@ -36,6 +38,31 @@ _IMPLAUSIBLE = "with implausible medians on "
 # IonQ native two-qubit gate -> canonical name; IonQ's zz takes any angle, like rzz.
 _TWO_QUBIT = {"zz": "rzz", "ms": "ms"}
 _FIDELITY_ASSUMPTION = "IonQ does not state the fidelity metric; read as average gate fidelity"
+
+
+class _Backend(BaseModel):
+    backend: str
+    qubits: int | None = None
+    supported_native_gates: list[str] = []
+
+
+class _Record(BaseModel):
+    id: str
+    date: Annotated[str, AfterValidator(datetime.fromisoformat)]
+    backend: str
+    qubits: int | None = None
+    connectivity: list[Annotated[list[int], Field(min_length=2, max_length=2)]] | None = None
+    fidelity: dict[str, Any] | None = None
+    timing: dict[str, Any] | None = None
+
+
+class _Characterizations(BaseModel):
+    characterizations: list[_Record] | None = None
+    pages: int | None = None
+
+
+_BACKENDS = TypeAdapter(list[_Backend])
+_CHARACTERIZATIONS = TypeAdapter(_Characterizations)
 
 
 def bundled_profiles() -> list[Profile]:
@@ -253,11 +280,11 @@ def _connectivity(pairs: Any, num_qubits: int) -> str | dict[str, Any]:
 
 def _listing(backend: str) -> Mapping[str, Any]:
     url = f"{API}/backends"
-    entries = _json(_get(url), url)
+    entries = _json(_get(url), url, _BACKENDS)
     for entry in entries:
-        if entry.get("backend") == backend:
+        if entry["backend"] == backend:
             return entry
-    qpus = sorted(e["backend"] for e in entries if str(e.get("backend", "")).startswith("qpu."))
+    qpus = sorted(e["backend"] for e in entries if e["backend"].startswith("qpu."))
     raise SourceUnavailable(
         f"IonQ has no backend {backend!r}; {did_you_mean(backend, qpus)}it lists {', '.join(qpus)}"
     )
@@ -279,7 +306,7 @@ def _newest_usable(
     page = 1
     while True:
         page_url = _page_url(backend, limit=_PAGE, end=end, page=page)
-        body = _json(_get(page_url), page_url)
+        body = _json(_get(page_url), page_url, _CHARACTERIZATIONS)
         records = body.get("characterizations") or []
         for listed in records:
             # a record rejected on the filled page is rejected alone too, so skip it unprobed
@@ -288,7 +315,7 @@ def _newest_usable(
                 probes += 1
                 url = _page_url(backend, limit=1, end=listed["date"])
                 raw = _get(url)
-                alone = (_json(raw, url).get("characterizations") or [{}])[0]
+                alone = (_json(raw, url, _CHARACTERIZATIONS).get("characterizations") or [{}])[0]
                 reason = _rejection(alone) if alone.get("id") == listed["id"] else _NO_FIDELITIES
                 if reason is None:
                     return alone, raw, url, skipped
@@ -347,10 +374,25 @@ def _get(url: str) -> bytes:
         ) from None
 
 
-def _json(raw: bytes, url: str) -> Any:
+def _json(raw: bytes, url: str, shape: TypeAdapter[Any]) -> Any:
     try:
-        return parse_json(raw)
+        data = parse_json(raw)
     except ValueError:
         raise SourceUnavailable(
             f"IonQ's API answered {url} with something other than JSON", hint="try again later"
         ) from None
+    try:
+        shape.validate_python(data, strict=True)
+    except ValidationError as exc:
+        raise SourceUnavailable(
+            f"IonQ's API answered {url} with JSON of the wrong shape{_where(exc)}",
+            hint="try again later",
+        ) from None
+    return data
+
+
+def _where(exc: ValidationError) -> str:
+    """`` at characterizations[0].date``, where a reply first leaves its shape; '' for all of it."""
+    loc = exc.errors()[0]["loc"]
+    path = "".join(f"[{key}]" if isinstance(key, int) else f".{key}" for key in loc)
+    return f" at {path.removeprefix('.')}" if path else ""

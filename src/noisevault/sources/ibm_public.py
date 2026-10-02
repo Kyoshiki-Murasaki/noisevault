@@ -7,7 +7,9 @@ import urllib.parse
 import urllib.request
 from dataclasses import replace
 from datetime import date, datetime
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import AfterValidator, BaseModel, TypeAdapter, ValidationError
 
 from .. import __version__
 from ..errors import SourceUnavailable, did_you_mean, parse_json
@@ -27,6 +29,43 @@ TIMEOUT_S = 30.0
 _TRY_LATER = "try again later, or pull through your IBM account with source='ibm-account'"
 
 
+class _Parameter(BaseModel):
+    name: str
+    value: float | None = None
+    unit: str | None = None
+
+
+class _Gate(BaseModel):
+    gate: str
+    qubits: list[int]
+    parameters: list[_Parameter] | None = None
+
+
+class _Properties(BaseModel):
+    """The keys calibration_from_properties needs from a properties reply, with their types."""
+
+    qubits: list[list[_Parameter]] | None = None
+    gates: list[_Gate] | None = None
+    last_update_date: Annotated[str, AfterValidator(as_utc)] | None = None
+
+
+class _Device(BaseModel):
+    name: str
+
+
+class _ProcessorType(BaseModel):
+    family: str | None = None
+
+
+class _Configuration(BaseModel):
+    processor_type: _ProcessorType | None = None
+
+
+_PROPERTIES = TypeAdapter(_Properties)
+_LISTING = TypeAdapter(list[_Device])
+_CONFIGURATION = TypeAdapter(_Configuration)
+
+
 def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
     """The calibration of ``device`` now, or the newest one older than ``at``.
 
@@ -38,7 +77,7 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
         raw = fetch(url)
     except _NotFound:
         raise _not_found(name, at) from None
-    props = _json(raw, url)
+    props = _json(raw, url, _PROPERTIES)
     if not props.get("qubits"):
         raise SourceUnavailable(f"IBM's public endpoint returned no qubit data for {name} ({url})")
     cal = replace(calibration_from_properties(props), name=name, processor=_processor(name))
@@ -90,26 +129,41 @@ def fetch(url: str) -> bytes:
         ) from None
 
 
-def _json(raw: bytes, url: str) -> Any:
+def _json(raw: bytes, url: str, shape: TypeAdapter[Any]) -> Any:
     try:
-        return parse_json(raw)
+        data = parse_json(raw)
     except ValueError:
         raise SourceUnavailable(
             f"IBM's public endpoint answered {url} with something other than JSON",
             hint=_TRY_LATER,
         ) from None
+    try:
+        shape.validate_python(data, strict=True)
+    except ValidationError as exc:
+        raise SourceUnavailable(
+            f"IBM's public endpoint answered {url} with JSON of the wrong shape{_where(exc)}",
+            hint=_TRY_LATER,
+        ) from None
+    return data
+
+
+def _where(exc: ValidationError) -> str:
+    """`` at gates[0].qubits``, where a reply first leaves its shape; '' for all of it."""
+    loc = exc.errors()[0]["loc"]
+    path = "".join(f"[{key}]" if isinstance(key, int) else f".{key}" for key in loc)
+    return f" at {path.removeprefix('.')}" if path else ""
 
 
 def listed_devices() -> list[str]:
     """Names of the devices the public endpoint lists right now."""
-    return sorted(entry["name"] for entry in _json(fetch(BASE_URL), BASE_URL))
+    return sorted(entry["name"] for entry in _json(fetch(BASE_URL), BASE_URL, _LISTING))
 
 
 def _processor(name: str) -> str | None:
     """The processor type from the public configuration; None when it cannot be read."""
     url = f"{BASE_URL}/{urllib.parse.quote(name)}/configuration"
     try:
-        config = _json(fetch(url), url)
+        config = _json(fetch(url), url, _CONFIGURATION)
     except (_NotFound, SourceUnavailable):
         return None
     return processor_name(config.get("processor_type"))
@@ -118,7 +172,7 @@ def _processor(name: str) -> str | None:
 def _not_found(name: str, at: str | date | datetime | None) -> SourceUnavailable:
     try:
         listed = listed_devices()
-    except (_NotFound, SourceUnavailable, KeyError, TypeError):
+    except (_NotFound, SourceUnavailable):
         listed = None
     if at is not None and listed is not None and name in listed:
         return SourceUnavailable(

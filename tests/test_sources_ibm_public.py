@@ -7,8 +7,10 @@ import re
 import statistics
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import deeper_than_the_parser_takes
@@ -153,15 +155,79 @@ def test_a_reply_that_is_not_json_says_to_try_again(
     )
 
 
-def test_a_listing_or_configuration_too_deep_to_read_only_loses_its_detail(
-    served: list[str], monkeypatch: pytest.MonkeyPatch
+def _properties(edit: Callable[[dict[str, Any]], object]) -> bytes:
+    props = json.loads(PROPERTIES)
+    edit(props)
+    return json.dumps(props).encode()
+
+
+_WRONG_SHAPE = {
+    "a list": (b"[]", ""),
+    "a string": (b'"maintenance"', ""),
+    "qubits as text": (_properties(lambda p: p.update(qubits="x")), " at qubits"),
+    "a parameter without a name": (
+        _properties(lambda p: p["qubits"][0][0].pop("name")),
+        " at qubits[0][0].name",
+    ),
+    "an error as text": (
+        _properties(lambda p: p["gates"][0]["parameters"][0].update(value="0.000155")),
+        " at gates[0].parameters[0].value",
+    ),
+    "a unit as a number": (
+        _properties(lambda p: p["qubits"][0][0].update(unit=1)),
+        " at qubits[0][0].unit",
+    ),
+    "a gate without qubits": (
+        _properties(lambda p: p["gates"][0].pop("qubits")),
+        " at gates[0].qubits",
+    ),
+    "a gate name as a number": (
+        _properties(lambda p: p["gates"][0].update(gate=5)),
+        " at gates[0].gate",
+    ),
+    "parameters as text": (
+        _properties(lambda p: p["gates"][0].update(parameters="x")),
+        " at gates[0].parameters",
+    ),
+    "a date that is not a date": (
+        _properties(lambda p: p.update(last_update_date="yesterday")),
+        " at last_update_date",
+    ),
+}
+
+
+@pytest.mark.parametrize("body", list(_WRONG_SHAPE))
+def test_a_reply_of_the_wrong_shape_says_where_and_to_try_again(
+    monkeypatch: pytest.MonkeyPatch, body: str
 ) -> None:
-    deep = deeper_than_the_parser_takes().encode()
+    raw, where = _WRONG_SHAPE[body]
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: raw)
+    with pytest.raises(nv.SourceUnavailable) as info:
+        ibm_public.pull("ibm_fez")
+    url = f"{ibm_public.BASE_URL}/ibm_fez/properties"
+    assert (info.value.message, info.value.hint) == (
+        f"IBM's public endpoint answered {url} with JSON of the wrong shape{where}",
+        "try again later, or pull through your IBM account with source='ibm-account'",
+    )
+
+
+_UNREADABLE = {
+    "too deep": deeper_than_the_parser_takes().encode(),
+    "a string": b'"maintenance"',
+    "a name as a number": b'[{"name": 5}]',
+    "a processor type as text": b'{"processor_type": "Heron"}',
+}
+
+
+@pytest.mark.parametrize("body", list(_UNREADABLE))
+def test_a_listing_or_configuration_it_cannot_read_only_loses_its_detail(
+    served: list[str], monkeypatch: pytest.MonkeyPatch, body: str
+) -> None:
     serve = ibm_public.fetch
 
     def fetch(url: str) -> bytes:
         if url == ibm_public.BASE_URL or url.endswith("/configuration"):
-            return deep
+            return _UNREADABLE[body]
         return serve(url)
 
     monkeypatch.setattr(ibm_public, "fetch", fetch)
