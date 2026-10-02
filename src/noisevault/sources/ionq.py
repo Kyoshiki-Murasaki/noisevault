@@ -18,17 +18,19 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
-from pydantic import AfterValidator, BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import AfterValidator, BaseModel, Field, TypeAdapter
 
 from .. import __version__
-from ..errors import SourceUnavailable, did_you_mean, parse_json
+from ..errors import SourceUnavailable, did_you_mean
 from ..profile import Profile
-from . import OFFLINE_HINT
+from . import OFFLINE_HINT, OLDER_HINT, Origin, read_reply
 
 API = "https://api.ionq.co/v0.4"
 _TIMEOUT_S = 30.0
 _PAGE = 10  # the largest page the endpoint serves
 _MAX_PROBES = 30  # one-record reads per pull before giving up
+_SENDER = "IonQ's API"
+_TRY_LATER = "try again later"
 # IonQ's history holds medians no trapped-ion device produces (1Q 0.69, 2Q 0.75, SPAM 0.73)
 # next to normal ones, and chance-level SPAM placeholders (0.5, 0.501) from before SPAM was
 # measured. Medians below these floors are read as corrupt, not as data.
@@ -110,7 +112,12 @@ def to_profile(
     """
     backend = record["backend"]
     name = backend.removeprefix("qpu.")
-    num_qubits = int(record.get("qubits") or listing["qubits"])
+    origin = Origin(f"{_SENDER} ({source_url})", hint=OLDER_HINT)
+    num_qubits = record.get("qubits") or listing.get("qubits")
+    if not num_qubits:
+        raise origin.refuse(
+            f"record {record['id']} gives no qubit count, and neither does the backend listing"
+        )
     fidelity = record.get("fidelity") or {}
     timing = record.get("timing") or {}
     reason = _rejection(record)
@@ -161,7 +168,7 @@ def to_profile(
         for key, seconds in (("t1_us", timing.get("t1")), ("t2_us", timing.get("t2")))
         if _positive(seconds)
     }
-    return Profile.model_validate(
+    return origin.profile(
         {
             "noisevault": "1.0",
             "device": {
@@ -280,11 +287,15 @@ def _connectivity(pairs: Any, num_qubits: int) -> str | dict[str, Any]:
 
 def _listing(backend: str) -> Mapping[str, Any]:
     url = f"{API}/backends"
-    entries = _json(_get(url), url, _BACKENDS)
+    entries = read_reply(_get(url), url, _BACKENDS, sender=_SENDER, hint=_TRY_LATER)
     for entry in entries:
         if entry["backend"] == backend:
             return entry
     qpus = sorted(e["backend"] for e in entries if e["backend"].startswith("qpu."))
+    if not qpus:
+        raise SourceUnavailable(
+            f"IonQ has no backend {backend!r}; its listing ({url}) names no QPU", hint=_TRY_LATER
+        )
     raise SourceUnavailable(
         f"IonQ has no backend {backend!r}; {did_you_mean(backend, qpus)}it lists {', '.join(qpus)}"
     )
@@ -306,7 +317,9 @@ def _newest_usable(
     page = 1
     while True:
         page_url = _page_url(backend, limit=_PAGE, end=end, page=page)
-        body = _json(_get(page_url), page_url, _CHARACTERIZATIONS)
+        body = read_reply(
+            _get(page_url), page_url, _CHARACTERIZATIONS, sender=_SENDER, hint=_TRY_LATER
+        )
         records = body.get("characterizations") or []
         for listed in records:
             # a record rejected on the filled page is rejected alone too, so skip it unprobed
@@ -315,7 +328,10 @@ def _newest_usable(
                 probes += 1
                 url = _page_url(backend, limit=1, end=listed["date"])
                 raw = _get(url)
-                alone = (_json(raw, url, _CHARACTERIZATIONS).get("characterizations") or [{}])[0]
+                body_alone = read_reply(
+                    raw, url, _CHARACTERIZATIONS, sender=_SENDER, hint=_TRY_LATER
+                )
+                alone = (body_alone.get("characterizations") or [{}])[0]
                 reason = _rejection(alone) if alone.get("id") == listed["id"] else _NO_FIDELITIES
                 if reason is None:
                     return alone, raw, url, skipped
@@ -365,34 +381,10 @@ def _get(url: str) -> bytes:
             return response.read()
     except urllib.error.HTTPError as exc:
         raise SourceUnavailable(
-            f"IonQ's API answered HTTP {exc.code} for {url}", hint="try again later"
+            f"IonQ's API answered HTTP {exc.code} for {url}", hint=_TRY_LATER
         ) from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         raise SourceUnavailable(
             f"could not reach IonQ's API ({reason})", hint=OFFLINE_HINT
         ) from None
-
-
-def _json(raw: bytes, url: str, shape: TypeAdapter[Any]) -> Any:
-    try:
-        data = parse_json(raw)
-    except ValueError:
-        raise SourceUnavailable(
-            f"IonQ's API answered {url} with something other than JSON", hint="try again later"
-        ) from None
-    try:
-        shape.validate_python(data, strict=True)
-    except ValidationError as exc:
-        raise SourceUnavailable(
-            f"IonQ's API answered {url} with JSON of the wrong shape{_where(exc)}",
-            hint="try again later",
-        ) from None
-    return data
-
-
-def _where(exc: ValidationError) -> str:
-    """`` at characterizations[0].date``, where a reply first leaves its shape; '' for all of it."""
-    loc = exc.errors()[0]["loc"]
-    path = "".join(f"[{key}]" if isinstance(key, int) else f".{key}" for key in loc)
-    return f" at {path.removeprefix('.')}" if path else ""

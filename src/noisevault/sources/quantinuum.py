@@ -36,7 +36,7 @@ import numpy as np
 from .. import __version__
 from ..errors import SourceDataError, SourceUnavailable, parse_json
 from ..profile import Profile
-from . import OFFLINE_HINT
+from . import OFFLINE_HINT, Origin
 
 REPOSITORY = "https://github.com/Quantinuum/quantinuum-hardware-specifications"
 COMMIT = "59e68bb55bd616694dc8fa37a435e2a68fe1cb6b"  # pinned so a rebuild gives the same bundle
@@ -191,6 +191,7 @@ def from_spec_csv(
     return to_profile(
         values,
         num_qubits=num_qubits,
+        hint=f"correct that value in {path}",
         source=f"Quantinuum spec sheet parameters CSV ({Path(path).name}), {machine} {date}",
         source_url=None,
         source_hash="sha256:" + hashlib.sha256(raw).hexdigest(),
@@ -436,7 +437,11 @@ def to_profile(
     extra: dict[str, Any],
     notes: tuple[str, ...],
     num_qubits: int | None = None,
+    hint: str | None = None,
 ) -> Profile:
+    """The profile of ``values``; a value the format refuses is a SourceDataError naming
+    ``source``, with ``hint`` as its next step.
+    """
     machine, date = values.machine, values.date
     qubits = num_qubits or QUBITS.get((machine, date))
     if qubits is None:
@@ -483,7 +488,7 @@ def to_profile(
             "method": "rb",
         }
     family = "REIMEI" if machine == "REIMEI" else machine[:2]
-    return Profile.model_validate(
+    return Origin(source, hint=hint).profile(
         {
             "noisevault": "1.0",
             "device": {

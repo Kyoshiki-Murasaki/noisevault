@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import statistics
@@ -430,3 +431,83 @@ def test_no_valid_coherence_names_a_working_qubit(monkeypatch: pytest.MonkeyPatc
     message = "ibm_manila reports no valid T1 on any working qubit (e.g. qubit 1: T1 = 0 us)"
     with pytest.raises(ValueError, match=re.escape(message)):
         ibm_public.pull("ibm_manila")
+
+
+def _gate(props: dict[str, Any], gate: str, qubits: list[int]) -> list[dict[str, Any]]:
+    return next(e for e in props["gates"] if (e["gate"], e["qubits"]) == (gate, qubits))[
+        "parameters"
+    ]
+
+
+def _param(params: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    return next(p for p in params if p["name"] == name)
+
+
+_IN_MINUTES = {
+    "T1 of qubit 0": lambda p: _param(p["qubits"][0], "T1").update(unit="min"),
+    "readout_length of qubit 4": lambda p: _param(p["qubits"][4], "readout_length").update(
+        unit="min"
+    ),
+    "gate_length of cx on qubits [3, 4]": lambda p: _param(
+        _gate(p, "cx", [3, 4]), "gate_length"
+    ).update(unit="min"),
+}
+
+
+@pytest.mark.parametrize("field", list(_IN_MINUTES))
+def test_a_time_in_a_unit_it_does_not_know_names_the_field_and_the_unit(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    raw = _properties(_IN_MINUTES[field])
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: raw)
+    with pytest.raises(nv.SourceDataError) as info:
+        ibm_public.pull("ibm_fez")
+    url = f"{ibm_public.BASE_URL}/ibm_fez/properties"
+    assert (info.value.message, info.value.hint) == (
+        f"IBM's public endpoint ({url}): {field} has the unknown time unit 'min'; expected ns,"
+        " us, µs, ms or s",
+        "pass an earlier at= to use an older calibration",
+    )
+
+
+def _cx_3_4(name: str, value: float) -> Callable[[dict[str, Any]], object]:
+    return lambda p: _param(_gate(p, "cx", [3, 4]), name).update(value=value)
+
+
+_OUT_OF_RANGE = {
+    "a readout error above 1": (
+        lambda p: _param(p["qubits"][0], "prob_meas0_prep1").update(value=1.5),
+        "readout.p0_given_1 of qubit 0: Input should be less than or equal to 1, got 1.5",
+    ),
+    "a readout error above 1 after a qubit with no data": (
+        lambda p: (
+            p["qubits"].__setitem__(1, []),
+            _param(p["qubits"][3], "prob_meas0_prep1").update(value=1.5),
+        ),
+        "readout.p0_given_1 of qubit 3: Input should be less than or equal to 1, got 1.5",
+    ),
+    "a gate error that is not a number": (
+        _cx_3_4("gate_error", math.nan),
+        "avg_infidelity of cx on qubits [3, 4]: Input should be a finite number, got nan",
+    ),
+    "a negative gate length": (
+        _cx_3_4("gate_length", -5),
+        "cx on qubits [3, 4]: duration_ns must not be negative, got -5.0",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_OUT_OF_RANGE))
+def test_a_value_a_profile_cannot_hold_names_the_reply_and_the_value(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    edit, problem = _OUT_OF_RANGE[case]
+    raw = _properties(edit)
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: raw)
+    with pytest.raises(nv.SourceDataError) as info:
+        ibm_public.pull("ibm_fez")
+    url = f"{ibm_public.BASE_URL}/ibm_fez/properties"
+    assert (info.value.message, info.value.hint) == (
+        f"IBM's public endpoint ({url}): {problem}",
+        "pass an earlier at= to use an older calibration",
+    )

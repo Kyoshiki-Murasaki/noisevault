@@ -7,14 +7,14 @@ import urllib.parse
 import urllib.request
 from dataclasses import replace
 from datetime import date, datetime
-from typing import Annotated, Any
+from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, TypeAdapter, ValidationError
+from pydantic import AfterValidator, BaseModel, TypeAdapter
 
 from .. import __version__
-from ..errors import SourceUnavailable, did_you_mean, parse_json
+from ..errors import SourceUnavailable, did_you_mean
 from ..profile import Profile
-from . import OFFLINE_HINT
+from . import OFFLINE_HINT, OLDER_HINT, Origin, read_reply
 from .qiskit_backend import (
     as_utc,
     calibration_from_properties,
@@ -26,6 +26,7 @@ from .qiskit_backend import (
 
 BASE_URL = "https://quantum.cloud.ibm.com/api/v1/public/backends"
 TIMEOUT_S = 30.0
+_SENDER = "IBM's public endpoint"
 _TRY_LATER = "try again later, or pull through your IBM account with source='ibm-account'"
 
 
@@ -77,10 +78,13 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
         raw = fetch(url)
     except _NotFound:
         raise _not_found(name, at) from None
-    props = _json(raw, url, _PROPERTIES)
+    props = read_reply(raw, url, _PROPERTIES, sender=_SENDER, hint=_TRY_LATER)
     if not props.get("qubits"):
         raise SourceUnavailable(f"IBM's public endpoint returned no qubit data for {name} ({url})")
-    cal = replace(calibration_from_properties(props), name=name, processor=_processor(name))
+    origin = Origin(f"{_SENDER} ({url})", hint=OLDER_HINT)
+    cal = replace(
+        calibration_from_properties(props, origin=origin), name=name, processor=_processor(name)
+    )
     return to_profile(
         cal,
         {
@@ -93,6 +97,7 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
             "retrieved_at": now_utc(),
             "source_hash": sha256_bytes(raw),
         },
+        origin=origin,
     )
 
 
@@ -129,41 +134,17 @@ def fetch(url: str) -> bytes:
         ) from None
 
 
-def _json(raw: bytes, url: str, shape: TypeAdapter[Any]) -> Any:
-    try:
-        data = parse_json(raw)
-    except ValueError:
-        raise SourceUnavailable(
-            f"IBM's public endpoint answered {url} with something other than JSON",
-            hint=_TRY_LATER,
-        ) from None
-    try:
-        shape.validate_python(data, strict=True)
-    except ValidationError as exc:
-        raise SourceUnavailable(
-            f"IBM's public endpoint answered {url} with JSON of the wrong shape{_where(exc)}",
-            hint=_TRY_LATER,
-        ) from None
-    return data
-
-
-def _where(exc: ValidationError) -> str:
-    """`` at gates[0].qubits``, where a reply first leaves its shape; '' for all of it."""
-    loc = exc.errors()[0]["loc"]
-    path = "".join(f"[{key}]" if isinstance(key, int) else f".{key}" for key in loc)
-    return f" at {path.removeprefix('.')}" if path else ""
-
-
 def listed_devices() -> list[str]:
     """Names of the devices the public endpoint lists right now."""
-    return sorted(entry["name"] for entry in _json(fetch(BASE_URL), BASE_URL, _LISTING))
+    listing = read_reply(fetch(BASE_URL), BASE_URL, _LISTING, sender=_SENDER, hint=_TRY_LATER)
+    return sorted(entry["name"] for entry in listing)
 
 
 def _processor(name: str) -> str | None:
     """The processor type from the public configuration; None when it cannot be read."""
     url = f"{BASE_URL}/{urllib.parse.quote(name)}/configuration"
     try:
-        config = _json(fetch(url), url, _CONFIGURATION)
+        config = read_reply(fetch(url), url, _CONFIGURATION, sender=_SENDER, hint=_TRY_LATER)
     except (_NotFound, SourceUnavailable):
         return None
     return processor_name(config.get("processor_type"))

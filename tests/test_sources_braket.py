@@ -538,3 +538,22 @@ def test_natives_with_no_equivalent_are_named_in_a_note() -> None:
     assert sorted(profile.gates) == ["ms", "r", "rz"]
     left_out = "native gates that are not a known one- or two-qubit gate were left out:"
     assert f"{left_out} ['cphaseshift', 'xy']" in profile.provenance.notes
+
+
+def test_a_value_a_profile_cannot_hold_names_the_file_and_the_value(tmp_path: Path) -> None:
+    data = json.loads(RIGETTI.read_text())
+    [readout] = [
+        f
+        for f in data["oneQubitProperties"]["3"]["oneQubitFidelity"]
+        if f["fidelityType"]["name"] == "READOUT"
+    ]
+    readout["fidelity"] = 1.5
+    path = tmp_path / "rigetti.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(nv.SourceDataError) as info:
+        from_braket(path)
+    assert (info.value.message, info.value.hint) == (
+        "rigetti.json: readout.error of qubit 3: Input should be greater than or equal to 0,"
+        " got -0.5",
+        "correct that value in rigetti.json",
+    )

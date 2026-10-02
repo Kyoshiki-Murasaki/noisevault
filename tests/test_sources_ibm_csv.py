@@ -629,3 +629,16 @@ def test_a_layout_from_before_2023_is_refused_in_one_line(
     with pytest.raises(nv.SourceDataError) as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2022-01-01")
     assert str(info.value) == message
+
+
+def test_a_value_a_profile_cannot_hold_names_the_file_and_the_value(tmp_path: Path) -> None:
+    path = _edited(
+        tmp_path, HERON, '"0","300","250","0.012","0.016"', '"0","300","250","0.012","1.5"'
+    )
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert (info.value.message, info.value.hint) == (
+        f"{path.name}: readout.p0_given_1 of qubit 0: Input should be less than or equal to 1,"
+        " got 1.5",
+        f"correct that value in {path.name}",
+    )

@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from .. import __version__
 from ..errors import SourceDataError, SourceUnavailable, install_hint
 from ..profile import Profile
+from . import Origin
 
 if TYPE_CHECKING:
     import cirq  # noqa: F401
@@ -167,7 +168,7 @@ def _profile(
             "sqrt_iswap holds cirq_google's sqrt_iswap metrics, which cirq_google applies to"
             " every ISwapPowGate, including ISWAP**-0.5"
         )
-    return Profile.model_validate(
+    return Origin(source).profile(
         {
             "noisevault": "1.0",
             "device": {

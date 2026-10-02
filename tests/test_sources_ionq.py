@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 from conftest import deeper_than_the_parser_takes
 
-from noisevault.errors import SourceUnavailable
+from noisevault.errors import SourceDataError, SourceUnavailable
 from noisevault.reference import Op, probabilities
 from noisevault.sources import ionq
 
@@ -150,22 +150,23 @@ def test_a_dated_record_keeps_its_own_qubit_count(served) -> None:
 
 
 @pytest.mark.parametrize(
-    ("bad", "error"),
+    ("bad", "problem"),
     [
-        ([2, 4], r"edge \[2, 4\] is outside 0..3"),
-        ([2, 2], r"edge \[2, 2\] joins a qubit to itself"),
+        ([2, 4], "connectivity edge [2, 4] is outside 0..3"),
+        ([2, 2], "connectivity.edges: edge [2, 2] joins a qubit to itself"),
     ],
 )
 def test_a_bad_edge_is_rejected_even_among_as_many_edges_as_a_complete_graph(
-    served, bad: list[int], error: str
+    served, bad: list[int], problem: str
 ) -> None:
     for url in [u for u in served if "qpu.forte-1/characterizations" in u]:
         body = json.loads(served[url])
         for record in body["characterizations"] or []:
             record["connectivity"] = [bad if e == [2, 3] else e for e in record["connectivity"]]
         served[url] = json.dumps(body).encode()
-    with pytest.raises(ValueError, match=error):
+    with pytest.raises(SourceDataError) as info:
         ionq.pull("forte-1")
+    assert (info.value.message, info.value.hint) == (f"IonQ's API ({_CHOSEN}): {problem}", _OLDER)
 
 
 def test_errors_say_what_to_do(served) -> None:
@@ -366,6 +367,40 @@ def test_a_reply_of_the_wrong_shape_says_where_and_to_try_again(served, case: st
         ionq.pull("forte-1")
     assert (info.value.message, info.value.hint) == (
         f"IonQ's API answered {url} with JSON of the wrong shape{where}",
+        "try again later",
+    )
+
+
+_OLDER = "pass an earlier at= to use an older calibration"
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        pytest.param(dict.pop, id="absent"),
+        pytest.param(lambda entry, key: entry.update({key: None}), id="null"),
+    ],
+)
+def test_a_record_and_a_listing_without_a_qubit_count_say_so(served, missing) -> None:
+    served[_LISTING] = _edited(_LISTING, lambda body: missing(body[0], "qubits"))
+    served[_CHOSEN] = _edited(_CHOSEN, lambda body: missing(body["characterizations"][0], "qubits"))
+    with pytest.raises(SourceDataError) as info:
+        ionq.pull("forte-1")
+    assert (info.value.message, info.value.hint) == (
+        f"IonQ's API ({_CHOSEN}): record 00000000-0000-4000-8000-000000000003 gives no qubit"
+        " count, and neither does the backend listing",
+        _OLDER,
+    )
+
+
+@pytest.mark.parametrize("listing", [[], [RESPONSES[_LISTING][-1]]], ids=["empty", "simulator"])
+def test_a_listing_with_no_qpu_says_so(served, listing: list[dict[str, Any]]) -> None:
+    assert all(not entry["backend"].startswith("qpu.") for entry in listing)
+    served[_LISTING] = json.dumps(listing).encode()
+    with pytest.raises(SourceUnavailable) as info:
+        ionq.pull("forte-1")
+    assert (info.value.message, info.value.hint) == (
+        f"IonQ has no backend 'qpu.forte-1'; its listing ({_LISTING}) names no QPU",
         "try again later",
     )
 

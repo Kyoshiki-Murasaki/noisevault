@@ -569,3 +569,17 @@ def test_download_matches_the_fixture(h2_2) -> None:
     live = quantinuum.from_repository("H2-2", "2024_12_06")
     assert live.fingerprint == h2_2.fingerprint
     assert live.provenance.source_hash == h2_2.provenance.source_hash
+
+
+def test_a_csv_value_a_profile_cannot_hold_names_the_row_and_the_value(tmp_path: Path) -> None:
+    text = CSV.read_text(encoding="utf-8")
+    assert text.count("2.8(1)E-03") == 1
+    path = tmp_path / "spec.csv"
+    path.write_text(text.replace("2.8(1)E-03", "1.5(1)E+00"), encoding="utf-8")
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_spec_csv(path, machine="H1-1", date="2022_06_09")
+    assert (info.value.message, info.value.hint) == (
+        "Quantinuum spec sheet parameters CSV (spec.csv), H1-1 2022_06_09: readout.error: Input"
+        " should be less than or equal to 1, got 1.5",
+        f"correct that value in {path}",
+    )

@@ -45,6 +45,8 @@ All notable changes to NoiseVault. Versions follow [Semantic Versioning](https:/
     the field, and `hint` says how to fix it.
   - A command given a counts file where it takes a profile says so. With the two arguments
     swapped, `nv compare` names the order it takes them in.
+  - `scripts/run_on_ibm.py` runs the `nv compare` circuits on an IBM device through your IBM
+    Quantum account. It writes a counts file bound to the calibration in effect when the job ran.
 
   See [Counts format](docs/counts-format.md) and
   [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware).
@@ -98,6 +100,20 @@ All notable changes to NoiseVault. Versions follow [Semantic Versioning](https:/
     configuration is the exception. Those replies only add detail, such as the processor name,
     so `nv pull` leaves the detail out and gives no error. Before, some IonQ replies of the wrong
     shape gave a profile from an older record, or one dated 1970, with no error.
+  - An IBM time in a unit NoiseVault does not read, such as a T1 in `min`, from `nv pull`,
+    `nv.from_qiskit_backend` or `nv.from_calibration_archive`. The error names the time, the
+    qubit or gate, and the unit.
+  - A vendor value that no profile can hold, such as a readout error of 1.5. `nv pull` and every
+    importer raise `nv.SourceDataError`, which names the source and the first such value with
+    its qubit or gate. When the source takes a date (`--at`, or `at=` in Python), the hint says
+    to pass an earlier one. For an IBM CSV, a Braket file or a Quantinuum spec sheet, it says to
+    correct the value in the file. Before, `nv pull` said the profile was not valid and to run
+    `nv validate FILE`, though a pull has no file, and the importers raised pydantic's
+    `ValidationError`.
+  - An IonQ record whose qubit count is missing from the record and from IonQ's backend listing.
+    The error names the record, and the hint says to pass an earlier `--at`.
+  - An IonQ backend listing with no QPU in it. The error ended with "it lists" and named nothing.
+    It now says that the listing names no QPU, and the hint says to try again later.
 - **Format 0.1 files that mark a gate or qubit not operational with a string.** The upgrade read
   `operational` by truthiness, so `"false"`, `"no"`, `"off"` and `"0"` left the gate or qubit
   enabled. It now reads the flag as NoiseVault 0.1 did, so these values disable it. A value that

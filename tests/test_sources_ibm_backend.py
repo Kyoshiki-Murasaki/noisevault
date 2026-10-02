@@ -15,6 +15,7 @@ from conftest import FAKES_ADDED_IN, needs_runtime, require
 
 import noisevault as nv
 from noisevault.reference import Op, probabilities
+from noisevault.sources import Origin
 from noisevault.sources.qiskit_backend import BUNDLED_FAKES
 from noisevault.table import GateNoise, Unavailable
 
@@ -289,7 +290,10 @@ def test_gate_marked_not_operational_is_disabled_despite_a_normal_error() -> Non
     props = json.loads((FIXTURES / "manila_properties.json").read_bytes())
     [entry] = [e for e in props["gates"] if e["gate"] == "cx" and e["qubits"] == [3, 4]]
     entry["parameters"].append({"name": "operational", "unit": "", "value": 0})
-    profile = to_profile(calibration_from_properties(props), {"source_kind": "other"})
+    origin = Origin("manila_properties.json")
+    profile = to_profile(
+        calibration_from_properties(props, origin=origin), {"source_kind": "other"}, origin=origin
+    )
     assert profile.table.gate("cx", (3, 4)).state == "disabled"
     assert profile.table.gate("cx", (4, 3)).state == "calibrated"
 
@@ -300,7 +304,10 @@ def test_an_ideal_gate_outside_the_registry_keeps_its_arity() -> None:
     props = json.loads((FIXTURES / "manila_properties.json").read_bytes())
     zero = [{"name": "gate_error", "value": 0}, {"name": "gate_length", "value": 0, "unit": "ns"}]
     props["gates"] += [{"gate": "phase", "qubits": [q], "parameters": zero} for q in range(5)]
-    profile = to_profile(calibration_from_properties(props), {"source_kind": "other"})
+    origin = Origin("manila_properties.json")
+    profile = to_profile(
+        calibration_from_properties(props, origin=origin), {"source_kind": "other"}, origin=origin
+    )
     assert (profile.gates["phase"].qubits, profile.gates["phase"].virtual) == (1, True)
     assert profile.table.gate("phase", (3,)).state == "ideal"
 
@@ -437,3 +444,28 @@ def test_refreshed_ibm_backend_properties_give_one_consistent_snapshot() -> None
     assert profile.table.gate("cx", (3, 4)).state == "disabled"
     assert profile.table.gate("cx", (4, 3)).state == "calibrated"
     assert profile.fingerprint == nv.from_qiskit_backend(_ibm_backend([new])).fingerprint
+
+
+_UNREADABLE_ON_QUBIT_0 = {
+    "a T1 in minutes": (
+        "T1",
+        {"unit": "min"},
+        "T1 of qubit 0 has the unknown time unit 'min'; expected ns, us, µs, ms or s",
+    ),
+    "a readout error above 1": (
+        "prob_meas0_prep1",
+        {"value": 1.5},
+        "readout.p0_given_1 of qubit 0: Input should be less than or equal to 1, got 1.5",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_UNREADABLE_ON_QUBIT_0))
+def test_a_backend_value_it_cannot_read_names_the_backend_and_the_value(case: str) -> None:
+    field, change, problem = _UNREADABLE_ON_QUBIT_0[case]
+    props = json.loads((FIXTURES / "manila_properties.json").read_bytes())
+    next(p for p in props["qubits"][0] if p["name"] == field).update(change)
+    backend = _ibm_backend([props])
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_qiskit_backend(backend)
+    assert (info.value.message, info.value.hint) == (f"backend {backend.name}: {problem}", None)

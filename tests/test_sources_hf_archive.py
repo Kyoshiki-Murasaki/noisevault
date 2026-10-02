@@ -318,3 +318,50 @@ def test_importing_noisevault_does_not_import_pyarrow() -> None:
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     )
     assert result.stdout.strip() == "False"
+
+
+_ON_QUBIT_0 = {
+    "a T1 in minutes": (
+        "T1",
+        {"unit": "min"},
+        "T1 of qubit 0 has the unknown time unit 'min'; expected ns, us, µs, ms or s",
+    ),
+    "a readout error above 1": (
+        "prob_meas0_prep1",
+        {"value": 1.5},
+        "readout.p0_given_1 of qubit 0: Input should be less than or equal to 1, got 1.5",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_ON_QUBIT_0))
+def test_a_value_it_cannot_read_names_the_rows_and_the_value(tmp_path: Path, case: str) -> None:
+    prop, change, problem = _ON_QUBIT_0[case]
+    rows = pq.read_table(FIXTURE).to_pylist()
+    for row in rows:
+        if (row["backend"], row["property"], row["qubit_a"]) == ("ibm_fez", prop, 0):
+            row.update(change)
+    path = _rewritten(tmp_path, rows)
+    with pytest.raises(nv.SourceDataError) as info:
+        _fez(path=path)
+    assert (info.value.message, info.value.hint) == (
+        f"the ibm_fez rows of {path.name}: {problem}",
+        "pass an earlier at= to use an older calibration",
+    )
+
+
+def test_a_newer_time_it_cannot_read_names_the_newest_rows(tmp_path: Path) -> None:
+    rows = pq.read_table(FIXTURE).to_pylist()
+    for row in rows:
+        newest_t1 = (row["property"], row["calibrated_time"].day, row["qubit_a"]) == ("T1", 2, 0)
+        if row["backend"] == "ibm_fez" and newest_t1:
+            row["unit"] = "min"
+    path = _rewritten(tmp_path, rows)
+    assert _qubit(_fez(at="2026-06-01T20:00:00Z"), 0).t1_us == 100.0
+    with pytest.raises(nv.SourceDataError) as info:
+        _fez(at="2026-06-01T20:00:00Z", path=path)
+    assert (info.value.message, info.value.hint) == (
+        f"the newest ibm_fez rows of {path.name}: T1 of qubit 0 has the unknown time unit 'min';"
+        " expected ns, us, µs, ms or s",
+        None,
+    )

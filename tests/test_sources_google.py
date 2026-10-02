@@ -277,3 +277,22 @@ def test_missing_cirq_google_gives_an_install_command_that_works(monkeypatch) ->
         google.from_cirq_google("rainbow")
     assert info.value.message == "cirq_google is not installed"
     assert info.value.hint == install_hint("google")
+
+
+def test_a_calibration_value_a_profile_cannot_hold_names_the_file_and_the_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    per_qubit = google._per_qubit
+    monkeypatch.setattr(
+        google,
+        "_per_qubit",
+        lambda calibration, key: dict.fromkeys(per_qubit(calibration, key), 1.5),
+    )
+    file_name = cirq_google.engine.virtual_engine_factory.MEDIAN_CALIBRATIONS["rainbow"]
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_cirq_google("rainbow")
+    assert (info.value.message, info.value.hint) == (
+        f"cirq-google {cirq_google.__version__} {file_name}: calibrations (r on [0]):"
+        " process_infidelity of a 1-qubit gate must be in [0, 1], got 1.5",
+        None,
+    )

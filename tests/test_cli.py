@@ -901,6 +901,78 @@ def test_pull_of_a_reply_that_is_not_calibration_data_names_it_and_says_to_try_a
     assert result.stderr == f"error: {error}\nhint: {hint}\n"
 
 
+_FIXTURES = Path(__file__).parent / "fixtures"
+_IONQ_LISTING = "https://api.ionq.co/v0.4/backends"
+_IONQ_CHOSEN = (
+    "https://api.ionq.co/v0.4/backends/qpu.forte-1/characterizations?limit=1"
+    "&end=2026-09-27T00%3A00%3A00Z"
+)
+_OLDER = "pass an earlier --at to use an older calibration"
+
+
+def _ibm_qubit_0(name: str, **change: Any) -> dict[str, Any]:
+    props = json.loads((_FIXTURES / "ibm" / "manila_properties.json").read_bytes())
+    next(p for p in props["qubits"][0] if p["name"] == name).update(change)
+    return {_IBM_PROPERTIES: props}
+
+
+def _ionq_without_qubit_counts() -> dict[str, Any]:
+    replies = json.loads((_FIXTURES / "ionq" / "responses.json").read_text())
+    del replies[_IONQ_LISTING][0]["qubits"]
+    del replies[_IONQ_CHOSEN]["characterizations"][0]["qubits"]
+    return replies
+
+
+@pytest.mark.parametrize(
+    ("device", "replies", "error", "hint"),
+    [
+        (
+            "ibm_fez",
+            _ibm_qubit_0("T1", unit="min"),
+            f"IBM's public endpoint ({_IBM_PROPERTIES}): T1 of qubit 0 has the unknown time unit"
+            " 'min'; expected ns, us, µs, ms or s",
+            _OLDER,
+        ),
+        (
+            "ibm_fez",
+            _ibm_qubit_0("prob_meas0_prep1", value=1.5),
+            f"IBM's public endpoint ({_IBM_PROPERTIES}): readout.p0_given_1 of qubit 0: Input"
+            " should be less than or equal to 1, got 1.5",
+            _OLDER,
+        ),
+        (
+            "ionq_forte-1",
+            _ionq_without_qubit_counts(),
+            f"IonQ's API ({_IONQ_CHOSEN}): record 00000000-0000-4000-8000-000000000003 gives no"
+            " qubit count, and neither does the backend listing",
+            _OLDER,
+        ),
+        (
+            "ionq_forte-1",
+            {_IONQ_LISTING: []},
+            f"IonQ has no backend 'qpu.forte-1'; its listing ({_IONQ_LISTING}) names no QPU",
+            "try again later",
+        ),
+    ],
+    ids=["ibm-unit", "ibm-range", "ionq-no-qubit-count", "ionq-no-qpu"],
+)
+def test_pull_of_vendor_data_it_cannot_use_names_the_value_and_a_step_that_works(
+    monkeypatch, device: str, replies: dict[str, Any], error: str, hint: str
+) -> None:
+    from noisevault.sources import ibm_public, ionq
+
+    def reply(url: str) -> bytes:
+        if url not in replies:
+            raise ibm_public._NotFound(url)
+        return json.dumps(replies[url]).encode()
+
+    monkeypatch.setattr(ibm_public, "fetch", reply)
+    monkeypatch.setattr(ionq, "_get", reply)
+    result = runner.invoke(app, ["pull", device])
+    assert (result.exit_code, result.stdout) == (1, "")
+    assert _unstyled(result.stderr) == f"error: {error}\nhint: {hint}\n"
+
+
 def test_pull_errors_name_flags_not_python_arguments(monkeypatch) -> None:
     from noisevault.sources import ibm_account, ibm_public
 

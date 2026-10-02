@@ -28,6 +28,7 @@ from typing import Any
 from .. import __version__, gates, metrics, units
 from ..errors import SourceDataError
 from ..profile import FORMAT_VERSION, Profile, Technology
+from . import Origin
 
 RUNTIME_REPO = "https://github.com/Qiskit/qiskit-ibm-runtime"
 IBM_ATTRIBUTION = "IBM Quantum, via qiskit-ibm-runtime"
@@ -142,9 +143,10 @@ def from_qiskit_backend(backend: Any) -> Profile:
             f"{backend.name} has no fixed qubit count, so it has no device calibration",
             hint="pass a device backend, such as a qiskit-ibm-runtime fake or a live IBM backend",
         )
+    origin = Origin(f"backend {backend.name}")
     cal = calibration_from_target(target, name=_device_name(backend))
     if properties is not None:
-        from_props = calibration_from_properties(properties.to_dict())
+        from_props = calibration_from_properties(properties.to_dict(), origin=origin)
         # IBM's Target converter drops non-operational gates and every gate on a faulty qubit.
         names = {_QISKIT_TO_CANONICAL.get(n, n) for n in target.operation_names}
         in_target = {(i.name, i.qubits) for i in cal.instructions}
@@ -168,7 +170,7 @@ def from_qiskit_backend(backend: Any) -> Profile:
         technology=_technology(backend),
         processor=_processor(backend),
     )
-    return to_profile(cal, _backend_provenance(backend))
+    return to_profile(cal, _backend_provenance(backend), origin=origin)
 
 
 def calibration_from_target(target: Any, *, name: str) -> Calibration:
@@ -411,19 +413,21 @@ def _model_caveat(backend: Any, shipped: bytes, version: str) -> str | None:
 # BackendProperties JSON ------------------------------------------------------------------------
 
 
-def calibration_from_properties(props: Mapping[str, Any]) -> Calibration:
+def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> Calibration:
     """Read IBM BackendProperties as a dict (``properties().to_dict()`` or the REST JSON).
 
     The readout error and length on each qubit become its ``measure`` instruction; the gate
-    list's own ``measure`` entries repeat those numbers and are skipped.
+    list's own ``measure`` entries repeat those numbers and are skipped. A time in a unit it
+    does not know is a SourceDataError from ``origin``.
     """
     qubits: dict[int, QubitCalibration] = {}
     instructions: list[Instruction] = []
     for index, params in enumerate(props.get("qubits") or []):
         values = {p["name"]: p for p in params}
+        owner = f"qubit {index}"
         qubits[index] = QubitCalibration(
-            t1_us=_in_unit(values.get("T1"), "us"),
-            t2_us=_in_unit(values.get("T2"), "us"),
+            t1_us=_in_unit(values.get("T1"), "us", origin, owner),
+            t2_us=_in_unit(values.get("T2"), "us", origin, owner),
             p1_given_0=_value(values.get("prob_meas1_prep0")),
             p0_given_1=_value(values.get("prob_meas0_prep1")),
             prep_error=_value(values.get("init_error")),
@@ -432,7 +436,9 @@ def calibration_from_properties(props: Mapping[str, Any]) -> Calibration:
         error, length = values.get("readout_error"), values.get("readout_length")
         if error is not None or length is not None:
             instructions.append(
-                Instruction("measure", (index,), _value(error), _in_unit(length, "ns"))
+                Instruction(
+                    "measure", (index,), _value(error), _in_unit(length, "ns", origin, owner)
+                )
             )
     skipped = set()
     for entry in props.get("gates") or []:
@@ -448,7 +454,9 @@ def calibration_from_properties(props: Mapping[str, Any]) -> Calibration:
                 _QISKIT_TO_CANONICAL.get(name, name),
                 tuple(entry["qubits"]),
                 error=_value(values.get("gate_error")),
-                duration_ns=_in_unit(values.get("gate_length"), "ns"),
+                duration_ns=_in_unit(
+                    values.get("gate_length"), "ns", origin, f"{name} on qubits {entry['qubits']}"
+                ),
                 operational=_value(values.get("operational")) != 0,
             )
         )
@@ -470,20 +478,28 @@ def _value(param: Mapping[str, Any] | None) -> float | None:
 _UNIT_ALIASES = {"µs": "us", "μs": "us", "sec": "s"}
 
 
-def _in_unit(param: Mapping[str, Any] | None, unit: str) -> float | None:
+def _in_unit(
+    param: Mapping[str, Any] | None, unit: str, origin: Origin, owner: str
+) -> float | None:
     value = _value(param)
     if value is None:
         return None
     given = param.get("unit") or unit  # type: ignore[union-attr]
-    given = _UNIT_ALIASES.get(given, given)
-    return units.convert(float(value), given, unit)
+    try:
+        return units.convert(float(value), _UNIT_ALIASES.get(given, given), unit)
+    except KeyError:
+        raise origin.refuse(
+            f"{param['name']} of {owner} has the unknown time unit {given!r}; expected ns, us, µs,"
+            " ms or s"
+        ) from None
 
 
 # Calibration -> Profile ------------------------------------------------------------------------
 
 
-def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
-    """The profile of an IBM-shaped calibration.
+def to_profile(cal: Calibration, provenance: Mapping[str, Any], *, origin: Origin) -> Profile:
+    """The profile of an IBM-shaped calibration; a value the format refuses is a SourceDataError
+    from ``origin``.
 
     Device-wide defaults are medians over the working loci (``statistic: median``); every locus
     keeps its own record (``statistic: individual``). A readout or prep default is left out when
@@ -593,7 +609,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
         "calibrations": records,
         "provenance": {"tool": f"noisevault {__version__}", **provenance, "notes": notes},
     }
-    return Profile.model_validate(data)
+    return origin.profile(data)
 
 
 _COHERENCE = {"t1_us": "T1", "t2_us": "T2"}

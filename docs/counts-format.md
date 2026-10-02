@@ -178,6 +178,23 @@ factors applied. It binds the counts to the profile's calibration fingerprint an
 `simulated`. `run_at` defaults to the current UTC time. The same `seed` and `run_at` give the same
 file.
 
+## Counts from an IBM device
+
+`scripts/run_on_ibm.py` runs the planned circuits on an IBM device through your IBM Quantum
+account. It writes a counts file bound to the calibration in effect when the job ran. The script
+also does the following:
+
+- It sets `experimental.execution.scheduler_timing` to `true` in `execution.options`. This option
+  asks IBM to return how it scheduled each circuit.
+- When IBM returns a schedule, the script writes it to `<stem>.timing.json` beside the counts
+  file, with an entry for each circuit that IBM returned a schedule for.
+- It saves the submitted job to `<stem>.job.json` beside the counts file, and deletes that file
+  once the counts are saved. If the wait for the job is interrupted, run the same command again.
+  The script then collects that job instead of submitting another.
+
+`<stem>` is the counts file name without `.counts.json`. For `kingston-0416.counts.json`, the
+files are `kingston-0416.timing.json` and `kingston-0416.job.json`.
+
 ## SHA-256 and canonical form
 
 `counts.sha256` is `sha256:` plus the SHA-256 of the canonical JSON (sorted keys, no whitespace)

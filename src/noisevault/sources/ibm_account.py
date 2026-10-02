@@ -14,6 +14,7 @@ from typing import Any
 
 from ..errors import SourceUnavailable, install_hint
 from ..profile import Profile
+from . import OLDER_HINT, Origin
 from .qiskit_backend import (
     as_utc,
     calibration_from_properties,
@@ -62,8 +63,9 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
             f"IBM returned no calibration for {device} before {at}", hint="pick a later date"
         )
     data = props.to_dict()
+    origin = Origin(f"IBM's calibration of {backend.name}", hint=OLDER_HINT)
     cal = replace(
-        calibration_from_properties(data),
+        calibration_from_properties(data, origin=origin),
         name=backend.name,
         processor=processor_name(getattr(backend, "processor_type", None)),
     )
@@ -80,6 +82,7 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
                 json.dumps(data, sort_keys=True, default=str).encode("utf-8")
             ),
         },
+        origin=origin,
     )
 
 

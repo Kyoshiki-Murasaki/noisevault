@@ -21,6 +21,7 @@ from ..errors import SourceDataError, SourceUnavailable, did_you_mean, install_h
 from ..gates import is_symmetric
 from ..profile import Profile
 from ..table import _qubits
+from . import OLDER_HINT, Origin
 from .qiskit_backend import as_utc, calibration_from_properties, to_profile
 
 if TYPE_CHECKING:
@@ -116,7 +117,8 @@ def from_calibration_archive(
             hint="pass an at= time on or after that",
         )
     picked = _newest(rows, stamp)
-    cal = calibration_from_properties(_properties(name, picked))
+    origin = Origin(f"the {name} rows of {path.name}", hint=OLDER_HINT)
+    cal = calibration_from_properties(_properties(name, picked), origin=origin)
     notes = [
         "The dataset is CC-BY-4.0, but its numbers are IBM Quantum calibrations under IBM's"
         " terms, so redistributable is unknown, as for nv pull."
@@ -128,7 +130,10 @@ def from_calibration_archive(
             " errors, so this profile has no gate or readout durations and no other gates."
         )
     elif stamp is not None:
-        newest = calibration_from_properties(_properties(name, _newest(rows, None)))
+        newest = calibration_from_properties(
+            _properties(name, _newest(rows, None)),
+            origin=Origin(f"the newest {name} rows of {path.name}"),
+        )
         missing = sorted({i.name for i in newest.instructions} - {i.name for i in cal.instructions})
         if missing:
             notes.append(
@@ -169,6 +174,7 @@ def from_calibration_archive(
             "notes": notes,
             "extra": extra,
         },
+        origin=origin,
     )
 
 

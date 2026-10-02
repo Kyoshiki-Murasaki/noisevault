@@ -19,6 +19,7 @@ from pathlib import Path
 from .. import units
 from ..errors import SourceDataError
 from ..profile import Profile
+from . import Origin
 from .qiskit_backend import (
     Calibration,
     Instruction,
@@ -134,6 +135,7 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: str | datetime
             "source_hash": sha256_bytes(raw),
             "notes": notes,
         },
+        origin=Origin(path.name, hint=f"correct that value in {path.name}"),
     )
 
 

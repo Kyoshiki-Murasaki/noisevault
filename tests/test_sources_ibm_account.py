@@ -187,3 +187,35 @@ def test_a_calibration_request_ibm_rejects_is_an_error_and_a_hint(
         f"error: IBM did not return the calibration of ibm_manila ({error})",
         "hint: try again later, or pull without an account with --source ibm",
     ]
+
+
+_ON_QUBIT_0 = {
+    "a T1 in minutes": (
+        "T1",
+        {"unit": "min"},
+        "T1 of qubit 0 has the unknown time unit 'min'; expected ns, us, µs, ms or s",
+    ),
+    "a readout error above 1": (
+        "prob_meas0_prep1",
+        {"value": 1.5},
+        "readout.p0_given_1 of qubit 0: Input should be less than or equal to 1, got 1.5",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_ON_QUBIT_0))
+def test_a_snapshot_value_it_cannot_read_names_the_device_and_the_value(
+    calls: list[Any], monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    runtime = require("qiskit_ibm_runtime")
+    field, change, problem = _ON_QUBIT_0[case]
+    props = _Backend(calls)._fake.properties().to_dict()
+    next(p for p in props["qubits"][0] if p["name"] == field).update(change)
+    snapshot = runtime.models.BackendProperties.from_dict(props)
+    monkeypatch.setattr(_Backend, "properties", lambda self, **_: snapshot)
+    with pytest.raises(nv.SourceDataError) as info:
+        ibm_account.pull("ibm_manila")
+    assert (info.value.message, info.value.hint) == (
+        f"IBM's calibration of ibm_manila: {problem}",
+        "pass an earlier at= to use an older calibration",
+    )

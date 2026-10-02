@@ -20,6 +20,7 @@ from pydantic import BaseModel, ValidationError
 from .. import __version__, gates, units
 from ..errors import SourceDataError, parse_json
 from ..profile import Profile
+from . import Origin, json_path
 
 _STANDARDIZED = "braket.device_schema.standardized_gate_model_qpu_device_properties"
 _TECHNOLOGY = {
@@ -185,7 +186,7 @@ def from_braket(
     ]
     physics = build(std, paradigm, notes)
     calibrated_at = _calibrated_at(caps, std, notes)
-    return Profile.model_validate(
+    return Origin(source, hint=f"correct that value in {source}").profile(
         {
             "noisevault": "1.0",
             "device": {
@@ -499,21 +500,14 @@ def _shape_error(exc: ValidationError, prefix: tuple[str, ...], source: str) -> 
     error = exc.errors()[0]
     *parents, last = (*prefix, *error["loc"])
     if error["type"] == "missing":
-        problem = f"{_json_path(parents)} has no {last!r}"
+        problem = f"{json_path(parents)} has no {last!r}"
     elif error["type"] == "literal_error":
-        where, expected = _json_path([*parents, last]), error["ctx"]["expected"]
+        where, expected = json_path([*parents, last]), error["ctx"]["expected"]
         problem = f"{where} is {error['input']!r}, not {expected}"
     else:
         kind = "array" if error["type"] == "list_type" else "object"
-        problem = f"{_json_path([*parents, last])} is not a JSON {kind}"
+        problem = f"{json_path([*parents, last])} is not a JSON {kind}"
     return SourceDataError(f"{source}: {problem}", hint=_SAVE)
-
-
-def _json_path(keys: list[Any]) -> str:
-    """``standardized.oneQubitProperties['1'].oneQubitFidelity[0]``."""
-    return "".join(
-        f".{key}" if isinstance(key, str) and key.isidentifier() else f"[{key!r}]" for key in keys
-    ).removeprefix(".")
 
 
 def _vendor(caps: Mapping[str, Any]) -> str | None:
