@@ -65,6 +65,20 @@ jobs:
         env:
           NOISEVAULT_REQUIRE_ALL: "1"
 
+  coverage:
+    name: nv compare interval coverage over 100 simulated runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv pip install -e . pytest
+      - run: pytest -q tests/test_compare.py -k each_interval_covers
+        env:
+          NOISEVAULT_SLOW: "1"
+
   lowest:
     name: lowest declared versions (Python 3.11)
     runs-on: ubuntu-latest

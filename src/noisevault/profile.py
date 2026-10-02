@@ -46,6 +46,8 @@ if TYPE_CHECKING:
     from collections.abc import Hashable, Iterable, Sequence
 
     from .check import CheckResult
+    from .compare import Comparison
+    from .counts import MeasuredCounts
     from .diff import ProfileDiff
     from .table import GateNoise, NoiseTable
 
@@ -840,6 +842,11 @@ class Profile(_Model):
         from .check import check
 
         return check(self, frameworks=frameworks, layout=layout, shots=shots, seed=seed)
+
+    def compare(self, counts: MeasuredCounts) -> Comparison:
+        from .compare import compare
+
+        return compare(self, counts)
 
     def to_qiskit(self, *, unknown_gates: str = "typical", **options: Any) -> Any:
         from .frameworks.qiskit import to_qiskit
