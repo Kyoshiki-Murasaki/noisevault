@@ -282,3 +282,64 @@ print(f"noisy {noisy(params):.4f}, ideal at the same angles {cost(params):.4f}")
 
 The noisy minimum stays above -1 because gate and readout errors shrink the expectation value.
 [examples/pennylane_gradient.py](../examples/pennylane_gradient.py) trains a 3-qubit version.
+
+## Measure a profile against hardware
+
+`nv check` shows that each export implements the profile's noise model. It does not show how
+close that model is to the device. To measure that, run circuits on the device and score the
+profile on their counts. `nv compare` fits two factors, one on every gate error rate and one on
+every readout error rate. Each factor has a 95% interval, and a goodness-of-fit test says whether
+one pair of factors explains every circuit.
+
+1. Plan the circuits. `plan(profile)` from `noisevault.counts` returns the `nv check` circuits on
+   the qubits that `nv check` picks. It schedules each gate as soon as its qubits are free and
+   writes every wait as a `delay`, so the device and the model see the same idle time.
+2. Run each circuit on the device exactly as planned. Do not transpile the circuits, twirl them
+   or add dynamical decoupling. Start each shot in the ground state, and measure every circuit
+   qubit after the last op.
+3. Save the counts as a [counts file](counts-format.md). The file records the calibration that
+   the circuits were planned from, and `nv compare` refuses counts planned from another one.
+4. Score the profile, then save it with the fitted factors:
+
+   ```bash
+   nv compare ibm_kingston@2026-04-15 kingston.counts.json
+   nv compare ibm_kingston@2026-04-15 kingston.counts.json -o kingston-fitted.json
+   nv check kingston-fitted.json
+   nv cite kingston-fitted.json
+   ```
+
+   Every export of `kingston-fitted.json` applies the factors, and `nv check` confirms that each
+   export reproduces the fitted model. `nv cite` prints one fingerprint that pins the calibration
+   and the factors.
+
+The Python below takes the same steps. In place of a device run, it simulates counts at twice
+the calibration's gate error:
+
+```python
+import noisevault as nv
+from noisevault.counts import load_counts, plan, simulate
+
+kingston = nv.load("ibm_kingston@2026-04-15")
+circuits = plan(kingston)
+device = kingston.model_copy(update={"unmodeled_error": {"gates": {"factor": 2.0}}})
+simulate(device, circuits, shots=4000, seed=1).save("kingston.counts.json")
+
+result = kingston.compare(load_counts("kingston.counts.json"))
+result.fitted_profile().save("kingston-fitted.json")
+print(result)
+# ibm_kingston@2026-04-15 nv:609c845ed934 on qubits 148-149-150-151
+# ...
+# gate errors     x2... (95% interval ...)
+# readout errors  x1... (95% interval ...)
+# fit             within shot noise on every circuit ...
+```
+
+`print(result)` prints the text that `nv compare` shows, and `result.gates` and `result.readout`
+hold each factor with its interval. A fit beyond shot noise has p below 0.01. It means that no
+pair of factors explains every circuit, as when one qubit reads out worse than its calibration
+states. `nv compare` still prints the best pair and exits with status 0.
+
+When a profile states a readout error of exactly 0 for a measured qubit, a wrong reading on that
+qubit has probability 0 at every factor. `nv compare` counts the shots that read such a qubit
+wrong, reports p = 0 and names the qubit. [Limitations](limitations.md#what-the-unmodeled-error-factors-absorb) lists what the
+factors absorb and what they cannot express.

@@ -163,14 +163,53 @@ To run the check with uv and no install:
 uvx --from "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault" nv check ibm_fez
 ```
 
+## Compare with hardware
+
+`nv check` shows that the exports agree with the reference. `nv compare` measures how far the
+reference is from the device. Run the check circuits on the device, save the counts, and score
+the profile on them. To try it on the example counts, download them first:
+
+```bash
+curl -O https://raw.githubusercontent.com/Kyoshiki-Murasaki/noisevault/main/examples/kingston-simulated.counts.json
+```
+
+```text
+$ nv compare ibm_kingston@2026-04-15 kingston-simulated.counts.json
+ibm_kingston@2026-04-15 nv:609c845ed934 on qubits 148-149-150-151
+counts kingston-simulated.counts.json, simulated, sha256:5e343e753c75
+run 2026-04-16 09:30Z, 26 h after calibration
+
+circuit       shots  profile TVD  fitted TVD  noise TVD 95%
+ghz_chain      4000       0.0217      0.0215         0.0327
+mirror         4000       0.0237      0.0050         0.0067
+single_qubit   4000       0.0067      0.0011         0.0037
+readout        4000       0.0096      0.0036         0.0047
+
+gate errors     x2.16 (95% interval 1.76 to 2.58)
+readout errors  x1.34 (95% interval 1.16 to 1.53)
+fit             within shot noise on every circuit (p = 0.66)
+```
+
+NoiseVault has not yet been compared with counts from a real device. The example counts come
+from a simulation with gate errors x1.8 and readout errors x1.3, and the fitted intervals contain
+both.
+
+A factor multiplies the profile's error rates, so x2 means about twice the stated errors.
+`nv compare ... -o fitted.json` saves the profile with the fitted factors, and every export then
+applies them. [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware)
+shows how to plan and record a run. [Counts format](docs/counts-format.md) describes the file, and
+[Limitations](docs/limitations.md#what-the-unmodeled-error-factors-absorb) lists what the factors
+cannot express.
+
 ## Documentation
 
 | Page | What it covers |
 | --- | --- |
 | [Frameworks](docs/frameworks.md) | Each export, its options and what its report can list |
-| [Recipes](docs/recipes.md) | Pin and cite, drift, Mitiq, QEC with Stim, hypothetical devices, PennyLane training |
+| [Recipes](docs/recipes.md) | Pin and cite, drift, Mitiq, QEC with Stim, hypothetical devices, PennyLane training, hardware comparison |
 | [Data sources](docs/data-sources.md) | Bundled, pulled and imported data, with licenses |
 | [Profile format](docs/profile-format.md) | Every field of format 1.0, with examples |
+| [Counts format](docs/counts-format.md) | The file that records a hardware run for `nv compare` |
 | [Conventions](docs/conventions.md) | Error metrics, channel construction, readout and qubit order |
 | [Limitations](docs/limitations.md) | What the models leave out and what has been checked |
 | [JSON Schema](docs/schema/profile-1.0.json) | The schema of format 1.0, also printed by `nv schema` |

@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
+import os
 import re
 import shutil
 import subprocess
 import sys
+from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import pytest
-from conftest import MANILA_V01, migrated, require, toy
+from conftest import MANILA_V01, deeper_than_the_parser_takes, migrated, require, toy
 from typer.testing import CliRunner, Result
 
 import noisevault as nv
 from noisevault.cli import _PACKAGES, app
+from noisevault.compare import NOTE as COMPARE_NOTE
+from noisevault.counts import PlannedCircuit, plan, simulate
 from noisevault.errors import REPOSITORY, SourceUnavailable, install_hint
 from noisevault.profile import Profile
 
@@ -131,12 +136,14 @@ def test_version() -> None:
         ["show", "google_rainbow"],
         ["diff", "ibm_kyiv", "ibm_brisbane"],
         ["check", "ibm_manila", "--framework", "cirq,stim"],
+        ["compare", "ibm_kingston@2026-04-15", "examples/kingston-simulated.counts.json"],
     ],
-    ids=["list", "show-qubits", "show-notes", "diff", "check"],
+    ids=["list", "show-qubits", "show-notes", "diff", "check", "compare"],
 )
-def test_output_fits_the_terminal(args: list[str], columns: int) -> None:
+def test_output_fits_the_terminal(args: list[str], columns: int, monkeypatch) -> None:
     if args[0] == "check":
         require("cirq"), require("stim")
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
     result = runner.invoke(app, args, env={"COLUMNS": str(columns)})
     assert result.exit_code == 0, result.output
     assert max(len(line) for line in result.stdout.splitlines()) <= columns
@@ -1255,6 +1262,12 @@ class _Damage(NamedTuple):
 _DAMAGED = {
     "not-json": _Damage("{not json", "is not JSON (Expecting property name", _DAMAGED_FILE),
     "empty": _Damage("", "is not JSON (Expecting value", _DAMAGED_FILE),
+    "cut-string": _Damage(
+        '{"noisevault": "1.',
+        "is not JSON (Unterminated string starting at line 1, column 16)",
+        _DAMAGED_FILE,
+    ),
+    "too-deep": _Damage(deeper_than_the_parser_takes(), "is not JSON (nested ", _DAMAGED_FILE),
     "legacy-empty": _Damage(
         '{"schema_version": "0.1"}',
         "not a valid NoiseVault 0.1 file: provider",
@@ -1278,6 +1291,11 @@ _COMMANDS = {
     "diff-before": lambda f: ["diff", f, "ibm_manila"],
     "diff-after": lambda f: ["diff", "ibm_manila", f],
     "validate": lambda f: ["validate", f],
+    "compare": lambda f: [
+        "compare",
+        f,
+        str(Path(__file__).parent / "fixtures/compare/toy-xx.counts.json"),
+    ],
 }
 
 
@@ -1298,6 +1316,44 @@ def test_every_command_names_a_damaged_file_and_what_is_wrong(
     first, *rest = result.stderr.splitlines()
     assert first.startswith(f"error: {path}") and error in first
     assert rest == ([f"hint: {hint.format(path=path)}"] if hint else [])
+
+
+_COUNTS_DAMAGED_FILE = "the file is damaged or cut short; save the counts again"
+_DAMAGED_COUNTS = {
+    "not-json": _Damage("{not json", "is not JSON (Expecting property name", _COUNTS_DAMAGED_FILE),
+    "empty": _Damage("", "is not JSON (Expecting value", _COUNTS_DAMAGED_FILE),
+    "profile": _Damage(
+        json.dumps(toy()),
+        "is a profile, not a counts file",
+        "nv compare takes the profile first and the counts file second",
+    ),
+    "no-key": _Damage(
+        '{"schema_version": "0.1"}',
+        "is not a counts file (it has no nv_counts key)",
+        'give a counts file, which holds "nv_counts": "1.0"',
+    ),
+    "invalid": _Damage(
+        (Path(__file__).parent / "fixtures/compare/toy-xx.counts.json")
+        .read_text()
+        .replace('"shots": 4000', '"shots": 3999'),
+        ": circuits[0]: counts sum to 4000, but shots is 3999",
+        "give the count of every outcome, so they add up to shots",
+    ),
+}
+
+
+@pytest.mark.parametrize("damage", list(_DAMAGED_COUNTS))
+def test_compare_names_a_damaged_counts_file_and_what_is_wrong(tmp_path: Path, damage: str) -> None:
+    text, error, hint = _DAMAGED_COUNTS[damage]
+    path = tmp_path / f"{damage}.json"
+    path.write_text(text)
+    toy_xx = Path(__file__).parent / "fixtures/compare/toy.json"
+    result = runner.invoke(app, ["compare", str(toy_xx), str(path)], env={"COLUMNS": "80"})
+    assert result.exit_code == 1 and result.stdout == ""
+    assert "Traceback" not in result.output
+    first, *rest = result.stderr.splitlines()
+    assert first.startswith(f"error: {path}") and error in first
+    assert rest == [f"hint: {hint}"]
 
 
 def test_a_cut_profile_file_is_called_damaged_and_another_file_type_is_named(
@@ -1445,10 +1501,14 @@ def _doctor_without(monkeypatch: pytest.MonkeyPatch, *absent: str) -> str:
     return runner.invoke(app, ["doctor"], env={"COLUMNS": "200"}).stdout
 
 
-def test_doctor_reports_pymatching_and_gives_no_advice_about_it(monkeypatch) -> None:
+def test_doctor_installs_pymatching_by_name_because_no_extra_has_it(monkeypatch) -> None:
     out = _doctor_without(monkeypatch, "pymatching")
     assert re.search(r"^pymatching +not installed$", out, re.M)
-    assert out.splitlines()[-1].startswith("bundled profiles: ")
+    *_, bundled, advice = out.splitlines()
+    assert bundled.startswith("bundled profiles: ") and advice == _PYMATCHING
+
+
+_PYMATCHING = "To add pymatching: pip install pymatching"
 
 
 def _install(extra: str) -> str:
@@ -1468,9 +1528,12 @@ def _try(extra: str) -> str:
         ((), []),
         (("stim",), [_install("stim"), _try("stim")]),
         (("pyarrow",), [_install("hf")]),
-        (("cirq-google", "stim", "pymatching"), [_install("google,stim"), _try("stim")]),
+        (
+            ("cirq-google", "stim", "pymatching"),
+            [_install("google,stim"), _try("stim"), _PYMATCHING],
+        ),
         (("qiskit-ibm-runtime", "cirq-google", "pyarrow"), [_install("google,hf,ibm")]),
-        (tuple(_PACKAGES), [_install("all"), _try("cirq,pennylane,qiskit,stim")]),
+        (tuple(_PACKAGES), [_install("all"), _try("cirq,pennylane,qiskit,stim"), _PYMATCHING]),
     ],
     ids=["nothing", "stim", "only_hf", "google_and_stim", "no_check_framework", "everything"],
 )
@@ -1641,7 +1704,7 @@ def test_every_ref_argument_is_described_the_same_way() -> None:
         result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "200"}, prog_name="nv")
         return _unstyled(result.output)
 
-    for command in ("show", "check", "cite"):
+    for command in ("show", "check", "cite", "compare"):
         assert "Profile id (ibm_fez), id@date, or a file path." in help_text(command), command
     diff = help_text("diff")
     assert "First profile id (ibm_fez), id@date, or a file path." in diff
@@ -1657,6 +1720,7 @@ def test_every_ref_argument_is_described_the_same_way() -> None:
         ("pull", "DEVICE"),
         ("diff", "BEFORE AFTER"),
         ("validate", "FILE"),
+        ("compare", "REF COUNTS"),
     ],
 )
 def test_usage_lines_name_arguments_in_capitals_and_options_by_their_value(
@@ -1670,6 +1734,8 @@ def test_usage_lines_name_arguments_in_capitals_and_options_by_their_value(
         assert re.search(r"^│ --qubits +LIST +Also list these qubits, e\.g\. 0,1,2\.", text, re.M)
     if command == "pull":
         assert re.search(r"^│ --output +-o +FILE +Save here instead of the vault\.", text, re.M)
+    if command == "compare":
+        assert re.search(r"^│ --output +-o +FILE +Save the profile with the fitted", text, re.M)
 
 
 def test_nv_alone_prints_the_help_and_no_error() -> None:
@@ -1677,7 +1743,7 @@ def test_nv_alone_prints_the_help_and_no_error() -> None:
     assert result.exit_code == 0, result.output
     text = _unstyled(result.output)
     assert "Usage: nv" in text and "list" in text
-    assert "error" not in text
+    assert "error:" not in text
 
 
 def test_help_ends_with_the_commands_to_start_with() -> None:
@@ -1711,3 +1777,373 @@ def test_an_unexpected_failure_is_one_error_and_a_hint_unless_debugging(monkeypa
     ]
     debug = runner.invoke(app, ["show", "ibm_fez"], env={"NOISEVAULT_DEBUG": "1"})
     assert isinstance(debug.exception, KeyError)
+
+
+# compare --------------------------------------------------------------------------------------
+
+ROOT = Path(__file__).resolve().parents[1]
+KINGSTON = "ibm_kingston@2026-04-15"
+EXAMPLE = "examples/kingston-simulated.counts.json"
+FITS = ROOT / "tests" / "fixtures" / "compare"
+
+
+class _Pinned(NamedTuple):
+    """An nv compare command as a user types it in the folder it runs in."""
+
+    ref: str
+    counts: str
+    cwd: Path
+
+
+_PINNED = {
+    "good-fit": _Pinned(KINGSTON, EXAMPLE, ROOT),
+    "poor-fit": _Pinned(KINGSTON, "kingston-excess-readout.counts.json", FITS),
+    "ruled-out": _Pinned("ibm_fez@2025-02-26", "fez-impossible-readout.counts.json", FITS),
+    "not-identified": _Pinned("toy.json", "toy-xx.counts.json", FITS),
+}
+
+
+def _pinned_inputs() -> dict[str, Any]:
+    """The files the pinned outputs read, other than the example, as test_compare.py builds
+    them: kingston with three times the readout error on qubit 150, fez with 9 readout shots
+    that read qubit 136 as 1, and one qubit that runs x then x."""
+    from test_compare import LATER, XX, excess_readout, fez_with_impossible_shots
+    from test_compare import toy as one_qubit_toy
+
+    device = one_qubit_toy()
+    xx = PlannedCircuit(name="xx", qubits=(0,), ops=XX)
+    return {
+        "kingston-excess-readout.counts.json": excess_readout(0),
+        "fez-impossible-readout.counts.json": fez_with_impossible_shots(9)[1],
+        "toy.json": device,
+        "toy-xx.counts.json": simulate(device, [xx], shots=4000, seed=2, run_at=LATER),
+    }
+
+
+def _compare(
+    args: list[str], cwd: Path, monkeypatch: pytest.MonkeyPatch, columns: int = 80
+) -> Result:
+    monkeypatch.chdir(cwd)
+    return runner.invoke(app, ["compare", *args], env={"COLUMNS": str(columns)})
+
+
+def _layout(lines: list[str]) -> None:
+    """The rules every nv compare output follows at 80 columns."""
+    assert all(len(line) <= 80 and line == line.rstrip() for line in lines), lines
+    assert all(lines[:3]) and lines[3] == "" and lines[4].startswith("circuit ")
+    end = lines.index("", 4)
+    impossible = lines[4].endswith("  impossible shots")
+    for row in lines[5:end]:
+        fitted, noise = (float(value) for value in row.split()[3:5])
+        assert row.endswith("  beyond noise") == (not impossible and fitted > noise), row
+    block = lines[end + 1 :]
+    block = block[: block.index("")] if "" in block else block
+    labels = {"gate errors", "readout errors", "fit", "next", "note", ""}
+    assert all(line[:16].rstrip() in labels and line[16] != " " for line in block), block
+    factors = [line[16:] for line in block if line[:16].rstrip().endswith("errors")]
+    fitted_any = any(value.startswith("x") for value in factors)
+    assert (lines[-4:] == ["", *COMPARE_NOTE]) == fitted_any
+
+
+@pytest.mark.parametrize("name", list(_PINNED))
+def test_each_compare_output_is_the_pinned_text(name: str, monkeypatch) -> None:
+    ref, counts, cwd = _PINNED[name]
+    result = _compare([ref, counts], cwd, monkeypatch)
+    assert result.exit_code == 0, result.output
+    text = _unstyled(result.stdout)
+    assert text == (FITS / f"{name}.txt").read_text(encoding="utf-8"), (
+        f"tests/fixtures/compare/{name}.txt is stale; regenerate it with python tests/test_cli.py"
+    )
+    lines = text.splitlines()
+    _layout(lines)
+    assert lines[4].endswith("  impossible shots") == (name == "ruled-out")
+    assert any(line.endswith("  beyond noise") for line in lines) == (name == "poor-fit")
+    assert (COMPARE_NOTE[0] in lines) == (name != "not-identified")
+
+
+def test_the_pinned_compare_inputs_are_current(tmp_path: Path) -> None:
+    for name, made in _pinned_inputs().items():
+        assert made.save(tmp_path / name).read_bytes() == (FITS / name).read_bytes(), (
+            f"tests/fixtures/compare/{name} is stale; regenerate it with python tests/test_cli.py"
+        )
+
+
+def test_compare_prints_the_ref_the_table_header_and_each_label_in_bold(monkeypatch) -> None:
+    monkeypatch.chdir(FITS)
+    args = ["compare", *_PINNED["poor-fit"][:2]]
+    styled = runner.invoke(app, args, env={"COLUMNS": "80", "FORCE_COLOR": "1"}).stdout
+    lines = _unstyled(styled).splitlines()
+    bold = re.findall(r"\x1b\[1m(.*?)\x1b\[0m", styled)
+    assert bold == [KINGSTON, lines[4], "gate errors", "readout errors", "fit"]
+    assert all(line == line.rstrip() for line in lines)
+
+
+def _pair(folder: Path) -> tuple[str, str]:
+    """A two-qubit profile and counts simulated from it at gate x1.5 and readout x1.2."""
+    profile = Profile.uniform(
+        "pair",
+        technology="superconducting",
+        num_qubits=2,
+        one_qubit_error=0.01,
+        two_qubit_error=0.03,
+        readout_error=0.02,
+    )
+    truth = profile.model_copy(
+        update={"unmodeled_error": {"gates": {"factor": 1.5}, "readout": {"factor": 1.2}}}
+    )
+    counts = simulate(truth, plan(profile), shots=4000, seed=1, run_at=_RUN_AT)
+    profile.save(folder / "pair.json")
+    counts.save(folder / "pair.counts.json")
+    return "pair.json", "pair.counts.json"
+
+
+_RUN_AT = datetime(2026, 10, 1, 12, tzinfo=UTC)
+
+
+def _never_fit(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fit(self: Profile, counts: Any) -> None:
+        pytest.fail("nv compare fitted before refusing -o")
+
+    monkeypatch.setattr(Profile, "compare", fit)
+
+
+@pytest.mark.parametrize(
+    ("output", "what"),
+    [
+        ("pair.counts.json", "counts file"),
+        ("./pair.counts.json", "counts file"),
+        ("link.json", "counts file"),
+        ("hard.json", "counts file"),
+        ("pair.json", "profile file"),
+        ("profile-link.json", "profile file"),
+    ],
+)
+def test_compare_o_refuses_a_file_it_reads_before_fitting(
+    tmp_path: Path, monkeypatch, output: str, what: str
+) -> None:
+    profile, counts = _pair(tmp_path)
+    (tmp_path / "link.json").symlink_to(counts)
+    os.link(tmp_path / counts, tmp_path / "hard.json")
+    (tmp_path / "profile-link.json").symlink_to(profile)
+    before = {name: (tmp_path / name).read_bytes() for name in (profile, counts)}
+    _never_fit(monkeypatch)
+    result = _compare([profile, counts, "-o", output], tmp_path, monkeypatch)
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr.splitlines() == [
+        f"error: -o {Path(output)} is the {what} nv compare reads",
+        "hint: save the fitted profile elsewhere, such as pair-fitted.json",
+    ]
+    assert {name: (tmp_path / name).read_bytes() for name in before} == before
+
+
+def _vault_ref_backed_elsewhere(vault: Path, folder: Path) -> Path:
+    """A vault entry that links to a copy of kingston's calibration outside the vault."""
+    vault.mkdir(parents=True)
+    copy = folder / "kingston-copy.json.gz"
+    nv.load(KINGSTON).save(copy)
+    (vault / f"{nv.catalog.vault_path(nv.load(KINGSTON)).name}").symlink_to(copy)
+    return copy
+
+
+@pytest.mark.parametrize(
+    "where", ["bundled-file", "bundled-new", "vault-new", "vault-dotdot", "vault-backing"]
+)
+def test_compare_o_refuses_the_profiles_noisevault_holds(
+    tmp_path: Path, vault: Path, monkeypatch, where: str
+) -> None:
+    bundled = Path(str(nv.catalog.bundled_dir()))
+    read = "is the profile file nv compare reads"
+    targets = {
+        "bundled-file": (bundled / f"{KINGSTON}.json.gz", read),
+        "bundled-new": (bundled / "kingston-fitted.json", "is in NoiseVault's bundled profiles"),
+        "vault-new": (vault / "kingston-fitted.json", "is in your vault"),
+        "vault-dotdot": (vault / ".." / "profiles" / "fitted.json", "is in your vault"),
+        "vault-backing": (tmp_path / "kingston-copy.json.gz", read),
+    }
+    output, error = targets[where]
+    if where == "vault-backing":
+        _vault_ref_backed_elsewhere(vault, tmp_path)
+    vault.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / EXAMPLE, tmp_path / "run.counts.json")
+    before = output.read_bytes() if output.exists() else None
+    _never_fit(monkeypatch)
+    result = _compare([KINGSTON, "run.counts.json", "-o", str(output)], tmp_path, monkeypatch)
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr.startswith(f"error: -o {output} {error}\nhint: ")
+    assert (output.read_bytes() if output.exists() else None) == before
+
+
+def test_compare_exit_codes(tmp_path: Path, monkeypatch) -> None:
+    edited = nv.load(KINGSTON).to_dict()
+    edited["qubits"][0]["t1_us"] = edited["qubits"][0].get("t1_us", 100) + 1
+    Profile.from_dict(edited).save(tmp_path / "edited.json")
+    shutil.copy(ROOT / EXAMPLE, tmp_path / "run.counts.json")
+    refused = {
+        ("ibm_fez", "run.counts.json"): [
+            "error: these counts ran on ibm_kingston, but the profile describes ibm_fez",
+            "hint: give the profile the counts were planned from",
+        ],
+        ("edited.json", "run.counts.json"): [
+            "error: these counts were planned from nv:609c845ed934; this profile's calibration"
+            f" is nv:{_calibration_short(tmp_path / 'edited.json')}",
+            "hint: run nv list to find nv:609c845ed934",
+        ],
+    }
+    for args, stderr in refused.items():
+        result = _compare(list(args), tmp_path, monkeypatch)
+        assert (result.exit_code, result.stdout, result.stderr.splitlines()) == (1, "", stderr)
+    usage = runner.invoke(app, ["compare", KINGSTON], prog_name="nv")
+    assert (usage.exit_code, usage.stderr) == (
+        2,
+        "error: missing argument 'COUNTS'\nhint: run nv compare --help\n",
+    )
+    ref, counts, cwd = _PINNED["not-identified"]
+    unsaved = _compare([ref, counts, "-o", str(tmp_path / "fitted.json")], cwd, monkeypatch)
+    assert unsaved.exit_code == 1
+    assert _unstyled(unsaved.stdout) == (FITS / "not-identified.txt").read_text(encoding="utf-8")
+    assert unsaved.stderr == "error: gate and readout factors are not identified; nothing to save\n"
+    assert not (tmp_path / "fitted.json").exists()
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_compare_says_which_argument_comes_first_when_they_are_swapped(
+    tmp_path: Path, monkeypatch, packed: bool
+) -> None:
+    profile, counts = _pair(tmp_path)
+    if packed:
+        packed_counts = tmp_path / "pair.counts.json.gz"
+        packed_counts.write_bytes(gzip.compress((tmp_path / counts).read_bytes()))
+        counts = packed_counts.name
+    swapped = _compare([counts, profile], tmp_path, monkeypatch)
+    assert (swapped.exit_code, swapped.stdout) == (1, "")
+    assert swapped.stderr.splitlines() == [
+        f"error: {counts} is a counts file, not a profile",
+        "hint: nv compare takes the profile first and the counts file second",
+    ]
+    shown = runner.invoke(app, ["show", counts])
+    assert shown.stderr.splitlines() == [
+        f"error: {counts} is a counts file, not a profile",
+        "hint: give a profile file (.json or .json.gz) or a profile id such as ibm_fez",
+    ]
+
+
+def _calibration_short(path: Path) -> str:
+    return Profile.load(path).uncorrected().short_fingerprint.removeprefix("nv:")
+
+
+@pytest.mark.parametrize("damage", ["missing", "folder", "unreadable"])
+def test_compare_names_a_counts_file_it_cannot_read(tmp_path: Path, monkeypatch, damage) -> None:
+    profile, _ = _pair(tmp_path)
+    path = tmp_path / "run.counts.json"
+    expected = {
+        "missing": [f"error: no file {path}", "hint: check the path"],
+        "folder": [f"error: {path} is a folder", "hint: give a counts file (.json or .json.gz)"],
+        "unreadable": [
+            f"error: cannot read {path}: Permission denied",
+            "hint: check the file and its permissions",
+        ],
+    }
+    if damage == "folder":
+        path.mkdir()
+    if damage == "unreadable":
+        if os.name == "nt" or os.geteuid() == 0:
+            pytest.skip("chmod 000 does not stop this user from reading")
+        path.write_text("{}")
+        path.chmod(0)
+    result = _compare([profile, str(path)], tmp_path, monkeypatch)
+    assert (result.exit_code, result.stdout) == (1, "")
+    assert result.stderr.splitlines() == expected[damage]
+
+
+def test_compare_o_saves_the_fitted_profile_the_same_way_twice(tmp_path: Path, monkeypatch) -> None:
+    profile, counts = _pair(tmp_path)
+    first = _compare([profile, counts, "-o", "a.json"], tmp_path, monkeypatch)
+    second = _compare([profile, counts, "-o", "b.json"], tmp_path, monkeypatch)
+    assert first.exit_code == second.exit_code == 0, first.output
+    assert (tmp_path / "a.json").read_bytes() == (tmp_path / "b.json").read_bytes()
+    fitted = Profile.load(tmp_path / "a.json")
+    assert _unstyled(first.stdout).endswith(
+        f"\n\nsaved: a.json, pair {fitted.short_fingerprint} with the fitted factors\n"
+    )
+    assert fitted.uncorrected().fingerprint == Profile.load(tmp_path / profile).fingerprint
+    require("cirq")
+    checked = runner.invoke(app, ["check", "a.json", "--framework", "cirq"])
+    assert checked.exit_code == 0, checked.output
+
+
+def _strict_json(text: str) -> Any:
+    def refuse(constant: str) -> None:
+        raise AssertionError(f"{constant} is not JSON")
+
+    return json.loads(text, parse_constant=refuse)
+
+
+def test_compare_json_says_written_only_after_the_save(tmp_path: Path, monkeypatch) -> None:
+    profile, counts = _pair(tmp_path)
+    saved = _compare([profile, counts, "--json", "-o", "fitted.json"], tmp_path, monkeypatch)
+    assert saved.exit_code == 0 and saved.stderr == ""
+    data = _strict_json(saved.stdout)
+    fitted = Profile.load(tmp_path / "fitted.json")
+    assert data["written"] == {"path": "fitted.json", "fingerprint": fitted.fingerprint}
+    assert data["gates"]["factor"] == pytest.approx(fitted.unmodeled_error.gates.factor, rel=1e-5)
+
+    ref, xx, cwd = _PINNED["not-identified"]
+    target = tmp_path / "unsaved.json"
+    unsaved = _compare([ref, xx, "--json", "-o", str(target)], cwd, monkeypatch)
+    assert unsaved.exit_code == 1 and not target.exists()
+    assert "written" not in _strict_json(unsaved.stdout)
+    assert unsaved.stderr == "error: gate and readout factors are not identified; nothing to save\n"
+
+
+def test_compare_json_without_written_when_the_folder_turns_read_only(
+    tmp_path: Path, monkeypatch
+) -> None:
+    if os.name == "nt" or os.geteuid() == 0:
+        pytest.skip("a read-only folder does not stop this user from writing")
+    profile, counts = _pair(tmp_path)
+    folder = tmp_path / "out"
+    folder.mkdir()
+    fit = Profile.compare
+
+    def fit_then_lock(self: Profile, measured: Any) -> Any:
+        result = fit(self, measured)
+        folder.chmod(0o555)
+        return result
+
+    monkeypatch.setattr(Profile, "compare", fit_then_lock)
+    try:
+        result = _compare([profile, counts, "--json", "-o", "out/f.json"], tmp_path, monkeypatch)
+    finally:
+        folder.chmod(0o755)
+    assert result.exit_code == 1 and list(folder.iterdir()) == []
+    assert "written" not in _strict_json(result.stdout)
+    assert result.stderr.splitlines() == [
+        "error: cannot write out/f.json: Permission denied",
+        "hint: choose another folder",
+    ]
+
+
+def test_json_never_prints_a_value_json_cannot_hold(monkeypatch) -> None:
+    from noisevault import cli
+
+    card = cli.card
+    monkeypatch.setattr(cli, "card", lambda profile: {**card(profile), "median_t1_us": math.nan})
+    result = runner.invoke(app, ["show", "ibm_manila", "--json"])
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr.startswith("error: Out of range float values are not JSON compliant")
+
+
+if __name__ == "__main__":
+    import tempfile
+
+    os.environ["NOISEVAULT_HOME"] = tempfile.mkdtemp()
+    FITS.mkdir(parents=True, exist_ok=True)
+    for name, made in _pinned_inputs().items():
+        made.save(FITS / name)
+        print(f"wrote tests/fixtures/compare/{name}")
+    for name, (ref, counts, cwd) in _PINNED.items():
+        os.chdir(cwd)
+        result = runner.invoke(app, ["compare", ref, counts], env={"COLUMNS": "80"})
+        assert result.exit_code == 0, result.output
+        (FITS / f"{name}.txt").write_text(_unstyled(result.stdout), encoding="utf-8")
+        print(f"wrote tests/fixtures/compare/{name}.txt")

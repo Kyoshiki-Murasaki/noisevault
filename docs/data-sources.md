@@ -197,7 +197,9 @@ The archive has these limits:
   listing a property, so a profile keeps such a property at its last value. At 2026-09-01,
   `ibm_fez` has `xslow` errors from 29 May 2026 and a T2 on qubit 72 from 21 October 2025,
   which IBM's own snapshot for that time leaves out. `nv pull ibm_fez --at 2026-09-01` and the
-  archive agree on all 1,132 gate records that both have.
+  archive agree on all 1,132 gate records that both have. `provenance.notes` names every value
+  calibrated more than 7 days before `at`, or before the newest calibration when you give no
+  `at`, and the date of the oldest.
 - A qubit whose `prob_meas1_prep0` or `prob_meas0_prep1` is 1 is disabled, and
   `provenance.notes` names it. A gate error of 1 disables that gate, as in a pull.
 

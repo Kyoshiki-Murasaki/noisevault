@@ -22,7 +22,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Annotated, Any, NamedTuple, NoReturn, get_args
+from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, NoReturn, get_args
 
 import typer
 from pydantic import ValidationError
@@ -61,6 +61,9 @@ from .profile import (
     unmodeled_note,
 )
 from .table import GateNoise
+
+if TYPE_CHECKING:
+    from .counts import MeasuredCounts
 
 # Click's UsageError; typer exports only this subclass of it.
 _USAGE_ERROR = typer.BadParameter.__mro__[1]
@@ -1086,6 +1089,126 @@ def _uvx_hint(extra: str, command: str) -> str:
     return f'uvx --from "noisevault[{extra}] @ git+{REPOSITORY}" {command}'
 
 
+# compare ------------------------------------------------------------------------------------
+
+
+@app.command()
+def compare(
+    ref: Annotated[str, _argument("REF", _REF_HELP)],
+    counts: Annotated[str, _argument("COUNTS", "Counts file: .json or .json.gz, format 1.0.")],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            metavar="FILE",
+            help="Save the profile with the fitted factors here.",
+        ),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+) -> None:
+    """Score a profile on counts from a device and fit how far its errors must scale."""
+    with _friendly():
+        profile = _load(ref, counts_hint=_PROFILE_FIRST)
+        counts_file = Path(counts)
+        if output is not None:
+            _check_fitted_output(
+                output, profile, counts=counts_file, profile_file=_profile_file(ref)
+            )
+        measured = _read_counts(counts_file)
+        with err.status("Fitting the gate and readout factors..."):
+            result = profile.compare(measured)
+        if not as_json:
+            _print_comparison(result.summary(counts_file=counts))
+        written: dict[str, str] | None = None
+        failure: NoiseVaultError | None = None
+        if output is not None:
+            try:
+                fitted = result.fitted_profile()
+                fitted.save(output)
+            except NoiseVaultError as exc:
+                failure = exc
+            except OSError as exc:
+                failure = NoiseVaultError(
+                    f"cannot write {output}: {exc.strerror or exc}", hint="choose another folder"
+                )
+            else:
+                written = {"path": str(output), "fingerprint": fitted.fingerprint}
+        if as_json:
+            _echo_json(result.to_dict() | ({"written": written} if written else {}))
+        elif written:
+            saved = f"saved: {output}, {profile.id} nv:{written['fingerprint'][:12]}"
+            out.print()
+            out.print(Text(f"{saved} with the fitted factors"), soft_wrap=True)
+        if failure is not None:
+            raise failure
+
+
+_COUNTS_FILE = "give a counts file (.json or .json.gz)"
+
+
+def _profile_file(ref: str) -> Path:
+    """The file a ref loads: the path it names, or the vault or bundled file of a catalog ref."""
+    target = catalog.parse_ref_preferring_id(ref)
+    return target if isinstance(target, Path) else Path(str(catalog.resolve(target).path))
+
+
+def _check_fitted_output(
+    output: Path, profile: Profile, *, counts: Path, profile_file: Path
+) -> None:
+    """Refuse, before the fit, an -o that would replace an input or a profile NoiseVault holds."""
+    elsewhere = f"save the fitted profile elsewhere, such as {profile.id}-fitted.json"
+    for read, what in ((counts, "counts file"), (profile_file, "profile file")):
+        if output.exists() and read.exists() and os.path.samefile(output, read):
+            raise NoiseVaultError(f"-o {output} is the {what} nv compare reads", hint=elsewhere)
+    vault = f"the vault holds the calibrations refs load; {elsewhere}"
+    stores = (
+        (catalog.vault_dir(), "your vault", vault),
+        (Path(str(catalog.bundled_dir())), "NoiseVault's bundled profiles", elsewhere),
+    )
+    for folder, where, hint in stores:
+        if folder.is_dir() and any(
+            p.exists() and os.path.samefile(p, folder) for p in output.resolve().parents
+        ):
+            raise NoiseVaultError(f"-o {output} is in {where}", hint=hint)
+    _check_writable(output)
+
+
+def _read_counts(path: Path) -> MeasuredCounts:
+    from .counts import load_counts
+
+    if path.is_dir():
+        raise NoiseVaultError(f"{path} is a folder", hint=_COUNTS_FILE)
+    try:
+        return load_counts(path)
+    except FileNotFoundError:
+        raise NoiseVaultError(f"no file {path}", hint="check the path") from None
+    except OSError as exc:
+        raise NoiseVaultError(
+            f"cannot read {path}: {exc.strerror or exc}", hint="check the file and its permissions"
+        ) from None
+
+
+_LABEL = re.compile(r"\S+(?: \S+)*(?=  )")
+
+
+def _print_comparison(summary: str) -> None:
+    """``Comparison.summary()`` with the ref, the table header and each label in bold."""
+    lines = summary.split("\n")
+    table = lines.index("") + 1
+    block = lines.index("", table) + 1
+    end = lines.index("", block) if "" in lines[block:] else len(lines)
+    for i, line in enumerate(lines):
+        text = Text(line)
+        if i == 0:
+            text.stylize("bold", 0, line.find(" "))
+        elif i == table:
+            text.stylize("bold")
+        elif block <= i < end and (label := _LABEL.match(line)):
+            text.stylize("bold", 0, label.end())
+        out.print(text, soft_wrap=True)
+
+
 # cite, validate, doctor, schema ---------------------------------------------------------------
 
 
@@ -1161,6 +1284,9 @@ def doctor() -> None:
     if for_check:
         uvx = _uvx_hint(",".join(for_check), "nv check ibm_fez")
         out.print(f"Or, with uv and no install: {uvx}", markup=False, soft_wrap=True)
+    loose = [package for package in missing if _PACKAGES[package] is None]
+    if loose:
+        _emit(f"To add {', '.join(loose)}: pip install {' '.join(loose)}")
 
 
 @app.command()
@@ -1172,21 +1298,30 @@ def schema() -> None:
 # shared helpers -----------------------------------------------------------------------------
 
 
-def _load(ref: str) -> Profile:
+def _load(ref: str, *, counts_hint: str | None = None) -> Profile:
+    """The profile REF names. ``counts_hint`` replaces the hint when REF is a counts file."""
     target = catalog.parse_ref_preferring_id(ref)
     if not isinstance(target, Path):
         return catalog.load(ref)
     if not target.exists():
         raise FileNotFoundError(errno.ENOENT, "no such file", str(target))
     if target.is_dir():
-        raise NoiseVaultError(
-            f"{ref} is a folder", hint=f"{_PROFILE_FILE} or a profile id such as ibm_fez"
-        )
+        raise NoiseVaultError(f"{ref} is a folder", hint=_PROFILE_OR_ID)
     try:
         return load_file(target)
     except _UNREADABLE as exc:
+        if isinstance(exc, ValidationError) and _holds_counts(target):
+            raise NoiseVaultError(
+                f"{target} is a counts file, not a profile", hint=counts_hint or _PROFILE_OR_ID
+            ) from None
         message, hint = _unreadable(target, exc)
         raise NoiseVaultError(message, hint=hint) from None
+
+
+def _holds_counts(path: Path) -> bool:
+    raw = path.read_bytes()
+    data = json.loads(gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw)
+    return isinstance(data, dict) and "nv_counts" in data
 
 
 # What reading a profile file can raise besides FileNotFoundError; ValidationError is a ValueError.
@@ -1194,6 +1329,8 @@ _UNREADABLE = (ValueError, OSError, EOFError, zlib.error)
 
 
 _PROFILE_FILE = "give a profile file (.json or .json.gz)"
+_PROFILE_OR_ID = f"{_PROFILE_FILE} or a profile id such as ibm_fez"
+_PROFILE_FIRST = "nv compare takes the profile first and the counts file second"
 _DAMAGED_FILE = "the file is damaged or cut short; pull or export it again"
 
 
@@ -1209,7 +1346,7 @@ def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
             f"{path} is not a valid profile ({problems})", f"run nv validate {path} to list them"
         )
     if isinstance(exc, json.JSONDecodeError):
-        where = f"{exc.msg} at line {exc.lineno}, column {exc.colno}"
+        where = f"{exc.msg.removesuffix(' at')} at line {exc.lineno}, column {exc.colno}"
         return _FileProblem(f"{path} is not JSON ({where})", _not_json_hint(path))
     if isinstance(exc, UnicodeDecodeError):
         return _FileProblem(f"{path} is not JSON (not UTF-8 text)", _not_json_hint(path))
@@ -1274,6 +1411,7 @@ _CLI_TERMS = (
         re.compile(r"pass expect='nv:\.\.\.' or load one of their files:"),
         "give one of their files:",
     ),
+    (re.compile(r"`(nv [^`]+)`"), r"\1"),
 )
 
 
@@ -1307,7 +1445,7 @@ def _emit(renderable: RenderableType, *, natural_width: int | None = None) -> No
 
 
 def _echo_json(data: Any) -> None:
-    typer.echo(json.dumps(data, indent=2, ensure_ascii=False))
+    typer.echo(json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False))
 
 
 def _ref(profile: Profile) -> str:

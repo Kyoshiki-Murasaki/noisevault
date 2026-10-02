@@ -86,8 +86,42 @@ the twirled reference within sampling error, and that the Qiskit export matches 
 profile.
 
 These checks show the exports implement the model consistently. None of them compares the model
-with outcomes measured on hardware. NoiseVault has not yet been validated against hardware
-runs, so treat its predictions as estimates whose error against the device is unknown.
+with outcomes measured on hardware. `nv compare` makes that comparison for counts you measure.
+It scores a profile on them and fits how far its gate and readout error rates must scale to
+match the device. [Measure a profile against hardware](recipes.md#measure-a-profile-against-hardware)
+shows how. The test suite checks the fit on simulated counts. On ibm_kingston, each 95% interval
+covers the factor the counts were simulated with in at least 88 of 100 runs.
+
+NoiseVault has not yet been validated against hardware runs. No counts from a real device have
+been compared, so treat its predictions as estimates whose error against the device is unknown.
+
+## What the unmodeled-error factors absorb
+
+`nv compare` fits one factor on every gate error rate and one on every readout error rate. The
+gate factor absorbs any error beyond the calibration that acts like more gate error: crosstalk,
+leakage, coherent error, idle error beyond T1 and T2, and drift since the calibration. Profiles
+that state no durations or no T1 and T2, such as the bundled Quantinuum ones, also put their
+idle and transport error into the gate factor.
+
+- **One chain represents the device.** `nv compare` fits the factors on the three or four qubits
+  that `nv check` picks, a well-calibrated chain. A saved profile applies them to every qubit, and
+  other qubits can have more or less excess error. `fit.qubits` in the profile names the
+  measured qubits.
+- **One gate factor covers every gate.** The check circuits cannot separate excess error on
+  one-qubit gates from excess error on two-qubit gates, so one factor scales both. The fitted
+  value averages the two kinds by the error each contributes to the check circuits. Two-qubit
+  gates carry 63% of the stated gate error in those circuits on the bundled ibm_kingston, 66% on
+  ibm_fez and 94% on quantinuum_h2-1. If the excess sits mostly in one kind, a circuit with a
+  different mix gets too much or too little error.
+- **Short circuits, stochastic error.** On IBM Heron devices each check circuit runs for less
+  than 1 µs before measurement, with no spectator qubits, no parallel layers and no mid-circuit
+  measurement. The factors scale stochastic error, so coherent error that builds up over many
+  gates on the device stays stochastic in the model. Whether a factor fitted on these circuits
+  predicts the logical error rate of a QEC circuit is untested.
+- **Some values never scale.** T1, T2, dephasing, preparation error, gate durations and effects
+  keep their stated values. An error with no valid power, such as a readout pair no better than
+  chance or a Pauli channel with a negative Pauli-Lindblad rate, also stays as stated, and
+  `nv compare` and every report name it.
 
 ## Out of scope
 

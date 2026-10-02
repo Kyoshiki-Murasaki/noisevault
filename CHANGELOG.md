@@ -30,6 +30,96 @@ All notable changes to NoiseVault. Versions follow [Semantic Versioning](https:/
   `nv.calibration_archive_devices(path)` gives the range of times each device covers. Install
   `noisevault[hf]` (pyarrow 14.0.1 or later). `nv doctor` lists pyarrow. See
   [IBM calibration archive on Hugging Face](docs/data-sources.md#ibm-calibration-archive-on-hugging-face).
+- **Scoring a profile on counts from a device.** `nv compare REF COUNTS` scores a profile on
+  counts that a device measured. It fits one factor on every gate error rate and one on every
+  readout error rate, each with a 95% interval, and tests whether one pair of factors explains
+  every circuit. It exits with status 0 whatever the fit. `-o FILE` saves the profile with the
+  fitted factors in `unmodeled_error`, and `--json` prints the result as JSON. Before the fit,
+  `-o` refuses the counts file, the profile file and any path in the vault or among the bundled
+  profiles. In Python, `profile.compare(counts)` returns the same result, and
+  `result.fitted_profile()` returns the profile with the factors.
+  - `noisevault.counts` reads and writes counts files. `load_counts(path)` reads one as a
+    `MeasuredCounts`. `plan(profile)` returns the circuits to run, with every wait written as a
+    `delay`. `simulate(profile, circuits, shots=..., seed=...)` draws counts from a profile.
+  - `load_counts` raises `nv.CountsError` for a file it refuses. The message names the file and
+    the field, and `hint` says how to fix it.
+  - A command given a counts file where it takes a profile says so. With the two arguments
+    swapped, `nv compare` names the order it takes them in.
+
+  See [Counts format](docs/counts-format.md) and
+  [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware).
+
+### Fixed
+
+- **Revalidating a profile after reading its fingerprint.** `Profile.model_validate(profile)`, a
+  pydantic model or `TypeAdapter` with a `Profile` field, and `Profile(**dict(profile))` raised
+  `Extra inputs are not permitted` once `fingerprint`, `artifact_hash` or `table` had been read.
+  They now accept the profile. With pydantic 2.13, assigning to `fingerprint`, `artifact_hash` or
+  `table` replaced the stored value. The assignment now raises `ValidationError`, like any other
+  change to a frozen profile.
+- **Loading from a vault whose index disagrees with its files.** `nv.load`, the commands that
+  take a ref, and `nv pull` trusted the vault's index, `.index.json`, without checking it
+  against the files. An index entry with the wrong date let `ibm_manila@2024-06-04` load a
+  calibration from 2024-06-03, and `nv pull` then saved over that calibration. A load could also
+  return another calibration when a file was saved over during the load. NoiseVault now uses the
+  index only when its version and digest show that NoiseVault wrote it, and otherwise reads the
+  files again. `nv.load` checks the profile it read against the ref and the `expect=` pin, and
+  reads the vault again when they differ. An `.index.json` that is not a regular file no longer
+  stops `nv list`.
+- **Importer input that is damaged or incomplete.** Three importers returned wrong values with
+  no error. Each now raises `SourceDataError` that names the file and the field or line.
+  - `from_ibm_csv` lost every row after a quote left open, so a file could import with no
+    two-qubit records. A row cut short read its missing cells as blank, and a blank Operational
+    cell enabled a disabled qubit. Both are now refused. A CSV whose lines end in a bare carriage
+    return failed with a `csv` module error, and it now reads like any other.
+  - `from_braket` read a time with no `unit` as seconds, so a T1 of 18.5 us became 18,500,000
+    us. It read a standardized v1 or v2 two-qubit fidelity with no `fidelityType` as randomized
+    benchmarking. On one IQM pair, the misread changed the error from 0.009 to 0.013. Braket's
+    schemas require both fields, and `from_braket` now refuses a file that leaves one out. A v3
+    fidelity with no type still reads as randomized benchmarking, the only type v3 defines.
+  - `noisevault.sources.quantinuum.from_repository` accepted counts that cannot be right. A shot
+    count of 1 in H2-2's single-qubit file gave an error of 4.4e-16 instead of 7.85e-5, and an
+    empty first zone gave 0.5. It now refuses a shot count that is not a positive whole number, a
+    count outside 0 to the shot count, a sequence length that is not a whole number, a zone with
+    no sequence lengths, and an empty or misshapen map.
+- **A profile file nested deeper than the JSON parser takes.** Loading one raised
+  `RecursionError`, so `nv show`, `nv validate` and the other commands that read a file printed
+  an unexpected error and asked for a bug report. Loading now raises the `json.JSONDecodeError`
+  that any damaged file gives, with the depth and the position of the deepest bracket, and the
+  commands call the file damaged.
+- **Format 0.1 files that mark a gate or qubit not operational with a string.** The upgrade read
+  `operational` by truthiness, so `"false"`, `"no"`, `"off"` and `"0"` left the gate or qubit
+  enabled. It now reads the flag as NoiseVault 0.1 did, so these values disable it. A value that
+  rule cannot read raises a `ValueError` that names the field.
+- **Saving profiles from several threads.** `profile.save(path)` read the umask by setting the
+  process umask to 0 and back. A file that another thread created in that moment did not get
+  the umask, and two saves at once could leave the umask at 0. `profile.save` no longer changes
+  the umask. A new file still gets the mode the umask allows, and a replaced file keeps its mode.
+- **A circuit wider than the device on the Qiskit export.** The simulator from `to_qiskit()`
+  refused a circuit with more qubits than the device and said to transpile it, but `transpile`
+  refuses that circuit too. The hint now names a step that works. For idle extra qubits, it says
+  to build the circuit on at most the device's qubit count. For a circuit transpiled for a larger
+  backend, it says to transpile the original circuit. For a circuit that uses more qubits than
+  the device has, it says to load a profile with enough qubits.
+- **Command line.**
+  - When IBM had no calibration of a device before the `--at` date,
+    `nv pull --source ibm-account` gave advice for retired devices. It now says that IBM returned
+    no calibration before that date, and the hint says to pick a later date.
+  - `nv show` counted gate loci with no error metric as "without error", a label that read as
+    free of error. Exports give those loci the typical native gate's noise. `nv show` now counts
+    them as "uncalibrated".
+  - `nv diff` warned that the second profile was older than the first even for two different
+    devices. For two calibrations of one device on one day, the warning named both by that date,
+    as in "ibm_manila@2024-05-27 is older than ibm_manila@2024-05-27". It now warns only about one
+    device, and it gives the times when the dates match.
+  - For a `.json` or `.json.gz` file that is not valid JSON, the hint said to give a profile file
+    with one of those names. It now says that the file is damaged or cut short. A file cut short
+    inside a string no longer reads "Unterminated string starting at at line 1".
+  - When a vault copy replaced a bundled calibration, a dated ref with no calibration on that day
+    listed the replaced calibration twice. It now lists each calibration once.
+  - In a narrow terminal, `nv check` wrapped cells such as "exact + 20000 shots" over several
+    lines. It now leaves out the tolerance column, then the circuits column, and keeps each cell
+    on one line.
 
 ## 0.2.0 (2026-10-01)
 

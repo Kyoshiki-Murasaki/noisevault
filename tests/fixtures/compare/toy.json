@@ -1,0 +1,20 @@
+{
+  "noisevault": "1.0",
+  "device": {"name": "toy", "technology": "superconducting", "num_qubits": 1},
+  "connectivity": "all_to_all",
+  "gates": {
+    "rz": {"virtual": true},
+    "id": {"avg_infidelity": 0.001},
+    "x": {"avg_infidelity": 0.001},
+    "y": {"avg_infidelity": 0.001},
+    "h": {"avg_infidelity": 0.001},
+    "sx": {"avg_infidelity": 0.001},
+    "sxdg": {"avg_infidelity": 0.001},
+    "rx": {"avg_infidelity": 0.001},
+    "ry": {"avg_infidelity": 0.001},
+    "u": {"avg_infidelity": 0.001},
+    "r": {"avg_infidelity": 0.001}
+  },
+  "readout": {"error": 0.01},
+  "provenance": {"data_kind": "hypothetical", "source_kind": "hand_written", "redistributable": "unknown", "notes": [], "extra": {}}
+}

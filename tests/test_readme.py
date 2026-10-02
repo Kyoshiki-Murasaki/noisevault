@@ -20,6 +20,8 @@ import importlib.util
 import io
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -36,6 +38,7 @@ from typer.testing import CliRunner
 
 from noisevault import catalog, cli
 from noisevault.check import NOTE
+from noisevault.errors import REPOSITORY
 
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
@@ -425,15 +428,63 @@ def test_check_output_matches_a_current_run() -> None:
     )
 
 
+COMPARE_BLOCK = re.compile(
+    r"^```bash\ncurl -O (?P<url>\S+)\n```\s*^```text\n\$ nv (?P<command>compare [^\n]+)\n.*?^```\n",
+    re.S | re.M,
+)
+EXAMPLE_COUNTS = "examples/kingston-simulated.counts.json"
+
+
+def compare_block() -> re.Match[str]:
+    block = COMPARE_BLOCK.search(TEXT)
+    assert block, "README.md needs a curl -O block, then a ```text block starting with $ nv compare"
+    return block
+
+
+def compare_output(command: str, url: str) -> str:
+    """``nv compare`` as the README runs it, in a folder that holds only the downloaded file,
+    through its fit lines."""
+    owner_and_name = REPOSITORY.removeprefix("https://github.com/")
+    assert url == f"https://raw.githubusercontent.com/{owner_and_name}/main/{EXAMPLE_COUNTS}", url
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as folder:
+        shutil.copy(ROOT / EXAMPLE_COUNTS, Path(folder) / url.rsplit("/", 1)[1])
+        os.chdir(folder)
+        try:
+            result = CliRunner().invoke(
+                cli.app, shlex.split(command), env={"COLUMNS": str(COLUMNS)}
+            )
+        finally:
+            os.chdir(cwd)
+    assert result.exit_code == 0, result.output
+    lines = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()
+    fit = next(i for i, line in enumerate(lines) if line.startswith("fit "))
+    end = lines.index("", fit) if "" in lines[fit:] else len(lines)
+    return "\n".join([f"$ nv {command}", *lines[:end]])
+
+
+def test_compare_output_matches_a_run_on_the_downloaded_example() -> None:
+    block = compare_block()
+    shown = block.group(0)[block.group(0).index("```text\n") + 8 :].removesuffix("```\n")
+    current = compare_output(block["command"], block["url"])
+    assert shown.rstrip("\n") == current, (
+        "README.md must show this nv compare output; regenerate it with"
+        f" python tests/test_readme.py:\n{current}"
+    )
+
+
 if __name__ == "__main__":
     os.environ["NOISEVAULT_HOME"] = tempfile.mkdtemp()  # an empty vault, as in the tests
     for name, args in SHOTS.items():
         (ASSETS / name).write_text(terminal_svg(args), encoding="utf-8")
         print(f"wrote assets/{name}")
-    README.write_text(
-        CHECK_BLOCK.sub(lambda _: f"```text\n{check_output()}\n```\n", TEXT, count=1),
-        encoding="utf-8",
-    )
-    print("wrote the nv check output in README.md")
+    text = CHECK_BLOCK.sub(lambda _: f"```text\n{check_output()}\n```\n", TEXT, count=1)
+    block = COMPARE_BLOCK.search(text)
+    assert block, "README.md has no nv compare block to regenerate"
+    start = block.start() + block.group(0).index("```text\n")
+    shown = f"```text\n{compare_output(block['command'], block['url'])}\n```\n"
+    text = text[:start] + shown + text[block.end() :]
+    README.write_text(text, encoding="utf-8")
+    print("wrote the nv check and nv compare output in README.md")
     print("\nbundled-profiles table for README.md:\n")
     print(bundled_table())

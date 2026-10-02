@@ -1,0 +1,13 @@
+toy nv:d9491278c3ab on qubit 0
+counts toy-xx.counts.json, simulated, sha256:df9fc7b55a42
+run 2026-10-01 12:00Z, calibration age unknown (the profile has no date)
+
+circuit  shots  profile TVD  fitted TVD  noise TVD 95%
+xx        4000       0.0005      0.0000         0.0001
+
+gate errors     not identified
+readout errors  not identified
+                gate error and readout error move these counts the same way
+fit             not testable (no degrees of freedom left after fitting)
+next            add a circuit with no gates, which only readout error moves.
+                The circuits from noisevault.counts.plan() include one.

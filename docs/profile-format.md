@@ -414,7 +414,7 @@ stated error does (see [Channel construction](conventions.md#channel-constructio
 
 | Field | Content |
 | --- | --- |
-| `counts` | The SHA-256 of the counts file, as `sha256:` and 64 hex digits. |
+| `counts` | The SHA-256 of the [counts file](counts-format.md#sha-256-and-canonical-form), as `sha256:` and 64 hex digits. |
 | `source` | `hardware`, or `simulated` for counts drawn from a model. |
 | `qubits` | The measured qubits, in the order the circuits first use them. |
 | `run_at` | When the device started the first circuit, an ISO 8601 time with a timezone. Stored in UTC. |
