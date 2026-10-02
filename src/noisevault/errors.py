@@ -61,6 +61,13 @@ class SourceDataError(NoiseVaultError, ValueError):
     """A source importer cannot read the calibration data it was given."""
 
 
+class CountsError(NoiseVaultError, ValueError):
+    """A counts file is malformed, or its run is one ``nv compare`` cannot score.
+
+    The message is one line that starts with the file or the field, and ``hint`` says what to do.
+    """
+
+
 def did_you_mean(given: str, choices: Iterable[str]) -> str:
     """``did you mean 'X'? `` for the choice closest to a mistyped value; '' when none is close."""
     close = difflib.get_close_matches(given, list(choices), n=1)

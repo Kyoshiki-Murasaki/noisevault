@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from .catalog import ProfileInfo, load, profiles, pull
 from .errors import (
     AmbiguousRef,
+    CountsError,
     DisabledGateError,
     FingerprintMismatch,
     LayoutError,
@@ -101,6 +102,7 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "AmbiguousRef",
+    "CountsError",
     "DisabledGateError",
     "FingerprintMismatch",
     "LayoutError",
