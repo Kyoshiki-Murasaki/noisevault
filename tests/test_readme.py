@@ -2,7 +2,8 @@
 
 Each Python block runs alone in a fresh interpreter with an empty vault. The ``# `` comment
 lines after a block's first print show its output; the text before any ``...`` on each line
-must appear in what it prints, in the same order. A block preceded by
+must appear in what it prints, in the same order. A framework's version number in that text,
+as in ``qiskit-aer 0.17.2``, matches any version. A block preceded by
 ``<!-- not-run: reason -->`` is skipped. A missing optional
 package skips the run, unless NOISEVAULT_REQUIRE_ALL=1.
 
@@ -22,6 +23,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,11 +42,13 @@ README = ROOT / "README.md"
 ASSETS = ROOT / "assets"
 # optional packages that the "all" extra does not install, so NOISEVAULT_REQUIRE_ALL never demands
 OUTSIDE_ALL = {"mitiq", "ply"}
+FRAMEWORKS = ("qiskit", "cirq", "pennylane", "stim")
 
 FENCE = re.compile(r"^```(\w*)[^\n]*\n(.*?)^```", re.S | re.M)
 NOT_RUN = re.compile(r"<!--\s*not-run:[^>]*-->\s*$")
 LINK = re.compile(r"\]\(([^)\s]+)\)|(?:src|srcset|href)=\"([^\"]+)\"")
 HEADING = re.compile(r"^#{1,6} +(.+?) *$", re.M)
+FRAMEWORK_VERSION = re.compile(rf"\b((?:{'|'.join(FRAMEWORKS)})[\w-]*) \d+(?:\.\d+)+[\w.+]*")
 
 
 @dataclass(frozen=True)
@@ -123,9 +127,10 @@ def test_python_block_runs_and_prints_what_it_shows(block: Block, tmp_path: Path
     result = run(tmp_path, script)
     skip_if_optional_missing(result)
     assert result.returncode == 0, result.stderr[-3000:]
+    output = unversioned(result.stdout)
     position = 0
     for line in block.expected:
-        position = find_shown(result.stdout, line, position)
+        position = find_shown(output, unversioned(line), position)
         assert position >= 0, f"{line!r} not in output, or out of order:\n{result.stdout[-3000:]}"
 
 
@@ -134,6 +139,11 @@ def literal(text: str) -> Any:
         return ast.literal_eval(text)
     except (ValueError, TypeError, SyntaxError):
         return None
+
+
+def unversioned(text: str) -> str:
+    """``text`` with each framework version replaced, because a block prints the installed one."""
+    return FRAMEWORK_VERSION.sub(r"\1 *", text)
 
 
 def find_shown(output: str, shown: str, start: int) -> int:
@@ -187,9 +197,13 @@ VENDORS: dict[str, tuple[str, str]] = {
 }
 
 
+def bundled_profiles() -> list[catalog.ProfileInfo]:
+    return [info for info in catalog.profiles() if info.location == "bundled"]
+
+
 def bundled_table() -> str:
     """The README's table of bundled profiles, one row per vendor, from the bundled index."""
-    bundled = [info for info in catalog.profiles() if info.location == "bundled"]
+    bundled = bundled_profiles()
     rows = ["| Vendor | Technology | Devices | Calibrated | Source and license |"]
     rows.append("| --- | --- | --- | --- | --- |")
     by_vendor = sorted({info.vendor for info in bundled}, key=lambda v: list(VENDORS).index(v))
@@ -212,6 +226,25 @@ def test_bundled_table_matches_the_catalog() -> None:
         "the bundled-profiles table in README.md is stale; regenerate it with"
         " python tests/test_readme.py"
     )
+
+
+def test_the_nav_link_counts_the_bundled_devices() -> None:
+    devices = len({info.id for info in bundled_profiles()})
+    assert f"[{devices} devices](#what-ships)" in TEXT
+
+
+def test_the_python_versions_shown_are_the_ones_pyproject_declares() -> None:
+    classifiers = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "classifiers"
+    ]
+    minors = sorted(
+        int(c.rsplit(".", 1)[1])
+        for c in classifiers
+        if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", c)
+    )
+    oldest, newest = f"3.{minors[0]}", f"3.{minors[-1]}"
+    assert f"/badge/python-{oldest}%20to%20{newest}-" in TEXT
+    assert f"Python {oldest} to {newest}" in TEXT
 
 
 # terminal screenshots -----------------------------------------------------------------------
@@ -333,7 +366,6 @@ def test_hero_images_match_their_grid() -> None:
     assert build.returncode == 0, build.stdout + build.stderr
 
 
-FRAMEWORKS = ("qiskit", "cirq", "pennylane", "stim")
 CHECK = ("check", "ibm_fez")
 CHECK_BLOCK = re.compile(r"^```text\n\$ nv check ibm_fez\n.*?^```\n", re.S | re.M)
 ROUNDOFF = 1e-12

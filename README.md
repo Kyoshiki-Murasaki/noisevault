@@ -9,17 +9,19 @@
 
 **Calibrated noise from real quantum computers, as one file that works in Qiskit, Cirq, PennyLane and Stim.**
 
-Load a device by name and simulate your circuits under the noise it had on a given day. Pin the profile's fingerprint, and anyone can rerun your results with the same noise. Each export reports what it reproduces exactly, what it approximates and what it leaves out.
-
-<br/>
-
 [![CI](https://github.com/Kyoshiki-Murasaki/noisevault/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Kyoshiki-Murasaki/noisevault/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-Apache%202.0-1f1f1f.svg)](LICENSE)
-[![python](https://img.shields.io/badge/python-3.11%2B-1f1f1f.svg)](pyproject.toml)
+[![python](https://img.shields.io/badge/python-3.11%20to%203.14-1f1f1f.svg)](pyproject.toml)
 
-[Install](#install) · [Quickstart](#quickstart) · [Profiles](#what-ships) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
+[Install](#install) · [Quickstart](#quickstart) · [25 devices](#what-ships) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
+
+</div>
 
 <br/>
+
+Load a device by name and simulate your circuits under the noise it had on a given day. Pin the
+profile's fingerprint, and anyone can rerun your results with the same noise. Each export reports
+what it reproduces exactly, what it approximates and what it leaves out.
 
 Try it without installing, using [uv](https://docs.astral.sh/uv/):
 
@@ -29,31 +31,17 @@ uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault nv show ibm_fez
 
 <img src="assets/cli-show.svg" alt="Terminal output of nv show ibm_fez: a 156-qubit Heron r2 device with its native gates, their median average infidelity and duration, median T1, T2 and readout error, where the data comes from, its license, and the profile fingerprint." width="830">
 
-</div>
-
-<br/>
-
 ## Install
 
-In a virtual environment with Python 3.11 to 3.14, install NoiseVault with the extra for your
-framework:
+In a virtual environment with Python 3.11 to 3.14, install NoiseVault from GitHub:
 
 ```bash
 pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
 ```
 
-Replace `qiskit` with the extra you need, or name several, as in `noisevault[qiskit,stim]`. In a
-uv project, run `uv add` with the same quoted argument.
-
-| Extra | For |
-| --- | --- |
-| `qiskit` | `to_qiskit()` |
-| `cirq` | `to_cirq()` |
-| `pennylane` | `to_pennylane()` |
-| `stim` | `to_stim()` |
-| `ibm` | `nv pull --source ibm-account` and IBM fake backends. Includes `qiskit`. |
-| `google` | `nv.from_cirq_google`. Includes `cirq`. |
-| `all` | Every extra above |
+Use `cirq`, `pennylane` or `stim` in place of `qiskit`, name several as in
+`noisevault[qiskit,stim]`, or use `all`. In a uv project, `uv add` takes the same quoted argument.
+`nv doctor` lists what is installed.
 
 ## Quickstart
 
@@ -77,12 +65,15 @@ counts = sim.run(transpile(ghz, sim, seed_transpiler=1), seed_simulator=1).resul
 print(counts)
 # {'111': 510, '011': 8, '101': 6, '100': 4, '001': 1, '110': 6, '010': 2, '000': 487}
 print(sim.report.summary())
-# ...
+# NoiseVault 0.2.0 -> qiskit 2.5.2 (qiskit-aer 0.17.2): ibm_fez (nv:06404cefa54f)
+# options: unknown_gates='typical', readout=True
 # exact: gate noise: channels per exported native and physical locus (Aer QuantumError), ...
+# approximated: cz error: the stated error already includes single-qubit gate error ...
 # approximated: T2 of qubit 87: clamped to 2*T1 (the stated T2 exceeds 2*T1)
-# omitted: idle time outside explicit delays (insert delays with transpile(circuit, sim, ...
+# omitted: idle time outside explicit delays (insert delays with transpile(circuit, sim, scheduling_method='alap'))
+# unknown (no noise applied): preparation (reset) error of qubits [0, 1, 2, 3, 4, 5, 6, 7, ...] (156 qubits)
 # clamped: 82 gate(s) noisier than stated because relaxation alone exceeds the stated error; largest cz[91, 98] 0.00308 -> 0.0039
-# ...
+# used: cz took the calibration recorded for the opposite qubit order once
 # Calibration-derived models approximate the hardware; they are not a digital twin.
 ```
 
@@ -137,10 +128,12 @@ them with their qubit counts and processors.
 | Quantinuum (5) | trapped ion | `quantinuum_h1-1`, `quantinuum_h1-2`, `quantinuum_h2-1`, `quantinuum_h2-2`, `quantinuum_reimei` | 2023-08-21 to 2025-08-28 | [hardware-specifications](https://github.com/Quantinuum/quantinuum-hardware-specifications) repository, Apache-2.0 |
 | Google (2) | superconducting | `google_rainbow`, `google_weber` | 2021-11-03 to 2021-11-16 | [cirq-google](https://github.com/quantumlib/Cirq/tree/main/cirq-google) calibrations, Apache-2.0 |
 
-For more devices and dates, pull from an IBM Quantum account, or import a Qiskit backend, an IBM
-calibration CSV, saved Amazon Braket device properties, a cirq-google calibration or a dataset from
-Quantinuum's repository. [Data sources](docs/data-sources.md) gives each source's fields and
-license. To describe a device that does not exist, use `nv.Profile.uniform(...)`, as in
+For more devices and dates, pull from an IBM Quantum account with `nv pull --source ibm-account`,
+or import a Qiskit backend, an IBM calibration CSV, saved Amazon Braket device properties, a
+cirq-google calibration or a dataset from Quantinuum's repository. The account pull and IBM's
+fake backends need the `ibm` extra, and a cirq-google calibration needs the `google` extra.
+[Data sources](docs/data-sources.md) gives each source's fields and license. To describe a device
+that does not exist, use `nv.Profile.uniform(...)`, as in
 [Describe a hypothetical device](docs/recipes.md#describe-a-hypothetical-device).
 
 ## Check a conversion
