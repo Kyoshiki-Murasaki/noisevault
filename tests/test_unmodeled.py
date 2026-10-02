@@ -44,12 +44,9 @@ def test_every_bundled_profile_stays_physical_at_any_factor(info: ProfileInfo) -
             for q in range(scaled.device.num_qubits):
                 pair = table.qubit(q).readout
                 assert pair is None or 0 <= min(pair) <= max(pair) <= 1, (where, q)
-            report = Report.start(base, "reference", None)
             for circuit in circuits:
                 layout = chain[: circuit.num_qubits]
-                probs = probabilities(
-                    scaled, circuit.ops, circuit.num_qubits, layout=layout, report=report
-                )
+                probs = probabilities(scaled, circuit.ops, circuit.num_qubits, layout=layout)
                 assert np.isfinite(probs).all(), (where, circuit.name)
                 assert probs.sum() == pytest.approx(1), (where, circuit.name)
 

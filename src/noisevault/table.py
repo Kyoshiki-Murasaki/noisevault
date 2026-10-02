@@ -16,6 +16,7 @@ from .profile import Connectivity, GateSpec, GateState, Idle, merge_spec
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from typing import Any
 
     from .profile import Profile
 
@@ -214,16 +215,17 @@ class NoiseTable:
         phrases = []
         if self._gate_factor is not None:
             for name, spec in self.profile.gates.items():
-                reason = _no_power(spec, self.arity(name))
+                if _state(spec) != "calibrated":
+                    continue
+                reason = _no_power(spec.metric, self.arity(name))
                 if reason:
                     phrases.append(f"default {name} error is not scaled ({reason})")
             loci: dict[tuple[str, str], list[tuple[int, ...]]] = {}
             for record in self.profile.calibrations:
-                if record.metric is None or self._target_problem(record.gate, record.qubits):
+                reason = _no_power(record.metric, len(record.qubits))
+                if reason is None or self._target_problem(record.gate, record.qubits):
                     continue
-                spec = merge_spec(self.profile.gates[record.gate], record)
-                reason = _no_power(spec, len(record.qubits))
-                if reason:
+                if _state(merge_spec(self.profile.gates[record.gate], record)) == "calibrated":
                     loci.setdefault((record.gate, reason), []).append(record.qubits)
             phrases += [
                 f"{name} on {_qubits(on)} is not scaled ({reason})"
@@ -323,11 +325,11 @@ class NoiseTable:
         return GateNoise(name, qubits, state, r, pauli, spec.duration_ns, origin, spec)
 
 
-def _no_power(spec: GateSpec, num_qubits: int) -> str | None:
-    """Why a factor leaves this gate error as stated, or None when every factor scales it."""
-    if spec.metric is None or _state(spec) != "calibrated":
+def _no_power(metric: tuple[metrics.MetricKind, Any] | None, num_qubits: int) -> str | None:
+    """Why a factor leaves this error metric as stated, or None when every factor scales it."""
+    if metric is None:
         return None
-    kind, value = spec.metric
+    kind, value = metric
     if kind == "pauli":
         pauli = tuple(value)
         if metrics.pauli_embeddable(pauli):

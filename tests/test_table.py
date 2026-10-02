@@ -389,3 +389,27 @@ def test_unscaled_leaves_out_disabled_qubits_and_their_records() -> None:
         unmodeled_error={"gates": {"factor": 2.0}, "readout": {"factor": 2.0}},
     )
     assert table.unscaled() == ("readout of qubit 2 is not scaled (no better than chance)",)
+
+
+def test_unscaled_names_a_record_only_when_the_record_leaves_its_gate_enabled() -> None:
+    gates = {**toy()["gates"], "cz": {"avg_infidelity": 1e-2, "disabled": True}}
+    records = [
+        {"gate": "sx", "qubits": [1], "avg_infidelity": 0.6, "disabled": True},
+        {"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.78, "disabled": False},
+        {"gate": "cz", "qubits": [1, 2], "avg_infidelity": 0.78},
+    ]
+    table = table_of(gates=gates, calibrations=records, unmodeled_error={"gates": {"factor": 2.0}})
+    assert table.unscaled() == ("cz on qubits 0-1 is not scaled (at or past full depolarization)",)
+
+
+@pytest.mark.timing
+def test_unscaled_is_fast_on_a_fitted_156_qubit_profile() -> None:
+    kingston = nv.load("ibm_kingston@2026-04-15")
+    factors = {"gates": {"factor": 1.8}, "readout": {"factor": 1.3}}
+    table = kingston.model_copy(update={"unmodeled_error": factors}).table
+    phrases = table.unscaled()
+    start = time.perf_counter()
+    for _ in range(10):
+        assert table.unscaled() == phrases
+    elapsed = time.perf_counter() - start
+    assert elapsed < 0.02
