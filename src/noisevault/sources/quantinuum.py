@@ -151,14 +151,16 @@ def from_spec_csv(
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise _not_utf8(exc, str(path), hint=_SPEC_SHEET) from None
-    reader = csv.DictReader(io.StringIO(text, newline=""))
+    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    lines: list[tuple[int, list[str]]] = []
+    start = 1
     try:
-        headers = reader.fieldnames or []
-        records = list(reader)
+        for cells in reader:
+            lines.append((start, cells))
+            start = reader.line_num + 1
     except csv.Error as exc:
-        raise SourceDataError(
-            f"{path} line {reader.reader.line_num} is not valid CSV: {exc}"
-        ) from None
+        raise SourceDataError(f"{path} line {start} is not valid CSV: {exc}") from None
+    headers = lines[0][1] if lines else []
     for position, header in enumerate(headers, start=1):
         first = headers.index(header) + 1
         if first != position:
@@ -168,6 +170,13 @@ def from_spec_csv(
             )
     if missing := [repr(column) for column in ("Date", "Machine") if column not in headers]:
         raise SourceDataError(f"{path} has no {' and no '.join(missing)} column", hint=_SPEC_SHEET)
+    for line, cells in lines[1:]:
+        if cells and len(cells) != len(headers):
+            raise SourceDataError(
+                f"{path} line {line} has {len(cells)} cell{'s' if len(cells) != 1 else ''},"
+                f" but the header has {len(headers)} columns"
+            )
+    records = [dict(zip(headers, cells, strict=True)) for _, cells in lines[1:] if cells]
     rows = [row for row in records if row["Machine"] == machine]
     dated = [row for row in rows if row["Date"] == date]
     if len(dated) != 1:
@@ -255,7 +264,7 @@ def _rb(data: Mapping[str, Any], where: str, *, num_qubits: int) -> tuple[float,
     """
     d = 2**num_qubits
     per_clifford = _TWO_QUBIT_CLIFFORD_ZZ if num_qubits == 2 else 1.0
-    shots, survival = _key(data, "shots", where), _key(data, "survival", where)
+    shots, survival = _shots(data, where), _key(data, "survival", where)
     rate = decay_rate(*_pooled(survival, shots, f"{where}: survival"), asymptote=1 / d)
     error = 1 - ((d - 1) * rate ** (1 / per_clifford) + 1) / d
     if "leakage_postselect" not in data:
@@ -270,11 +279,36 @@ def _pooled(survival: Mapping[str, Any], shots: int, where: str) -> tuple[np.nda
     """Sequence lengths and mean survival over every zone and repetition at each length."""
     lengths = list(next(iter(survival.values())))
     zones = [(f"{where}[{zone!r}]", counts) for zone, counts in survival.items()]
-    means = [
-        np.mean([n for at, counts in zones for n in _key(counts, m, at).values()]) / shots
-        for m in lengths
-    ]
+    means = []
+    for m in lengths:
+        found = [
+            _count(n, shots, f"{at}[{m!r}][{rep!r}]")
+            for at, counts in zones
+            for rep, n in _key(counts, m, at).items()
+        ]
+        means.append(np.mean(found) / shots)
     return np.array([int(m) for m in lengths], dtype=float), np.array(means)
+
+
+def _shots(data: Mapping[str, Any], where: str) -> int:
+    shots = _key(data, "shots", where)
+    if not (_whole(shots) and shots > 0):
+        raise SourceDataError(f"{where}: shots is {shots!r}; expected a positive whole number")
+    return int(shots)
+
+
+def _count(n: Any, shots: int, where: str) -> int:
+    if not (_whole(n) and 0 <= n <= shots):
+        raise SourceDataError(
+            f"{where} is {n!r}; expected a whole number of shots from 0 to {shots}"
+        )
+    return int(n)
+
+
+def _whole(value: Any) -> bool:
+    if isinstance(value, float):
+        return value.is_integer()
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def decay_rate(lengths: np.ndarray, means: np.ndarray, *, asymptote: float) -> float:
@@ -307,12 +341,12 @@ def decay_rate(lengths: np.ndarray, means: np.ndarray, *, asymptote: float) -> f
 
 def _spam(data: Mapping[str, Any], where: str) -> tuple[float, float]:
     """(P(1|0), P(0|1)): wrong outcomes for each prepared state, averaged over qubits."""
-    shots, survival = _key(data, "shots", where), _key(data, "survival", where)
+    shots, survival = _shots(data, where), _key(data, "survival", where)
     rows = [(f"{where}: survival[{qubit!r}]", row) for qubit, row in survival.items()]
-    wrong = [
-        1 - float(np.mean([_key(row, state, at) for at, row in rows])) / shots
-        for state in ("0", "1")
-    ]
+    wrong = []
+    for state in ("0", "1"):
+        found = [_count(_key(row, state, at), shots, f"{at}[{state!r}]") for at, row in rows]
+        wrong.append(1 - float(np.mean(found)) / shots)
     # counts over shots are short decimals; drop the binary round-off of 1 - x
     return float(f"{wrong[0]:.12g}"), float(f"{wrong[1]:.12g}")
 

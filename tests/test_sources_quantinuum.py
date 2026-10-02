@@ -241,6 +241,31 @@ def test_spec_csv_that_is_not_utf8_names_the_line_and_the_byte(tmp_path: Path) -
     )
 
 
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ("1.33(9)E-03\n", "1.33(9)E-03,\n", "line 10 has 13 cells, but the header has 12 columns"),
+        (
+            ",,1.33(9)E-03\n",
+            ",1.33(9)E-03\n",
+            "line 10 has 11 cells, but the header has 12 columns",
+        ),
+        (",2.8(1)E-03\n", ',"2.8(1)E-03\n', "line 2 is not valid CSV: unexpected end of data"),
+    ],
+    ids=["extra-field", "missing-field", "unclosed-quote"],
+)
+def test_spec_csv_with_a_damaged_record_names_its_line(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
+    text = CSV.read_text(encoding="utf-8")
+    assert text.count(old) == 1
+    path = tmp_path / "damaged.csv"
+    path.write_text(text.replace(old, new), encoding="utf-8")
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
+    assert str(info.value) == f"{path} {message}"
+
+
 def test_spec_csv_with_carriage_return_line_ends_reads_the_same_row(tmp_path: Path) -> None:
     path = tmp_path / "mac.csv"
     path.write_bytes(CSV.read_bytes().replace(b"\n", b"\r"))
@@ -312,6 +337,79 @@ def _files_without(name: str, path: tuple[str, ...]) -> dict[str, bytes]:
         parent = parent[key]
     del parent[path[-1]]
     return {**_files(), name: json.dumps(doc).encode()}
+
+
+def _files_with(name: str, path: tuple[str, ...], value: Any) -> dict[str, bytes]:
+    doc = json.loads(_files()[name])
+    parent = doc
+    for key in path[:-1]:
+        parent = parent[key]
+    parent[path[-1]] = value
+    return {**_files(), name: json.dumps(doc).encode()}
+
+
+_SHOTS = "expected a positive whole number"
+
+
+@pytest.mark.parametrize(
+    ("name", "path", "value", "message"),
+    [
+        (
+            "SQ_RB",
+            ("shots",),
+            1,
+            f"{_DATA}/SQ_RB.json: survival['0']['256']['3'] is 97;"
+            " expected a whole number of shots from 0 to 1",
+        ),
+        ("TQ_RB", ("shots",), 0, f"{_DATA}/TQ_RB.json: shots is 0; {_SHOTS}"),
+        ("Memory_RB", ("shots",), True, f"{_DATA}/Memory_RB.json: shots is True; {_SHOTS}"),
+        ("SPAM", ("shots",), "10000", f"{_DATA}/SPAM.json: shots is '10000'; {_SHOTS}"),
+        (
+            "TQ_RB",
+            ("leakage_postselect", "(4, 5)", "128", "2"),
+            101,
+            f"{_DATA}/TQ_RB.json: leakage_postselect['(4, 5)']['128']['2'] is 101;"
+            " expected a whole number of shots from 0 to 100",
+        ),
+        (
+            "SQ_RB",
+            ("survival", "7", "1024", "0"),
+            97.5,
+            f"{_DATA}/SQ_RB.json: survival['7']['1024']['0'] is 97.5;"
+            " expected a whole number of shots from 0 to 100",
+        ),
+        (
+            "Memory_RB",
+            ("survival", "55", "16", "7"),
+            float("nan"),
+            f"{_DATA}/Memory_RB.json: survival['55']['16']['7'] is nan;"
+            " expected a whole number of shots from 0 to 40",
+        ),
+        (
+            "SPAM",
+            ("survival", "3", "1"),
+            -1.0,
+            f"{_DATA}/SPAM.json: survival['3']['1'] is -1.0;"
+            " expected a whole number of shots from 0 to 10000",
+        ),
+    ],
+    ids=[
+        "counts-above-shots",
+        "no-shots",
+        "boolean-shots",
+        "text-shots",
+        "leakage-above-shots",
+        "fractional-count",
+        "nan-count",
+        "negative-count",
+    ],
+)
+def test_dataset_file_with_an_impossible_count_names_where(
+    name: str, path: tuple[str, ...], value: Any, message: str
+) -> None:
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_data("H2-2", "2024_12_06", _files_with(name, path, value))
+    assert str(info.value) == message
 
 
 def _sampled_key_paths(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[str, ...]]:
