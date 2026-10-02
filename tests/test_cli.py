@@ -247,7 +247,7 @@ def test_no_color_removes_color_codes() -> None:
 @pytest.mark.parametrize(
     ("args", "error", "hint"),
     [
-        (["show", "ibm_fezz"], "did you mean ibm_fez?", None),
+        (["show", "ibm_fezz"], "did you mean 'ibm_fez'?", None),
         (
             ["show", "ibm_fez@2020-01-01"],
             "no ibm_fez profile calibrated on 2020-01-01 UTC;"

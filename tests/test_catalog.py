@@ -146,8 +146,11 @@ def test_an_unknown_id_says_where_to_see_the_ids() -> None:
 
 
 def test_unknown_id_suggests_close_matches() -> None:
-    with pytest.raises(ProfileNotFound, match="ibm_manila"):
+    with pytest.raises(ProfileNotFound) as info:
         nv.load("ibm_manilla")
+    assert info.value.message == (
+        "no profile with id 'ibm_manilla'; did you mean 'ibm_manila', 'ibm_miami'?"
+    )
 
 
 def test_an_id_that_also_names_a_folder_here_loads_the_id(tmp_path: Path, monkeypatch) -> None:
@@ -569,23 +572,102 @@ def test_a_damaged_index_entry_is_rebuilt_from_its_file(vault: Path, damage) -> 
     path = profile.save(vault_path(profile))
     catalog.vault_profiles()
     index = vault / ".index.json"
-    entry = json.loads(index.read_text())[path.name]
-    index.write_text(json.dumps({path.name: damage(entry)}))
+    data = json.loads(index.read_text())
+    entry = data["entries"][path.name]
+    index.write_text(json.dumps({**data, "entries": {path.name: damage(entry)}}))
     assert catalog.vault_profiles() == [catalog.ProfileInfo.of(profile, "vault", path)]
     assert nv.load("test_toy") == profile
     assert nv.load("ibm_manila").id == "ibm_manila"
-    assert json.loads(index.read_text())[path.name] == entry
+    assert _indexed(vault)[path.name] == entry
+
+
+def _indexed(vault: Path) -> dict[str, dict[str, object]]:
+    return json.loads((vault / ".index.json").read_text())["entries"]
 
 
 def _misindex(vault: Path, path: Path, **wrong: object) -> dict[str, object]:
     """Index the vault and rewrite one entry with wrong values. Returns the entry as it was."""
     catalog.vault_profiles()
     index = vault / ".index.json"
-    entries = json.loads(index.read_text())
-    entry = entries[path.name]
-    entries[path.name] = {**entry, **wrong}
-    index.write_text(json.dumps(entries))
+    data = json.loads(index.read_text())
+    entry = data["entries"][path.name]
+    data["entries"][path.name] = {**entry, **wrong}
+    index.write_text(json.dumps(data))
     return entry
+
+
+@pytest.mark.parametrize(
+    "foreign",
+    [
+        lambda data, entries: entries,
+        lambda data, entries: {
+            **data,
+            "version": 999,
+            "digest": catalog._digest(entries),
+            "entries": entries,
+        },
+        lambda data, entries: {**data, "entries": entries},
+    ],
+    ids=["no version", "unknown version", "stale digest"],
+)
+def test_an_index_this_noisevault_did_not_write_is_ignored_and_rewritten(
+    monkeypatch: pytest.MonkeyPatch, vault: Path, foreign
+) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    path = profile.save(vault_path(profile))
+    catalog.vault_profiles()
+    index = vault / ".index.json"
+    data = json.loads(index.read_text())
+    entry = data["entries"][path.name]
+    index.write_text(json.dumps(foreign(data, {path.name: {**entry, "id": "ibm_mistyped"}})))
+    writes: list[Path] = []
+    real = catalog.write_atomically
+    monkeypatch.setattr(catalog, "write_atomically", lambda p, d: writes.append(p) or real(p, d))
+    assert [i.id for i in catalog.vault_profiles()] == ["test_toy"]
+    data = json.loads(index.read_text())
+    assert data["entries"] == {path.name: entry}
+    assert (data["version"], data["digest"]) == (
+        catalog._INDEX_VERSION,
+        catalog._digest(data["entries"]),
+    )
+    assert [i.id for i in catalog.vault_profiles()] == ["test_toy"]
+    assert writes == [index]
+
+
+def test_an_index_entry_time_is_read_as_utc() -> None:
+    (manila,) = [i for i in bundled_profiles() if i.id == "ibm_manila"]
+    entry = {**catalog.index_entry(manila.load()), "calibrated_at": "2024-05-28T01:27:23+07:00"}
+    info = catalog.ProfileInfo.from_entry(entry, "bundled", manila.path)
+    assert info.ref == "ibm_manila@2024-05-27T18:27:23Z"
+    assert info.calibrated_at.date().isoformat() == "2024-05-27"
+
+
+def test_an_index_time_with_an_offset_does_not_bypass_utc_day_matching(vault: Path) -> None:
+    manila = nv.load("ibm_manila")
+    path = manila.save(vault_path(manila))
+    entry = _misindex(vault, path, calibrated_at="2024-05-28T01:27:23+07:00")
+    for expect in (None, manila.short_fingerprint):
+        with pytest.raises(ProfileNotFound) as info:
+            nv.load("ibm_manila@2024-05-28", expect=expect)
+        assert info.value.message == (
+            "no ibm_manila profile calibrated on 2024-05-28 UTC;"
+            " you have ibm_manila@2024-05-27T18:27:23Z"
+        )
+    assert _indexed(vault)[path.name] == entry
+
+
+def test_a_misindexed_id_hides_a_vault_profile_from_neither_load_nor_pull(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    later = _later_manila()
+    path = later.save(vault_path(later))
+    entry = _misindex(vault, path, id="ibm_mistyped")
+    assert nv.load("ibm_manila") == later
+    _serve(monkeypatch, later)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert catalog.pull_and_save("ibm_manila", source="ibm") == (later, path, False)
+    assert _indexed(vault)[path.name] == entry
 
 
 def test_a_stale_index_date_does_not_bypass_dated_ref_matching(vault: Path) -> None:
@@ -600,7 +682,7 @@ def test_a_stale_index_date_does_not_bypass_dated_ref_matching(vault: Path) -> N
     )
     with pytest.raises(ProfileNotFound):
         nv.load("ibm_manila@2024-05-28", expect=manila.short_fingerprint)
-    assert json.loads((vault / ".index.json").read_text())[path.name] == entry
+    assert _indexed(vault)[path.name] == entry
 
 
 def test_a_stale_index_date_does_not_hide_a_vault_profile(vault: Path) -> None:
@@ -608,7 +690,7 @@ def test_a_stale_index_date_does_not_hide_a_vault_profile(vault: Path) -> None:
     path = profile.save(vault_path(profile))
     entry = _misindex(vault, path, calibrated_at="2025-01-02T00:00:00Z")
     assert nv.load("test_toy@2025-01-01") == profile
-    assert json.loads((vault / ".index.json").read_text())[path.name] == entry
+    assert _indexed(vault)[path.name] == entry
 
 
 def test_a_stale_index_time_does_not_make_a_ref_ambiguous(vault: Path) -> None:
@@ -636,7 +718,7 @@ def test_a_load_corrects_the_stale_index_fields_nv_list_shows(vault: Path) -> No
     assert [i for i in nv.profiles() if i.id == "test_toy"] == [
         catalog.ProfileInfo.of(profile, "vault", path)
     ]
-    assert json.loads((vault / ".index.json").read_text())[path.name] == entry
+    assert _indexed(vault)[path.name] == entry
 
 
 @pytest.mark.parametrize("wrong", ["calibrated_at", "fingerprint"])
