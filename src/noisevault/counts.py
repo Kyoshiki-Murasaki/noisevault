@@ -10,10 +10,8 @@ file was written in.
 
 from __future__ import annotations
 
-import gzip
 import json
 import math
-import zlib
 from collections import Counter
 from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
@@ -36,7 +34,7 @@ from pydantic import (
 )
 
 from . import __version__, check, gates
-from .errors import CountsError, NoiseVaultError, did_you_mean, parse_json
+from .errors import CountsError, NoiseVaultError, did_you_mean, plural
 from .profile import (
     Count,
     CountsSource,
@@ -50,6 +48,7 @@ from .profile import (
     _readable_json,
     _sha256,
     _string_keys,
+    read_json_file,
     write_atomically,
 )
 from .reference import MAX_QUBITS, Op, charged_as, outcome_bits, probabilities
@@ -125,7 +124,7 @@ def _check_gate(op: Op) -> None:
             " sx, cz or rz, or delay",
         )
     if len(op.qubits) != info.arity:
-        raise CountsError(f"{op.name} acts on {_count(info.arity, 'qubit')}, not {len(op.qubits)}")
+        raise CountsError(f"{op.name} acts on {plural(info.arity, 'qubit')}, not {len(op.qubits)}")
     if len(set(op.qubits)) != len(op.qubits):
         raise CountsError(
             f"{op.name} acts on qubits {list(op.qubits)}; its targets must be distinct"
@@ -133,7 +132,7 @@ def _check_gate(op: Op) -> None:
     if len(op.params) != len(info.params):
         names = f" ({', '.join(info.params)})" if info.params else ""
         raise CountsError(
-            f"{op.name} takes {_count(len(info.params), 'parameter')}{names}, not {len(op.params)}"
+            f"{op.name} takes {plural(len(info.params), 'parameter')}{names}, not {len(op.params)}"
         )
     bad = next((p for p in op.params if not math.isfinite(p)), None)
     if bad is not None:
@@ -319,8 +318,8 @@ class MeasuredCircuit(PlannedCircuit):
                 )
             if width and len(key) != width:
                 raise CountsError(
-                    f"key {_shown(key)} has {_count(len(key), 'bit')}, but the circuit"
-                    f" measures {_count(width, 'qubit')}",
+                    f"key {_shown(key)} has {plural(len(key), 'bit')}, but the circuit"
+                    f" measures {plural(width, 'qubit')}",
                     hint=_KEY_HINT,
                 )
         return FrozenDict({key: counts[key] for key in sorted(counts) if counts[key]})
@@ -437,25 +436,7 @@ def load_counts(path: str | Path) -> MeasuredCounts:
     the path and a ``hint`` that says what to do. A file that cannot be read raises OSError.
     """
     path = Path(path)
-    raw = path.read_bytes()
-    try:
-        if raw[:2] == b"\x1f\x8b":
-            raw = gzip.decompress(raw)
-    except (EOFError, zlib.error, gzip.BadGzipFile) as exc:
-        raise CountsError(
-            f"{path} is a damaged gzip file ({exc})", hint="copy or save it again"
-        ) from None
-    try:
-        data = parse_json(raw)
-    except json.JSONDecodeError as exc:
-        where = f"{exc.msg.removesuffix(' at')} at line {exc.lineno}, column {exc.colno}"
-        raise CountsError(f"{path} is not JSON ({where})", hint=_not_json_hint(path)) from None
-    except UnicodeDecodeError:
-        raise CountsError(
-            f"{path} is not JSON (not UTF-8 text)", hint=_not_json_hint(path)
-        ) from None
-    except ValueError as exc:
-        raise CountsError(f"{path} is not JSON ({exc})", hint=_not_json_hint(path)) from None
+    data = read_json_file(path, "counts", CountsError)
     if not isinstance(data, dict) or "nv_counts" not in data:
         if isinstance(data, dict) and "noisevault" in data:
             raise CountsError(
@@ -496,12 +477,6 @@ def _first_issue(exc: ValidationError) -> tuple[str, str | None]:
     text = f"{where}: {text}" if where else text
     total = exc.error_count()
     return (f"{text} (1 of {total} problems)" if total > 1 else text), hint
-
-
-def _not_json_hint(path: Path) -> str:
-    if path.name.endswith((".json", ".json.gz")):
-        return "the file is damaged or cut short; save the counts again"
-    return "give a counts file (.json or .json.gz)"
 
 
 def plan(
@@ -614,7 +589,3 @@ def _real(value: int | float) -> float:
 def _shown(value: Any, limit: int = 40) -> str:
     text = json.dumps(value, ensure_ascii=False, default=repr)
     return text if len(text) <= limit else text[: limit - 3] + "..."
-
-
-def _count(n: int, noun: str) -> str:
-    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"

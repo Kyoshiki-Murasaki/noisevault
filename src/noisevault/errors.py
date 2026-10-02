@@ -1,11 +1,9 @@
-"""Exceptions and warnings raised by NoiseVault, and helpers for raising and wording them."""
-
 from __future__ import annotations
 
 import difflib
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 
@@ -72,10 +70,6 @@ class CountsError(NoiseVaultError, ValueError):
 
 
 def parse_json(raw: bytes) -> Any:
-    """``json.loads``, except that JSON nested deeper than it can parse is a JSONDecodeError too.
-
-    That error gives the depth and points at the innermost bracket.
-    """
     try:
         return json.loads(raw)
     except RecursionError:
@@ -94,10 +88,38 @@ def parse_json(raw: bytes) -> Any:
 _STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
 
 
+def unreadable(source: str, exc: Exception) -> str:
+    if isinstance(exc, UnicodeDecodeError):
+        line = exc.object.count(b"\n", 0, exc.start) + 1
+        return f"{source} is not UTF-8 text (byte {exc.object[exc.start]:#04x} on line {line})"
+    if isinstance(exc, json.JSONDecodeError):
+        reason = exc.msg.removesuffix(" at")
+        where = f"{reason[:1].lower()}{reason[1:]} at line {exc.lineno}, column {exc.colno}"
+        return f"{source} is not JSON ({where})"
+    if isinstance(exc, ValueError):
+        return f"{source} is not JSON ({exc})"
+    return f"{source} is a damaged gzip file ({exc})"
+
+
 def did_you_mean(given: str, choices: Iterable[str]) -> str:
-    """``did you mean 'X'? `` for the choice closest to a mistyped value; '' when none is close."""
     close = difflib.get_close_matches(given, list(choices), n=1)
     return f"did you mean '{close[0]}'? " if close else ""
+
+
+def plural(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def joined(words: Sequence[str], conjunction: str = "and") -> str:
+    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} {conjunction} {words[-1]}"
+
+
+def qubit_loci(*loci: Sequence[int]) -> str:
+    labels = ["-".join(map(str, locus)) for locus in loci]
+    if len(labels) > 4:
+        labels = [*labels[:3], f"{len(labels) - 3} more"]
+    single = len(loci) == 1 and len(loci[0]) == 1
+    return f"qubit {joined(labels)}" if single else f"qubits {joined(labels)}"
 
 
 class NoiseVaultWarning(UserWarning):

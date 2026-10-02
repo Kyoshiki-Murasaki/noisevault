@@ -22,8 +22,8 @@ from pydantic import AfterValidator, BaseModel, Field, TypeAdapter
 
 from .. import __version__
 from ..errors import SourceUnavailable, did_you_mean
-from ..profile import Profile
-from . import OFFLINE_HINT, OLDER_HINT, Origin, read_reply
+from ..profile import Profile, iso_z
+from . import OFFLINE_HINT, OLDER_HINT, Origin, checked_by, read_reply
 
 API = "https://api.ionq.co/v0.4"
 _TIMEOUT_S = 30.0
@@ -50,7 +50,7 @@ class _Backend(BaseModel):
 
 class _Record(BaseModel):
     id: str
-    date: Annotated[str, AfterValidator(datetime.fromisoformat)]
+    date: Annotated[str, AfterValidator(checked_by(datetime.fromisoformat))]
     backend: str
     qubits: int | None = None
     connectivity: list[Annotated[list[int], Field(min_length=2, max_length=2)]] | None = None
@@ -311,7 +311,7 @@ def _newest_usable(
     null fields from the next newer record on the page (seen on qpu.aria-1), so a record is
     judged on the page that holds it alone, which is also the page cited.
     """
-    end = None if at is None else _utc(at).isoformat().replace("+00:00", "Z")
+    end = None if at is None else iso_z(_utc(at))
     skipped: list[str] = []
     probes = 0
     page = 1

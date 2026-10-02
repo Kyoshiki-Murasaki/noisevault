@@ -8,8 +8,6 @@ trailing spaces and any time unit in parentheses.
 
 from __future__ import annotations
 
-import csv
-import io
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,9 +15,9 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import units
-from ..errors import SourceDataError
+from ..errors import SourceDataError, plural
 from ..profile import Profile
-from . import Origin
+from . import Origin, csv_by_line, source_text
 from .qiskit_backend import (
     Calibration,
     Instruction,
@@ -92,29 +90,22 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: str | datetime
     """A profile from an IBM calibration CSV; ``device`` is e.g. ``"ibm_brisbane"``."""
     path = Path(path)
     raw = path.read_bytes()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        line = exc.object.count(b"\n", 0, exc.start) + 1
-        raise SourceDataError(
-            f"{path.name} is not UTF-8 text: line {line} has the byte {exc.object[exc.start]:#04x}",
-            hint=_AS_DOWNLOADED,
-        ) from None
+    text = source_text(raw, path.name, _AS_DOWNLOADED)
     if text.lstrip().startswith(("{", "[")):
         raise SourceDataError(
             f"{path.name} looks like IBM properties JSON, not a calibration CSV",
             hint="use nv.pull(<name>) for a device, or from_qiskit_backend(<backend>) for a Qiskit"
             " backend",
         )
-    headers, *records = _lines(text, path.name) or [[]]
+    (_, headers), *records = csv_by_line(text, path.name) or [(1, [])]
     columns, ignored = _columns(headers, path.name)
     rows = []
-    for line, cells in enumerate(records, start=2):
+    for line, cells in records:
         if not cells:
             continue
         if len(cells) != len(headers):
             raise SourceDataError(
-                f"{path.name} line {line} has {len(cells)} cell{'s' if len(cells) != 1 else ''},"
+                f"{path.name} line {line} has {plural(len(cells), 'cell')},"
                 f" but the header has {len(headers)} columns"
             )
         row = dict(zip(headers, cells, strict=True))
@@ -137,18 +128,6 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: str | datetime
         },
         origin=Origin(path.name, hint=f"correct that value in {path.name}"),
     )
-
-
-def _lines(text: str, name: str) -> list[list[str]]:
-    """The cells on each line of ``text``; a quoted cell cannot run on to the next line."""
-    lines = []
-    for number, line in enumerate(io.StringIO(text, newline=""), start=1):
-        try:
-            [cells] = csv.reader([line], strict=True)
-        except csv.Error as exc:
-            raise SourceDataError(f"{name} line {number} is not valid CSV: {exc}") from None
-        lines.append(cells)
-    return lines
 
 
 def _columns(headers: list[str], name: str) -> tuple[dict[str, _Column], list[str]]:

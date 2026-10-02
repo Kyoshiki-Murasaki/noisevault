@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__, gates, metrics, units
-from ..errors import SourceDataError
+from ..errors import SourceDataError, qubit_loci
 from ..profile import FORMAT_VERSION, Profile, Technology
 from . import Origin
 
@@ -455,7 +455,10 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
                 tuple(entry["qubits"]),
                 error=_value(values.get("gate_error")),
                 duration_ns=_in_unit(
-                    values.get("gate_length"), "ns", origin, f"{name} on qubits {entry['qubits']}"
+                    values.get("gate_length"),
+                    "ns",
+                    origin,
+                    f"{name} on {qubit_loci(entry['qubits'])}",
                 ),
                 operational=_value(values.get("operational")) != 0,
             )
@@ -498,20 +501,6 @@ def _in_unit(
 
 
 def to_profile(cal: Calibration, provenance: Mapping[str, Any], *, origin: Origin) -> Profile:
-    """The profile of an IBM-shaped calibration; a value the format refuses is a SourceDataError
-    from ``origin``.
-
-    Device-wide defaults are medians over the working loci (``statistic: median``); every locus
-    keeps its own record (``statistic: individual``). A readout or prep default is left out when
-    a working qubit has none of its own, so that qubit's value stays unknown. IBM's dead-gate
-    sentinel (an error at or above the ``d/(d+1)`` bound, in practice ``gate_error = 1``) and
-    ``operational = 0`` become ``disabled: true``. A gate with zero error and zero duration on
-    every working locus (IBM's ``rz``) is virtual, and its disabled loci keep their records.
-    When the source lists where a gate runs, a qubit or connected pair off that list gets
-    ``disabled: true``. A working locus with no error of its own takes the device median, and a
-    note names it.
-    Records of a symmetric gate that agree in both directions are stored once.
-    """
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
     for inst in cal.instructions:

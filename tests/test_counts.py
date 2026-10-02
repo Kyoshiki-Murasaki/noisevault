@@ -312,16 +312,17 @@ def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) ->
             load_counts(path)
         errors[path] = caught.value
 
-    assert errors[damaged].message.startswith(f"{damaged} is not JSON (Expecting property name")
+    assert errors[damaged].message.startswith(f"{damaged} is not JSON (expecting property name")
     assert errors[damaged].hint == "the file is damaged or cut short; save the counts again"
     assert errors[cut].message == (
-        f"{cut} is not JSON (Unterminated string starting at line 1, column 32)"
+        f"{cut} is not JSON (unterminated string starting at line 1, column 32)"
     )
-    assert errors[notes].message == f"{notes} is not JSON (Expecting value at line 1, column 1)"
+    assert errors[notes].message == f"{notes} is not JSON (expecting value at line 1, column 1)"
     assert errors[notes].hint == "give a counts file (.json or .json.gz)"
     assert errors[profile].message == f"{profile} is a profile, not a counts file"
     assert errors[profile].hint == "nv compare takes the profile first and the counts file second"
     assert errors[wrong].message.startswith(f"{wrong} is a damaged gzip file (")
+    assert errors[wrong].hint == "the file is damaged or cut short; save the counts again"
     assert all("\n" not in str(e) for e in errors.values())
 
 

@@ -1,10 +1,8 @@
 """IBM calibration history from the Hugging Face dataset phanerozoic/qiskit-calibration-drift.
 
 The dataset's poller reads IBM's ``backend.properties()`` every 30 minutes and keeps one row per
-new calibration of a property: ``(backend, property, qubit_a, qubit_b, calibrated_time)``. A
-profile "at D" takes the newest row of each property calibrated at or before D and goes through
-the same IBM conversion as a pull. The importer reads a local copy of the parquet file with
-pyarrow and never reads its ``SN`` column, which is CC-BY-NC-4.0.
+new calibration of a property: ``(backend, property, qubit_a, qubit_b, calibrated_time)``. The
+importer never reads its ``SN`` column, which is CC-BY-NC-4.0.
 """
 
 from __future__ import annotations
@@ -17,10 +15,16 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ..errors import SourceDataError, SourceUnavailable, did_you_mean, install_hint
+from ..errors import (
+    SourceDataError,
+    SourceUnavailable,
+    did_you_mean,
+    install_hint,
+    joined,
+    qubit_loci,
+)
 from ..gates import is_symmetric
-from ..profile import Profile
-from ..table import _qubits
+from ..profile import Profile, iso_z
 from . import OLDER_HINT, Origin
 from .qiskit_backend import as_utc, calibration_from_properties, to_profile
 
@@ -52,7 +56,7 @@ _PROCESSORS = {
 _READOUT_PAIR = {"p1_given_0": "prob_meas1_prep0", "p0_given_1": "prob_meas0_prep1"}
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _STALE_AFTER = timedelta(days=7)
-_VALUE_NAMES: dict[str, str | None] = {
+_QUBIT_VALUE_NAMES = {
     "T1": "T1",
     "T2": "T2",
     "init_error": "prep",
@@ -60,9 +64,8 @@ _VALUE_NAMES: dict[str, str | None] = {
     "readout_length": "readout",
     "prob_meas0_prep1": "readout",
     "prob_meas1_prep0": "readout",
-    "measure": None,
-    "rz": None,
 }
+_READ_FROM_QUBIT_ROWS_OR_VIRTUAL = frozenset({"measure", "rz"})
 
 
 class ArchiveSpan(NamedTuple):
@@ -112,13 +115,13 @@ def from_calibration_archive(
     stamp = None if at is None else as_utc(at, name="at")
     if stamp is not None and stamp < first:
         raise SourceDataError(
-            f"{path.name} has no complete {name} calibration before {_iso(first)},"
+            f"{path.name} has no complete {name} calibration before {iso_z(first)},"
             f" when the archive first recorded {name}",
             hint="pass an at= time on or after that",
         )
     picked = _newest(rows, stamp)
     origin = Origin(f"the {name} rows of {path.name}", hint=OLDER_HINT)
-    cal = calibration_from_properties(_properties(name, picked), origin=origin)
+    cal = calibration_from_properties(_backend_properties(name, picked), origin=origin)
     notes = [
         "The dataset is CC-BY-4.0, but its numbers are IBM Quantum calibrations under IBM's"
         " terms, so redistributable is unknown, as for nv pull."
@@ -131,17 +134,18 @@ def from_calibration_archive(
         )
     elif stamp is not None:
         newest = calibration_from_properties(
-            _properties(name, _newest(rows, None)),
+            _backend_properties(name, _newest(rows, None)),
             origin=Origin(f"the newest {name} rows of {path.name}"),
         )
         missing = sorted({i.name for i in newest.instructions} - {i.name for i in cal.instructions})
         if missing:
             notes.append(
-                f"This profile has no {_listed(missing, 'or')} gate. The archive calibrates"
-                f" {_listed(missing, 'and')} on {name} only after {_iso(stamp)}."
+                f"This profile has no {joined(missing, 'or')} gate. The archive calibrates"
+                f" {joined(missing, 'and')} on {name} only after {iso_z(stamp)}."
             )
     stale = _stale_note(picked, stamp, cal.skipped)
-    notes += [stale] if stale else []
+    if stale:
+        notes.append(stale)
     dead = {}
     for index, qubit in sorted(cal.qubits.items()):
         stuck = [label for field, label in _READOUT_PAIR.items() if getattr(qubit, field) == 1]
@@ -197,14 +201,13 @@ def _pyarrow() -> ModuleType:
 
 
 def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa.Table:
-    """``columns`` of the file, and only the rows of ``device`` when given."""
     arrow = _pyarrow()
     try:
         schema = arrow.parquet.read_schema(path)
         missing = [c for c in _COLUMN_TYPES if c not in schema.names]
         if missing:
             raise SourceDataError(
-                f"{path.name} is not a {DATASET} data file: it has no {_listed(missing, 'or')}"
+                f"{path.name} is not a {DATASET} data file: it has no {joined(missing, 'or')}"
                 " column"
             )
         for column in columns:
@@ -234,7 +237,6 @@ def _is(types: Any, kind: Any, expected: str) -> bool:
 
 
 def _newest(rows: pa.Table, at: datetime | None) -> list[dict[str, Any]]:
-    """The newest row of each (property, qubit_a, qubit_b) calibrated at or before ``at``."""
     arrow = _pyarrow()
     pc = arrow.compute
     if at is not None:
@@ -249,8 +251,7 @@ def _newest(rows: pa.Table, at: datetime | None) -> list[dict[str, Any]]:
     return picked.sort_by([(column, "ascending") for column in [*key, "value"]]).to_pylist()
 
 
-def _properties(device: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """IBM BackendProperties as a dict, the shape ``calibration_from_properties`` reads."""
+def _backend_properties(device: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     qubits: dict[int, list[dict[str, Any]]] = {}
     gates: dict[tuple[str, tuple[int, ...]], list[dict[str, Any]]] = {}
     top = -1
@@ -287,7 +288,6 @@ def _locus(row: dict[str, Any]) -> tuple[int, ...]:
 
 
 def _gate_parameter(name: str) -> tuple[str, str] | None:
-    """``("measure_2", "gate_length")`` for ``measure_2_gate_length``; None for a qubit property."""
     param = next((p for p in _GATE_PARAMETERS if name.endswith("_" + p)), None)
     return None if param is None else (name.removesuffix("_" + param), param)
 
@@ -295,12 +295,6 @@ def _gate_parameter(name: str) -> tuple[str, str] | None:
 def _stale_note(
     rows: list[dict[str, Any]], at: datetime | None, unconverted: tuple[str, ...]
 ) -> str | None:
-    """Name the values calibrated more than 7 days before ``at``, or before the newest row.
-
-    A row goes by the profile value it feeds: T1, T2, readout, prep (``init_error``) or its gate.
-    Some rows feed none: the ``measure`` gate, because readout comes from the qubit rows; ``rz``,
-    which is virtual; and the gates the conversion skips.
-    """
     before = at or max(row["calibrated_time"] for row in rows)
     oldest: dict[str, datetime] = {}
     loci: dict[str, set[tuple[int, ...]]] = {}
@@ -310,7 +304,12 @@ def _stale_note(
             continue
         name = row["property"]
         split = _gate_parameter(name)
-        label = _VALUE_NAMES.get(name) if split is None else _VALUE_NAMES.get(split[0], split[0])
+        if split is None:
+            label = _QUBIT_VALUE_NAMES.get(name)
+        elif split[0] not in _READ_FROM_QUBIT_ROWS_OR_VIRTUAL:
+            label = split[0]
+        else:
+            continue
         if label is None or label in unconverted:
             continue
         locus = _locus(row)
@@ -321,10 +320,10 @@ def _stale_note(
     if not loci:
         return None
     stale = sorted((oldest[label], label, sorted(on)) for label, on in loci.items())
-    named = [f"{label} on {_qubits(on)}" for _, label, on in stale]
+    named = [f"{label} on {qubit_loci(*on)}" for _, label, on in stale]
     if len(named) > 4:
-        named = [*named[:3], f"also {_listed([label for _, label, _ in stale[3:]], 'and')}"]
-    when = "the newest calibration" if at is None else _iso(at)
+        named = [*named[:3], f"also {joined([label for _, label, _ in stale[3:]], 'and')}"]
+    when = "the newest calibration" if at is None else iso_z(at)
     return (
         f"These values were calibrated more than {_STALE_AFTER.days} days before {when}, the"
         f" oldest on {stale[0][0].date().isoformat()}: {'; '.join(named)}."
@@ -332,19 +331,8 @@ def _stale_note(
 
 
 def _revision(path: Path) -> tuple[str, str] | None:
-    """The Hub revision and the file's path in the repository, from ``snapshots/<sha>/``."""
     parts = path.parts
     for i, part in enumerate(parts[:-2]):
         if part == "snapshots" and _REVISION.fullmatch(parts[i + 1]):
             return parts[i + 1], "/".join(parts[i + 2 :])
     return None
-
-
-def _listed(words: list[str], conjunction: str) -> str:
-    if len(words) == 1:
-        return words[0]
-    return f"{', '.join(words[:-1])} {conjunction} {words[-1]}"
-
-
-def _iso(stamp: datetime) -> str:
-    return stamp.isoformat().replace("+00:00", "Z")

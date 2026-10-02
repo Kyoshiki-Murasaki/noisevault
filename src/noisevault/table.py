@@ -12,6 +12,7 @@ from itertools import combinations
 from typing import TYPE_CHECKING, Literal
 
 from . import gates, metrics
+from .errors import qubit_loci
 from .profile import Connectivity, GateSpec, GateState, Idle, merge_spec
 
 if TYPE_CHECKING:
@@ -324,15 +325,7 @@ def unscaled_phrases(
         loci.setdefault((f"{name} on", reason), {})[qubits] = None
     for qubit, reason in readout:
         loci.setdefault(("readout of", reason), {})[(qubit,)] = None
-    return [f"{what} {_qubits(list(on))} is not scaled ({why})" for (what, why), on in loci.items()]
-
-
-def _qubits(loci: Sequence[tuple[int, ...]]) -> str:
-    labels = ["-".join(map(str, locus)) for locus in loci]
-    if len(labels) > 4:
-        labels = [*labels[:3], f"{len(labels) - 3} more"]
-    listed = labels[0] if len(labels) == 1 else f"{', '.join(labels[:-1])} and {labels[-1]}"
-    return f"qubit {listed}" if len(loci) == 1 and len(loci[0]) == 1 else f"qubits {listed}"
+    return [f"{what} {qubit_loci(*on)} is not scaled ({why})" for (what, why), on in loci.items()]
 
 
 def _without_own_noise(found: GateNoise | Unavailable) -> bool:

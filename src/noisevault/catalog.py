@@ -37,6 +37,8 @@ from .profile import (
     Profile,
     Ref,
     canonical_json,
+    exact_ref,
+    iso_z,
     load_bytes,
     load_file,
     parse_ref,
@@ -90,7 +92,7 @@ class ProfileInfo:
 
     @property
     def ref(self) -> str:
-        return _ref(self.id, self.calibrated_at)
+        return exact_ref(self.id, self.calibrated_at)
 
     def load(self) -> Profile:
         return load_bytes(self.path.read_bytes())
@@ -136,7 +138,7 @@ def index_entry(profile: Profile) -> dict[str, Any]:
     return {
         "id": profile.id,
         "date": dev.calibrated_at.date().isoformat() if dev.calibrated_at else None,
-        "calibrated_at": _stamp(dev.calibrated_at) if dev.calibrated_at else None,
+        "calibrated_at": iso_z(dev.calibrated_at) if dev.calibrated_at else None,
         "vendor": dev.vendor,
         "technology": dev.technology,
         "num_qubits": dev.num_qubits,
@@ -389,7 +391,7 @@ def _pinned(profile: Profile, expect: str | None) -> bool:
 
 def _changed(ref: Ref, profile: Profile, path: Path | Traversable) -> ProfileNotFound:
     said = _said(ref)
-    held = _ref(profile.id, profile.device.calibrated_at)
+    held = exact_ref(profile.id, profile.device.calibrated_at)
     return ProfileNotFound(
         f"{path} holds {held}, not {said}; the file changed during this load",
         hint=f"load {said} again",
@@ -515,13 +517,13 @@ def _expect_prefix(expect: str) -> str:
 
 def _check_expect(profile: Profile, expect: str, path: Path | Traversable) -> None:
     if not _pinned(profile, expect):
-        held = _ref(profile.id, profile.device.calibrated_at)
+        held = exact_ref(profile.id, profile.device.calibrated_at)
         loaded = f"{path} holds {held} ({profile.short_fingerprint})"
         raise _mismatch(loaded, expect, profile.id, profiles())
 
 
 def _said(ref: Ref) -> str:
-    return f"{ref.id}@{ref.date}" if ref.date else _ref(ref.id, ref.timestamp)
+    return f"{ref.id}@{ref.date}" if ref.date else exact_ref(ref.id, ref.timestamp)
 
 
 def _loaded(ref: Ref, held: list[ProfileInfo]) -> str:
@@ -554,7 +556,7 @@ def _no_calibration(ref: Ref, candidates: list[ProfileInfo]) -> ProfileNotFound:
     have = ", ".join(sorted({i.ref for i in candidates}))
     if ref.timestamp is not None:
         return ProfileNotFound(
-            f"no {ref.id} profile calibrated at {_stamp(ref.timestamp)}; you have {have}"
+            f"no {ref.id} profile calibrated at {iso_z(ref.timestamp)}; you have {have}"
         )
     fetch = (
         f"run nv pull {ref.id} --at {ref.date}T23:59:59Z to fetch the calibration in effect at"
@@ -587,11 +589,3 @@ def _dedupe(infos: list[ProfileInfo]) -> list[ProfileInfo]:
 
 def _epoch(when: datetime | None) -> float:
     return when.timestamp() if when else float("-inf")
-
-
-def _stamp(when: datetime) -> str:
-    return when.isoformat().replace("+00:00", "Z")
-
-
-def _ref(device: str, when: datetime | None) -> str:
-    return f"{device}@{_stamp(when)}" if when else device

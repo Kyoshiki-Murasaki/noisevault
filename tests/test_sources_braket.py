@@ -270,14 +270,13 @@ def test_values_it_cannot_read_are_named() -> None:
     [
         (
             b'{"oneQubitProperties": {',
-            "is not valid JSON: expecting property name enclosed in double quotes at line 1,"
-            " column 25",
+            "is not JSON (expecting property name enclosed in double quotes at line 1, column 25)",
         ),
         (
             b'{"braketSchemaHeader": {"name": "braket',
-            "is not valid JSON: unterminated string starting at line 1, column 33",
+            "is not JSON (unterminated string starting at line 1, column 33)",
         ),
-        (b'{\n  "braketSchemaHeader": "\xb5"}', "is not UTF-8 text: line 2 has the byte 0xb5"),
+        (b'{\n  "braketSchemaHeader": "\xb5"}', "is not UTF-8 text (byte 0xb5 on line 2)"),
         (b"[]", "is not Braket standardized gate-model properties"),
         (b'{"standardized": [1]}', "is not Braket standardized gate-model properties"),
     ],
@@ -301,8 +300,7 @@ def test_a_file_nested_deeper_than_the_parser_takes_names_the_file(tmp_path: Pat
         from_braket(path)
     depth = len(nested) // 2
     assert str(info.value) == (
-        f"saved.json is not valid JSON: nested {depth} levels deep at line 1, column {depth};"
-        f" {_SAVE}"
+        f"saved.json is not JSON (nested {depth} levels deep at line 1, column {depth}); {_SAVE}"
     )
 
 

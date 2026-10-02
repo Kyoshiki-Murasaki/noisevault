@@ -18,9 +18,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ValidationError
 
 from .. import __version__, gates, units
-from ..errors import SourceDataError, parse_json
+from ..errors import SourceDataError
 from ..profile import Profile
-from . import Origin, json_path
+from . import Origin, json_path, source_json
 
 _STANDARDIZED = "braket.device_schema.standardized_gate_model_qpu_device_properties"
 _TECHNOLOGY = {
@@ -111,8 +111,6 @@ class _Pair(BaseModel):
 
 
 class _PerElement(BaseModel):
-    """The keys that _per_element reads from standardized v1 and v2."""
-
     oneQubitProperties: dict[Any, _Qubit] | None = None
     twoQubitProperties: dict[Any, _Pair] | None = None
 
@@ -122,8 +120,6 @@ class _DeviceLevelQubit(BaseModel):
 
 
 class _DeviceLevel(BaseModel):
-    """The keys that _device_level reads from standardized v3."""
-
     oneQubitProperties: dict[Any, _DeviceLevelQubit] | None = None
     T1: _Time | None = None
     T2: _Time | None = None
@@ -157,7 +153,7 @@ def from_braket(
         path = Path(path_or_dict)
         raw = path.read_bytes()
         source = path.name
-        data = _json(raw, source)
+        data = source_json(raw, source, _SAVE)
         name, hashed = device or path.stem, f"the bytes of {path.name}"
     whole = isinstance(data, Mapping) and "standardized" in data
     caps = data if whole else {"standardized": data}
@@ -475,28 +471,7 @@ def _us(time: Mapping[str, Any]) -> float:
     return units.convert(float(time["value"]), time["unit"], "us")
 
 
-def _json(raw: bytes, source: str) -> Any:
-    try:
-        return parse_json(raw)
-    except UnicodeDecodeError as exc:
-        line = exc.object.count(b"\n", 0, exc.start) + 1
-        raise SourceDataError(
-            f"{source} is not UTF-8 text: line {line} has the byte {exc.object[exc.start]:#04x}",
-            hint=_SAVE,
-        ) from None
-    except json.JSONDecodeError as exc:
-        reason = exc.msg.removesuffix(" at")
-        raise SourceDataError(
-            f"{source} is not valid JSON: {reason[:1].lower()}{reason[1:]} at line {exc.lineno},"
-            f" column {exc.colno}",
-            hint=_SAVE,
-        ) from None
-
-
 def _shape_error(exc: ValidationError, prefix: tuple[str, ...], source: str) -> SourceDataError:
-    """The first key the file lacks, the first value outside its allowed set, or the first value
-    that is not an object or array.
-    """
     error = exc.errors()[0]
     *parents, last = (*prefix, *error["loc"])
     if error["type"] == "missing":

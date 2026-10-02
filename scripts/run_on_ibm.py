@@ -42,8 +42,8 @@ from noisevault.counts import (  # noqa: E402
     _duration,
     plan,
 )
-from noisevault.errors import CountsError, NoiseVaultError, install_hint  # noqa: E402
-from noisevault.profile import Profile, write_atomically  # noqa: E402
+from noisevault.errors import CountsError, NoiseVaultError, install_hint, qubit_loci  # noqa: E402
+from noisevault.profile import Profile, exact_ref, ref_on_day, write_atomically  # noqa: E402
 from noisevault.sources import ibm_account  # noqa: E402
 
 DEFAULT_SHOTS = 4000
@@ -158,17 +158,17 @@ def isa_circuit(circuit: PlannedCircuit, profile: Profile, target: Any) -> IsaCi
         qubits = tuple(circuit.qubits[q] for q in op.qubits)
         name = "delay" if op.name == "delay" else gates.GATES[op.name].qiskit
         if name is None or not target.instruction_supported(name, qubits):
-            raise refuse(f"the backend does not support {op.name} on {_on(qubits)}")
+            raise refuse(f"the backend does not support {op.name} on {qubit_loci(qubits)}")
         if op.name == "delay":
             length = op.params[0] / dt_ns
             if _whole(length) is None:
                 raise refuse(
-                    f"the {op.params[0]:g} ns delay on {_on(qubits)} is {length:g} dt, and the"
-                    f" backend times delays in whole dt of {dt_ns:g} ns"
+                    f"the {op.params[0]:g} ns delay on {qubit_loci(qubits)} is {length:g} dt, and"
+                    f" the backend times delays in whole dt of {dt_ns:g} ns"
                 )
             if round(length) < target.min_length:
                 raise refuse(
-                    f"the {op.params[0]:g} ns delay on {_on(qubits)} is {round(length)} dt,"
+                    f"the {op.params[0]:g} ns delay on {qubit_loci(qubits)} is {round(length)} dt,"
                     f" shorter than the backend's minimum of {target.min_length} dt"
                 )
             instruction = Delay(round(length), unit="dt")
@@ -177,9 +177,9 @@ def isa_circuit(circuit: PlannedCircuit, profile: Profile, target: Any) -> IsaCi
             length = _seconds(target, name, qubits) / target.dt
             if abs(length - calibrated) > 1e-6:
                 raise refuse(
-                    f"{op.name} on {_on(qubits)} lasts {_dt(calibrated, dt_ns)} in the calibration"
-                    f" and {_dt(length, dt_ns)} on the backend, so the planned delays would not"
-                    " fill the gaps",
+                    f"{op.name} on {qubit_loci(qubits)} lasts {_dt(calibrated, dt_ns)} in the"
+                    f" calibration and {_dt(length, dt_ns)} on the backend, so the planned delays"
+                    " would not fill the gaps",
                     hint="run the script again to plan from the current calibration",
                 )
             operation = target.operation_from_name(name)
@@ -187,7 +187,7 @@ def isa_circuit(circuit: PlannedCircuit, profile: Profile, target: Any) -> IsaCi
         start = max(free[q] for q in op.qubits)
         if _whole(start / target.pulse_alignment) is None:
             raise refuse(
-                f"{op.name} on {_on(qubits)} would start at {start:g} dt, off the backend's"
+                f"{op.name} on {qubit_loci(qubits)} would start at {start:g} dt, off the backend's"
                 f" grid of {target.pulse_alignment} dt"
             )
         qc.append(instruction, list(qubits))
@@ -320,7 +320,7 @@ def _unlike_the_plan(latest: Profile, submitted: Submitted, ran: Ran) -> str | N
             if before != after:
                 qubits = tuple(circuit.qubits[q] for q in op.qubits)
                 return (
-                    f"{op.name} on {_on(qubits)} now takes {float(after):g} ns, not"
+                    f"{op.name} on {qubit_loci(qubits)} now takes {float(after):g} ns, not"
                     f" {float(before):g} ns, so the submitted delays may not match the timeline"
                     " that ran"
                 )
@@ -364,8 +364,7 @@ def counts_file(profile: Profile, submitted: Submitted, ran: Ran) -> MeasuredCou
 def catalog_ref(profile: Profile) -> str | None:
     when = profile.device.calibrated_at
     if when is not None:
-        stamp = when.isoformat().replace("+00:00", "Z")
-        for ref in (_ref(profile), f"{profile.id}@{stamp}"):
+        for ref in (ref_on_day(profile.id, when), exact_ref(profile.id, when)):
             try:
                 if catalog.resolve(ref).fingerprint == profile.fingerprint:
                     return ref
@@ -432,7 +431,10 @@ def run(
     lines = [
         ("run", f"{ran.run_at:%Y-%m-%d %H:%MZ}, job {ran.job_id}"),
         ("counts file", str(output)),
-        ("calibration", f"{_ref(bound)} {bound.short_fingerprint}"),
+        (
+            "calibration",
+            f"{ref_on_day(bound.id, bound.device.calibrated_at)} {bound.short_fingerprint}",
+        ),
     ]
     if ran.timing:
         timing = _beside(output, ".timing.json")
@@ -487,7 +489,8 @@ def summary(batch: Batch, output: Path) -> str:
     ]
     return "\n".join(
         [
-            f"{_ref(profile)} {profile.short_fingerprint} on {_on(chain)}",
+            f"{ref_on_day(profile.id, profile.device.calibrated_at)}"
+            f" {profile.short_fingerprint} on {qubit_loci(chain)}",
             "",
             *table,
             "",
@@ -617,15 +620,6 @@ def _whole(value: float) -> int | None:
 
 def _dt(length: float, dt_ns: float) -> str:
     return f"{length:g} dt ({length * dt_ns:g} ns)"
-
-
-def _on(qubits: Sequence[int]) -> str:
-    return f"qubit {qubits[0]}" if len(qubits) == 1 else "qubits " + "-".join(map(str, qubits))
-
-
-def _ref(profile: Profile) -> str:
-    when = profile.device.calibrated_at
-    return profile.id if when is None else f"{profile.id}@{when.date().isoformat()}"
 
 
 def _beside(output: Path, suffix: str) -> Path:

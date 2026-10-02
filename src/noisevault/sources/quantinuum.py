@@ -18,10 +18,7 @@ are never used.
 
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
-import json
 import re
 import urllib.error
 import urllib.request
@@ -34,9 +31,9 @@ from typing import Any
 import numpy as np
 
 from .. import __version__
-from ..errors import SourceDataError, SourceUnavailable, parse_json
+from ..errors import SourceDataError, SourceUnavailable, plural
 from ..profile import Profile
-from . import OFFLINE_HINT, Origin
+from . import OFFLINE_HINT, Origin, csv_by_line, source_json, source_text
 
 REPOSITORY = "https://github.com/Quantinuum/quantinuum-hardware-specifications"
 COMMIT = "59e68bb55bd616694dc8fa37a435e2a68fe1cb6b"  # pinned so a rebuild gives the same bundle
@@ -148,19 +145,7 @@ def from_spec_csv(
     """
     machine, date = _machine(machine), _date(date)
     raw = Path(path).read_bytes()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise _not_utf8(exc, str(path), hint=_SPEC_SHEET) from None
-    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
-    lines: list[tuple[int, list[str]]] = []
-    start = 1
-    try:
-        for cells in reader:
-            lines.append((start, cells))
-            start = reader.line_num + 1
-    except csv.Error as exc:
-        raise SourceDataError(f"{path} line {start} is not valid CSV: {exc}") from None
+    lines = csv_by_line(source_text(raw, str(path), _SPEC_SHEET), str(path))
     headers = lines[0][1] if lines else []
     for position, header in enumerate(headers, start=1):
         first = headers.index(header) + 1
@@ -174,7 +159,7 @@ def from_spec_csv(
     for line, cells in lines[1:]:
         if cells and len(cells) != len(headers):
             raise SourceDataError(
-                f"{path} line {line} has {len(cells)} cell{'s' if len(cells) != 1 else ''},"
+                f"{path} line {line} has {plural(len(cells), 'cell')},"
                 f" but the header has {len(headers)} columns"
             )
     records = [dict(zip(headers, cells, strict=True)) for _, cells in lines[1:] if cells]
@@ -209,27 +194,10 @@ def _date(date: str) -> str:
 
 
 def _json(raw: bytes, where: str) -> dict[str, Any]:
-    try:
-        doc = parse_json(raw)
-    except UnicodeDecodeError as exc:
-        raise _not_utf8(exc, where) from None
-    except json.JSONDecodeError as exc:
-        reason = exc.msg.removesuffix(" at")
-        raise SourceDataError(
-            f"{where} is not valid JSON: {reason[:1].lower()}{reason[1:]} at line {exc.lineno},"
-            f" column {exc.colno}"
-        ) from None
+    doc = source_json(raw, where)
     if not isinstance(doc, dict):
         raise SourceDataError(f"{where} is not a JSON object")
     return doc
-
-
-def _not_utf8(exc: UnicodeDecodeError, where: str, hint: str | None = None) -> SourceDataError:
-    line = exc.object.count(b"\n", 0, exc.start) + 1
-    return SourceDataError(
-        f"{where} is not UTF-8 text: line {line} has the byte {exc.object[exc.start]:#04x}",
-        hint=hint,
-    )
 
 
 def _key(node: Mapping[str, Any], key: str, where: str) -> Any:
@@ -270,12 +238,6 @@ def spec_values(machine: str, date: str, data: Mapping[str, Any]) -> SpecValues:
 
 
 def _rb(data: Mapping[str, Any], where: str, *, num_qubits: int) -> tuple[float, float | None]:
-    """(average infidelity per native gate, leakage per gate or None), as qtm_spec reports them.
-
-    With leakage data the error is ``legacy + leakage / d``: qtm_spec's leakage correction.
-    Every zone of ``survival`` and ``leakage_postselect`` must have counts at the same sequence
-    lengths.
-    """
     d = 2**num_qubits
     per_clifford = _TWO_QUBIT_CLIFFORD_ZZ if num_qubits == 2 else 1.0
     shots, survival = _shots(data, where), _zones(data, "survival", where)
@@ -291,7 +253,6 @@ def _rb(data: Mapping[str, Any], where: str, *, num_qubits: int) -> tuple[float,
 
 
 def _zones(data: Mapping[str, Any], curve: str, where: str) -> dict[str, Mapping[str, Any]]:
-    """Each zone's counts by sequence length for one decay curve, keyed by the zone's path."""
     zones = {}
     for zone, by_length in _object(_key(data, curve, where), f"{where}: {curve}", "zones").items():
         at = f"{where}: {curve}[{zone!r}]"
@@ -551,7 +512,6 @@ def _machine(name: str) -> str:
 
 
 def _file_path(machine: str, date: str, name: str) -> str:
-    """Where the repository keeps one dataset file, e.g. ``data/H2-2/2024_12_06/SQ_RB.json``."""
     stem = "spam" if name == "SPAM" and date in _LOWERCASE_SPAM_DATES else name
     return f"data/{machine}/{date}/{stem}.json"
 

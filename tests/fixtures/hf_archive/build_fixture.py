@@ -1,11 +1,4 @@
-"""Write train-00000-of-00001.parquet, a small copy of phanerozoic/qiskit-calibration-drift.
-
-The values are invented. The 31 columns, their Arrow types and the three row generations follow
-the published file: legacy rows (null unit and scope, T1 and T2 in seconds), historical
-backfill rows (units set, null is_new_measurement) and polled rows (from May 2026).
-
-Run: python tests/fixtures/hf_archive/build_fixture.py
-"""
+"""The values are invented."""
 
 from __future__ import annotations
 

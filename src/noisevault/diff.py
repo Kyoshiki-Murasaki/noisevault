@@ -20,7 +20,8 @@ from itertools import combinations
 from math import comb
 from typing import TYPE_CHECKING, Any
 
-from .profile import qubit_medians
+from .errors import plural
+from .profile import qubit_medians, ref_on_day
 from .table import GateNoise
 
 if TYPE_CHECKING:
@@ -172,8 +173,8 @@ def diff(a: Profile, b: Profile, *, top: int = 5) -> ProfileDiff:
     newly_disabled, reenabled = _availability(a, b)
     common = range(min(a.device.num_qubits, b.device.num_qubits))
     return ProfileDiff(
-        before=_ref(a),
-        after=_ref(b),
+        before=ref_on_day(a.id, a.device.calibrated_at),
+        after=ref_on_day(b.id, b.device.calibrated_at),
         before_fingerprint=a.fingerprint,
         after_fingerprint=b.fingerprint,
         time_delta=delta,
@@ -412,11 +413,6 @@ def _where(title: str, where: str) -> str:
     return f"all {title}" if where == "all" else f"{title[:-1]} {where}"
 
 
-def _ref(profile: Profile) -> str:
-    when = profile.device.calibrated_at
-    return f"{profile.id}@{when.date().isoformat()}" if when else profile.id
-
-
 def distinguishing_stamps(a: datetime | None, b: datetime | None) -> tuple[str | None, str | None]:
     if a and b:
         a, b = a.astimezone(UTC), b.astimezone(UTC)
@@ -458,10 +454,6 @@ def describe_delta(delta: timedelta | None) -> str:
     span = abs(delta)
     days, hours = span.days, span.seconds // 3600
     minutes = span.seconds % 3600 // 60
-    parts = [_plural(days, "day"), _plural(hours, "hour")] if days or hours else []
-    text = " ".join(p for p in parts if p) or _plural(minutes, "minute") or "under a minute"
+    parts = [(days, "day"), (hours, "hour")] if days or hours else [(minutes, "minute")]
+    text = " ".join(plural(n, unit) for n, unit in parts if n) or "under a minute"
     return f"{text} {'later' if delta > timedelta(0) else 'earlier'}"
-
-
-def _plural(n: int, unit: str) -> str:
-    return "" if n == 0 else f"{n} {unit}{'' if n == 1 else 's'}"

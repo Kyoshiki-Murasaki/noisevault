@@ -8,7 +8,6 @@ machines and never contains color. NO_COLOR and COLUMNS are read at each invocat
 from __future__ import annotations
 
 import errno
-import gzip
 import json
 import os
 import platform
@@ -49,15 +48,21 @@ from .errors import (
     ProfileNotFound,
     did_you_mean,
     install_hint,
+    joined,
+    plural,
 )
 from .profile import (
     POOR_FIT_P_VALUE,
     Profile,
     Technology,
+    exact_ref,
     gate_stats,
+    iso_z,
+    json_bytes,
     json_schema,
-    load_file,
     qubit_medians,
+    read_json_file,
+    ref_on_day,
     unmodeled_note,
 )
 from .table import GateNoise
@@ -314,7 +319,7 @@ def list_profiles(
             stamp = info.calibrated_at
             day = same_day[info.id, stamp.date()] if stamp else []
             row["when"] = _when(stamp, day) if stamp else "undated"
-            row["short_ref"] = info.ref if len(day) > 1 else _ref_on_day(info.id, stamp)
+            row["short_ref"] = info.ref if len(day) > 1 else ref_on_day(info.id, stamp)
             row["shown_license"] = (row["license"] or "unknown").split(" (")[0]
         newest_first = sorted(
             zip(rows, infos, strict=True),
@@ -330,7 +335,7 @@ def list_profiles(
         _emit(table, natural_width=_natural_width(table))
         if any(r["location"] == "vault" for r in rows):
             _emit("* in your vault (nv doctor shows its folder)")
-        count = _count(len(rows), "profile")
+        count = plural(len(rows), "profile")
         if shared:
             count += f", all {shared}" if len(rows) > 1 else f", {shared}"
         elif "license" not in columns:
@@ -409,7 +414,7 @@ def _list_row(info: catalog.ProfileInfo) -> dict[str, Any]:
         "ref": info.ref,
         "id": info.id,
         "date": info.calibrated_at.date().isoformat() if info.calibrated_at else None,
-        "calibrated_at": _iso(info.calibrated_at),
+        "calibrated_at": iso_z(info.calibrated_at) if info.calibrated_at else None,
         "technology": info.technology,
         "vendor": info.vendor,
         "num_qubits": info.num_qubits,
@@ -477,9 +482,9 @@ def card(profile: Profile) -> dict[str, Any]:
     stated, unmodeled = profile.uncorrected(), profile.unmodeled_error
     medians = qubit_medians(stated)
     return {
-        "ref": _ref(profile),
+        "ref": exact_ref(profile.id, dev.calibrated_at),
         "id": profile.id,
-        "calibrated_at": _iso(dev.calibrated_at),
+        "calibrated_at": iso_z(dev.calibrated_at) if dev.calibrated_at else None,
         "vendor": dev.vendor,
         "processor": dev.processor,
         "technology": dev.technology,
@@ -919,10 +924,6 @@ def _diff_title(first: Profile, second: Profile) -> str:
     return f"[bold]{first.id}[/bold] {when[0] or 'undated'} -> {when[1] or 'undated'}"
 
 
-def _ref_on_day(device: str, when: datetime | None) -> str:
-    return f"{device}@{when.date().isoformat()}" if when else device
-
-
 def _loci_table(labels: tuple[str, ...]) -> Table:
     """One row per gate (or "qubit"), its loci folded at item boundaries."""
     by_gate: dict[str, list[str]] = {}
@@ -996,7 +997,7 @@ def check(
             chain = "-".join(str(result.layout[i]) for i in range(len(result.layout)))
             on_hand = _on_hand(ref, profile)
             newest = f" (newest of {on_hand.count})" if on_hand else ""
-            title = Text(_ref(profile), style="bold")
+            title = Text(exact_ref(profile.id, profile.device.calibrated_at), style="bold")
             _emit(Text.assemble(title, f"{newest} {profile.short_fingerprint} on qubits {chain}"))
             _emit(f"{len(result.circuits)} circuits: {', '.join(c.name for c in result.circuits)}")
             rows = [_check_row(f, result) for f in result.frameworks]
@@ -1066,13 +1067,11 @@ def _none_installed(missing: list[str], *, ref: str, framework: str | None) -> N
         extra = first
         lines = [
             install_hint(first),
-            f"(or {', '.join(others[:-1])} or {others[-1]}, or several, as in"
-            f" noisevault[{first},{others[-1]}])",
+            f"(or {joined(others, 'or')}, or several, as in noisevault[{first},{others[-1]}])",
         ]
         command = f"nv check {ref}"
     else:
-        which = " and ".join(filter(None, (", ".join(missing[:-1]), missing[-1])))
-        error = f"{which} {'is' if len(missing) == 1 else 'are'} not installed"
+        error = f"{joined(missing)} {'is' if len(missing) == 1 else 'are'} not installed"
         extra = ",".join(missing)
         lines = [install_hint(extra)]
         command = f"nv check {ref} --framework {framework}"
@@ -1210,7 +1209,7 @@ def validate(
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
-            profile = load_file(path)
+            profile = Profile.from_dict(read_json_file(path, "profile"))
         except FileNotFoundError:
             _fail(f"no file {path}", "check the path")
         except ValidationError as exc:
@@ -1221,11 +1220,13 @@ def validate(
             raise typer.Exit(1) from None
         except _UNREADABLE as exc:
             _fail(*_unreadable(path, exc))
+        except NoiseVaultError as exc:
+            _fail(exc.message, exc.hint)
     notes = [str(w.message) for w in caught] + _soft_issues(profile)
     _emit(
-        f"ok: {_ref_on_day(profile.id, profile.device.calibrated_at)} {profile.short_fingerprint},"
-        f" {_count(profile.device.num_qubits, 'qubit')}, {_count(len(profile.gates), 'gate')},"
-        f" {_count(len(profile.calibrations), 'record')}"
+        f"ok: {ref_on_day(profile.id, profile.device.calibrated_at)} {profile.short_fingerprint},"
+        f" {plural(profile.device.num_qubits, 'qubit')}, {plural(len(profile.gates), 'gate')},"
+        f" {plural(len(profile.calibrations), 'record')}"
     )
     for note in notes:
         err.print(f"warning: {note}", markup=False)
@@ -1287,7 +1288,7 @@ def _load(ref: str, *, counts_hint: str | None = None) -> Profile:
     if target.is_dir():
         raise NoiseVaultError(f"{ref} is a folder", hint=_PROFILE_OR_ID)
     try:
-        return load_file(target)
+        return Profile.from_dict(read_json_file(target, "profile"))
     except _UNREADABLE as exc:
         if isinstance(exc, ValidationError) and _holds_counts(target):
             raise NoiseVaultError(
@@ -1298,19 +1299,17 @@ def _load(ref: str, *, counts_hint: str | None = None) -> Profile:
 
 
 def _holds_counts(path: Path) -> bool:
-    raw = path.read_bytes()
-    data = json.loads(gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw)
+    data = json_bytes(path.read_bytes())
     return isinstance(data, dict) and "nv_counts" in data
 
 
 # What reading a profile file can raise besides FileNotFoundError; ValidationError is a ValueError.
-_UNREADABLE = (ValueError, OSError, EOFError, zlib.error)
+_UNREADABLE = (ValueError, OSError)
 
 
 _PROFILE_FILE = "give a profile file (.json or .json.gz)"
 _PROFILE_OR_ID = f"{_PROFILE_FILE} or a profile id such as ibm_fez"
 _PROFILE_FIRST = "nv compare takes the profile first and the counts file second"
-_DAMAGED_FILE = "the file is damaged or cut short; pull or export it again"
 
 
 class _FileProblem(NamedTuple):
@@ -1320,17 +1319,10 @@ class _FileProblem(NamedTuple):
 
 def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
     if isinstance(exc, ValidationError):
-        problems = _count(exc.error_count(), "problem")
+        problems = plural(exc.error_count(), "problem")
         return _FileProblem(
             f"{path} is not a valid profile ({problems})", f"run nv validate {path} to list them"
         )
-    if isinstance(exc, json.JSONDecodeError):
-        where = f"{exc.msg.removesuffix(' at')} at line {exc.lineno}, column {exc.colno}"
-        return _FileProblem(f"{path} is not JSON ({where})", _not_json_hint(path))
-    if isinstance(exc, UnicodeDecodeError):
-        return _FileProblem(f"{path} is not JSON (not UTF-8 text)", _not_json_hint(path))
-    if isinstance(exc, EOFError | zlib.error | gzip.BadGzipFile):
-        return _FileProblem(f"{path} is a damaged gzip file ({exc})", "copy or pull it again")
     if isinstance(exc, IsADirectoryError):
         return _FileProblem(f"{path} is a folder", _PROFILE_FILE)
     if isinstance(exc, OSError):
@@ -1340,10 +1332,6 @@ def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
     if isinstance(exc, NoiseVaultError):
         return _FileProblem(f"{path}: {exc.message}", exc.hint)
     return _FileProblem(f"{path}: {exc}", None)
-
-
-def _not_json_hint(path: Path) -> str:
-    return _DAMAGED_FILE if path.name.endswith((".json", ".json.gz")) else _PROFILE_FILE
 
 
 @contextmanager
@@ -1372,7 +1360,7 @@ def _error(exc: BaseException) -> NoReturn:
         _fail(_cli_terms(exc.message), exc.hint and _cli_terms(exc.hint))
     hint = next((h for kind, h in _FOREIGN_ERROR_HINTS if isinstance(exc, kind)), None)
     if isinstance(exc, ValidationError):
-        _fail(f"not a valid profile ({_count(exc.error_count(), 'problem')})", hint)
+        _fail(f"not a valid profile ({plural(exc.error_count(), 'problem')})", hint)
     if isinstance(exc, FileNotFoundError) and exc.filename:
         _fail(f"no file {exc.filename}", hint)
     _fail(_cli_terms(str(exc) or type(exc).__name__), hint)
@@ -1399,10 +1387,6 @@ def _cli_terms(message: str) -> str:
     return message
 
 
-def _count(n: int, noun: str) -> str:
-    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
-
-
 def _fail(message: str, hint: str | None = None, *, code: int = 1) -> NoReturn:
     err.print(f"error: {message}", markup=False)
     if hint:
@@ -1426,17 +1410,8 @@ def _echo_json(data: Any) -> None:
     typer.echo(json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False))
 
 
-def _ref(profile: Profile) -> str:
-    when = profile.device.calibrated_at
-    return f"{profile.id}@{_iso(when)}" if when else profile.id
-
-
 def _epoch(when: datetime | None) -> float:
     return when.timestamp() if when else float("-inf")
-
-
-def _iso(when: datetime | None) -> str | None:
-    return when.isoformat().replace("+00:00", "Z") if when else None
 
 
 def _duration(ns: float | None) -> str:

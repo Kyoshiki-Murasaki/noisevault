@@ -232,13 +232,22 @@ def test_a_spec_csv_missing_any_column_imports_or_raises_source_data_error(
         quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
 
 
+def test_a_spec_csv_cell_cannot_run_on_to_the_next_line(tmp_path: Path) -> None:
+    header, first, *rest = CSV.read_text(encoding="utf-8").splitlines()
+    path = tmp_path / "spanning.csv"
+    path.write_text("\n".join([header, first.replace(",", ',"x\ny",', 1), *rest]) + "\n")
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
+    assert str(info.value) == f"{path} line 2 is not valid CSV: unexpected end of data"
+
+
 def test_spec_csv_that_is_not_utf8_names_the_line_and_the_byte(tmp_path: Path) -> None:
     path = tmp_path / "resaved.csv"
     path.write_bytes(CSV.read_bytes().replace(b"H1-2", b"H1\xad2", 1))
     with pytest.raises(SourceDataError) as info:
         quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
     assert str(info.value) == (
-        f"{path} is not UTF-8 text: line 3 has the byte 0xad; {_SPEC_SHEET_HINT}"
+        f"{path} is not UTF-8 text (byte 0xad on line 3); {_SPEC_SHEET_HINT}"
     )
 
 
@@ -285,12 +294,12 @@ _DATA = "data/H2-2/2024_12_06"
         (
             "SQ_RB",
             b"<html><body>Sign in to this network</body></html>",
-            f"{_DATA}/SQ_RB.json is not valid JSON: expecting value at line 1, column 1",
+            f"{_DATA}/SQ_RB.json is not JSON (expecting value at line 1, column 1)",
         ),
         (
             "SPAM",
             b'{"shots": 10000,\n "survival": {"0": {"0": 9\xb5}}}',
-            f"{_DATA}/SPAM.json is not UTF-8 text: line 2 has the byte 0xb5",
+            f"{_DATA}/SPAM.json is not UTF-8 text (byte 0xb5 on line 2)",
         ),
         ("TQ_RB", b"[]", f"{_DATA}/TQ_RB.json is not a JSON object"),
     ],
@@ -310,8 +319,7 @@ def test_dataset_file_nested_deeper_than_the_parser_takes_names_the_file() -> No
         quantinuum.from_data("H2-2", "2024_12_06", {**_files(), "SQ_RB": nested.encode()})
     depth = len(nested) // 2
     assert str(info.value) == (
-        f"{_DATA}/SQ_RB.json is not valid JSON: nested {depth} levels deep at line 1,"
-        f" column {depth}"
+        f"{_DATA}/SQ_RB.json is not JSON (nested {depth} levels deep at line 1, column {depth})"
     )
 
 
@@ -492,8 +500,6 @@ def test_rb_curves_measured_at_different_sequence_lengths_name_the_gap() -> None
 
 
 def _sampled_key_paths(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[str, ...]]:
-    """Each key path, taking only the first and the last of the keys that number qubits,
-    sequence lengths or repetitions, so the cases stay few."""
     if isinstance(node, dict):
         numbered = [key for key in node if key.isdigit()]
         for key, value in node.items():

@@ -39,7 +39,7 @@ from pydantic import (
 )
 
 from . import __version__, compat, gates, metrics
-from .errors import MigrationWarning, parse_json
+from .errors import MigrationWarning, NoiseVaultError, parse_json, plural, qubit_loci, unreadable
 from .units import DURATION, T1, T2, normalize_times
 
 if TYPE_CHECKING:
@@ -58,12 +58,20 @@ def _to_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _iso_z(value: datetime) -> str:
+def iso_z(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
 
 
+def ref_on_day(name: str, when: datetime | None) -> str:
+    return f"{name}@{when.date().isoformat()}" if when else name
+
+
+def exact_ref(name: str, when: datetime | None) -> str:
+    return f"{name}@{iso_z(when)}" if when else name
+
+
 UtcDatetime = Annotated[
-    AwareDatetime, AfterValidator(_to_utc), PlainSerializer(_iso_z, when_used="json")
+    AwareDatetime, AfterValidator(_to_utc), PlainSerializer(iso_z, when_used="json")
 ]
 # Strict scalars: a hand-written true, "1" or 3.0 is a typo to report, not a value to coerce.
 Real = Annotated[float, Strict()]  # still accepts an int
@@ -473,13 +481,10 @@ class UnmodeledError(_Model):
         if fit is not None:
             short = fit.counts.removeprefix("sha256:")[:12]
             phrases.append(f"fitted to {fit.source} counts sha256:{short}")
-            qubits = "-".join(map(str, fit.qubits))
-            on = f"on qubit {qubits}" if len(fit.qubits) == 1 else f"on qubits {qubits}"
             run = fit.run_at.date().isoformat()
-            phrases.append(f"{on}, run {run} ({_describe_p(fit.p_value)})")
+            phrases.append(f"on {qubit_loci(fit.qubits)}, run {run} ({_describe_p(fit.p_value)})")
             if fit.impossible_shots:
-                shots = "shot" if fit.impossible_shots == 1 else "shots"
-                phrases.append(f"the profile ruled out {fit.impossible_shots} {shots}")
+                phrases.append(f"the profile ruled out {plural(fit.impossible_shots, 'shot')}")
         phrases.append("T1, T2 and preparation error are not scaled")
         return tuple(phrases)
 
@@ -811,7 +816,7 @@ class Profile(_Model):
 
     def citation(self, style: Literal["text", "bibtex"] = "text") -> str:
         dev, prov = self.device, self.provenance
-        when = _iso_z(dev.calibrated_at) if dev.calibrated_at else "undated"
+        when = iso_z(dev.calibrated_at) if dev.calibrated_at else "undated"
         who = prov.attribution or dev.vendor or "unknown source"
         ref = f"{self.id}@{when}" if dev.calibrated_at else self.id
         profile = f"NoiseVault {__version__} profile {ref}"
@@ -1215,9 +1220,30 @@ def load_file(path: str | Path) -> Profile:
 
 
 def load_bytes(raw: bytes) -> Profile:
-    if raw[:2] == b"\x1f\x8b":
-        raw = gzip.decompress(raw)
-    return Profile.from_dict(parse_json(raw))
+    return Profile.from_dict(json_bytes(raw))
+
+
+def json_bytes(raw: bytes) -> Any:
+    return parse_json(gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw)
+
+
+_REDO = {"profile": "pull or export it again", "counts": "save the counts again"}
+
+
+def read_json_file(
+    path: Path,
+    kind: Literal["profile", "counts"],
+    error: type[NoiseVaultError] = NoiseVaultError,
+) -> Any:
+    raw = path.read_bytes()
+    try:
+        return json_bytes(raw)
+    except (ValueError, EOFError, zlib.error, gzip.BadGzipFile) as exc:
+        if path.name.endswith((".json", ".json.gz")):
+            hint = f"the file is damaged or cut short; {_REDO[kind]}"
+        else:
+            hint = f"give a {kind} file (.json or .json.gz)"
+        raise error(unreadable(str(path), exc), hint=hint) from None
 
 
 def json_schema() -> dict[str, Any]:

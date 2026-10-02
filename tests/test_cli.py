@@ -80,8 +80,31 @@ def test_validate_unreadable_input_is_a_friendly_error(tmp_path: Path, damage: s
         )
     else:
         assert result.stderr.startswith(f"error: {path} is a damaged gzip file (")
-        assert result.stderr.endswith(")\nhint: copy or pull it again\n")
+        assert result.stderr.endswith(
+            ")\nhint: the file is damaged or cut short; pull or export it again\n"
+        )
     assert "Traceback" not in result.output and "Aborted" not in result.output
+
+
+def test_a_file_that_is_not_utf8_names_the_byte_and_the_line(tmp_path: Path) -> None:
+    latin = b'{\n"id": "caf\xe9"}'
+    profile = tmp_path / "latin.json"
+    profile.write_bytes(latin)
+    counts = tmp_path / "latin.counts.json"
+    counts.write_bytes(latin)
+    for args in (["show", str(profile)], ["validate", str(profile)]):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 1
+        assert result.stderr == (
+            f"error: {profile} is not UTF-8 text (byte 0xe9 on line 2)\n"
+            "hint: the file is damaged or cut short; pull or export it again\n"
+        )
+    result = runner.invoke(app, ["compare", "ibm_fez@2025-02-26", str(counts)])
+    assert result.exit_code == 1
+    assert result.stderr == (
+        f"error: {counts} is not UTF-8 text (byte 0xe9 on line 2)\n"
+        "hint: the file is damaged or cut short; save the counts again\n"
+    )
 
 
 def test_validate_notes_t2_clamps(tmp_path: Path) -> None:
@@ -1375,11 +1398,11 @@ class _Damage(NamedTuple):
 
 
 _DAMAGED = {
-    "not-json": _Damage("{not json", "is not JSON (Expecting property name", _DAMAGED_FILE),
-    "empty": _Damage("", "is not JSON (Expecting value", _DAMAGED_FILE),
+    "not-json": _Damage("{not json", "is not JSON (expecting property name", _DAMAGED_FILE),
+    "empty": _Damage("", "is not JSON (expecting value", _DAMAGED_FILE),
     "cut-string": _Damage(
         '{"noisevault": "1.',
-        "is not JSON (Unterminated string starting at line 1, column 16)",
+        "is not JSON (unterminated string starting at line 1, column 16)",
         _DAMAGED_FILE,
     ),
     "too-deep": _Damage(deeper_than_the_parser_takes(), "is not JSON (nested ", _DAMAGED_FILE),
@@ -1451,11 +1474,11 @@ def test_every_command_says_a_counts_file_is_not_a_profile(tmp_path: Path, comma
 
 _COUNTS_DAMAGED_FILE = "the file is damaged or cut short; save the counts again"
 _DAMAGED_COUNTS = {
-    "not-json": _Damage("{not json", "is not JSON (Expecting property name", _COUNTS_DAMAGED_FILE),
-    "empty": _Damage("", "is not JSON (Expecting value", _COUNTS_DAMAGED_FILE),
+    "not-json": _Damage("{not json", "is not JSON (expecting property name", _COUNTS_DAMAGED_FILE),
+    "empty": _Damage("", "is not JSON (expecting value", _COUNTS_DAMAGED_FILE),
     "cut-string": _Damage(
         '{"nv_counts": "1.',
-        "is not JSON (Unterminated string starting at line 1, column 15)",
+        "is not JSON (unterminated string starting at line 1, column 15)",
         _COUNTS_DAMAGED_FILE,
     ),
     "too-deep": _Damage(
@@ -1514,7 +1537,7 @@ def test_a_cut_profile_file_is_called_damaged_and_another_file_type_is_named(
     notes.write_text("not a profile\n")
     result = runner.invoke(app, ["show", str(notes)], env={"COLUMNS": "200"})
     assert result.stderr == (
-        f"error: {notes} is not JSON (Expecting value at line 1, column 1)\nhint: {_PROFILE_FILE}\n"
+        f"error: {notes} is not JSON (expecting value at line 1, column 1)\nhint: {_PROFILE_FILE}\n"
     )
 
 

@@ -13,8 +13,8 @@ from pydantic import AfterValidator, BaseModel, TypeAdapter
 
 from .. import __version__
 from ..errors import SourceUnavailable, did_you_mean
-from ..profile import Profile
-from . import OFFLINE_HINT, OLDER_HINT, Origin, read_reply
+from ..profile import Profile, iso_z
+from . import OFFLINE_HINT, OLDER_HINT, Origin, checked_by, read_reply
 from .qiskit_backend import (
     as_utc,
     calibration_from_properties,
@@ -43,11 +43,9 @@ class _Gate(BaseModel):
 
 
 class _Properties(BaseModel):
-    """The keys calibration_from_properties needs from a properties reply, with their types."""
-
     qubits: list[list[_Parameter]] | None = None
     gates: list[_Gate] | None = None
-    last_update_date: Annotated[str, AfterValidator(as_utc)] | None = None
+    last_update_date: Annotated[str, AfterValidator(checked_by(as_utc))] | None = None
 
 
 class _Device(BaseModel):
@@ -105,7 +103,7 @@ def properties_url(name: str, at: str | date | datetime | None = None) -> str:
     url = f"{BASE_URL}/{urllib.parse.quote(name)}/properties"
     if at is None:
         return url
-    stamp = as_utc(at).isoformat().replace("+00:00", "Z")
+    stamp = iso_z(as_utc(at))
     return f"{url}?{urllib.parse.urlencode({'updated_before': stamp})}"
 
 

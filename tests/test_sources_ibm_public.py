@@ -448,7 +448,7 @@ _IN_MINUTES = {
     "readout_length of qubit 4": lambda p: _param(p["qubits"][4], "readout_length").update(
         unit="min"
     ),
-    "gate_length of cx on qubits [3, 4]": lambda p: _param(
+    "gate_length of cx on qubits 3-4": lambda p: _param(
         _gate(p, "cx", [3, 4]), "gate_length"
     ).update(unit="min"),
 }
@@ -488,11 +488,11 @@ _OUT_OF_RANGE = {
     ),
     "a gate error that is not a number": (
         _cx_3_4("gate_error", math.nan),
-        "avg_infidelity of cx on qubits [3, 4]: Input should be a finite number, got nan",
+        "avg_infidelity of cx on qubits 3-4: Input should be a finite number, got nan",
     ),
     "a negative gate length": (
         _cx_3_4("gate_length", -5),
-        "cx on qubits [3, 4]: duration_ns must not be negative, got -5.0",
+        "cx on qubits 3-4: duration_ns must not be negative, got -5.0",
     ),
 }
 

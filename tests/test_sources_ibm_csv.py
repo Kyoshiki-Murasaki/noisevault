@@ -367,8 +367,8 @@ def test_a_header_with_no_qubit_rows_is_refused(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("old", "new", "shown"),
     [
-        (b'"T1 (us)"', b'"T1 (\xb5s)"', "line 1 has the byte 0xb5"),
-        (b'"No"', b'"N\xe3o"', "line 5 has the byte 0xe3"),
+        (b'"T1 (us)"', b'"T1 (\xb5s)"', "byte 0xb5 on line 1"),
+        (b'"No"', b'"N\xe3o"', "byte 0xe3 on line 5"),
     ],
     ids=["latin-1 header", "latin-1 cell"],
 )
@@ -380,7 +380,7 @@ def test_a_file_that_is_not_utf8_names_the_line_and_the_byte(
     with pytest.raises(nv.SourceDataError) as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     assert str(info.value) == (
-        f"resaved.csv is not UTF-8 text: {shown}; import the CSV as you downloaded it, not a"
+        f"resaved.csv is not UTF-8 text ({shown}); import the CSV as you downloaded it, not a"
         " copy a spreadsheet saved"
     )
 

@@ -20,11 +20,14 @@ from .errors import (
     LayoutError,
     MissingCalibrationError,
     NoiseVaultError,
+    joined,
+    plural,
+    qubit_loci,
 )
-from .profile import POOR_FIT_P_VALUE, Bound, ErrorFactor, UnmodeledError, _iso_z
+from .profile import POOR_FIT_P_VALUE, Bound, ErrorFactor, UnmodeledError, iso_z, ref_on_day
 from .reference import charged_as, outcome_bits, probabilities
 from .report import Report
-from .table import GateNoise, _qubits, unscaled_phrases
+from .table import GateNoise, unscaled_phrases
 
 if TYPE_CHECKING:
     from .counts import MeasuredCounts, PlannedCircuit
@@ -172,7 +175,7 @@ class Comparison:
             "counts": self.counts.sha256,
             "source": self.counts.source,
             "backend": self.counts.backend,
-            "run_at": _iso_z(self.counts.run_at),
+            "run_at": iso_z(self.counts.run_at),
             "calibration_age_hours": None if age is None else age.total_seconds() / 3600,
             "qubits": list(self.counts.qubits),
             "circuits": [
@@ -206,8 +209,7 @@ class Comparison:
 
     def _header(self, counts_file: str | None) -> list[SummaryLine]:
         profile, counts = self.profile, self.counts
-        when = profile.device.calibrated_at
-        ref = profile.id if when is None else f"{profile.id}@{when.date().isoformat()}"
+        ref = ref_on_day(profile.id, profile.device.calibrated_at)
         digest = counts.sha256.removeprefix("sha256:")[:12]
         source = (
             f"{counts.source} counts sha256:{digest}"
@@ -221,7 +223,7 @@ class Comparison:
             else f"{_duration(age)} after calibration"
         )
         run = counts.run_at.strftime("%Y-%m-%d %H:%MZ")
-        first = f"{ref} {profile.short_fingerprint} on {_on(counts.qubits)}"
+        first = f"{ref} {profile.short_fingerprint} on {qubit_loci(counts.qubits)}"
         return [
             SummaryLine(first, len(ref)),
             SummaryLine(source, 0),
@@ -276,19 +278,19 @@ class Comparison:
             total = sum(s.shots for s in self.circuits)
             lines = [
                 "ruled out (p = 0)",
-                f"the profile gives {_count(impossible, 'shot')} probability 0",
+                f"the profile gives {plural(impossible, 'shot')} probability 0",
                 *self.ruled_out,
             ]
             if impossible < total:
                 lines.append(f"the fit uses the other {total - impossible} shots")
             if flagged:
-                lines.append(f"beyond shot noise on {_words(flagged)}")
+                lines.append(f"beyond shot noise on {joined(flagged)}")
             return lines
         if self.p_value is None:
             return ["not testable (no degrees of freedom left after fitting)"]
         p = f"p = {self.p_value:.2g}"
         if self.p_value < POOR_FIT_P_VALUE:
-            where = [f"on {_words(flagged)}"] if flagged else []
+            where = [f"on {joined(flagged)}"] if flagged else []
             return [f"beyond shot noise ({p})", *where, "no one pair of factors fits every circuit"]
         scope = "overall" if flagged else "on every circuit"
         return [f"within shot noise {scope} ({p})"]
@@ -790,7 +792,7 @@ def _identify(
             sum(n for n, moves in zip(shots, surface.moves(axis), strict=True) if moves)
         )
         if responding < MIN_INFORMATIVE_SHOTS:
-            out[axis] = NoEstimate(f"only {_count(responding, 'shot')} respond to {axis} error")
+            out[axis] = NoEstimate(f"only {plural(responding, 'shot')} respond to {axis} error")
         else:
             out[axis] = None
     if out["gate"] is None and out["readout"] is None:
@@ -835,7 +837,7 @@ def _ruled_out(
     phrases = []
     for (qubit, bit), per in sorted(found.items()):
         error = "P(1|0)" if bit else "P(0|1)"
-        runs = _words([_count(n, "shot", name) for name, n in per.items()])
+        runs = joined([plural(n, f"{name} shot") for name, n in per.items()])
         phrases.append(f"qubit {qubit} has {error} = 0, and {runs} read it as {bit}")
     return tuple(phrases)
 
@@ -864,7 +866,7 @@ def _notes(base: Profile, circuits: Sequence[PlannedCircuit]) -> tuple[str, ...]
         }
     )
     if idle:
-        on = _qubits([(q,) for q in idle])
+        on = qubit_loci(*((q,) for q in idle))
         notes.append(f"delays on {on} add no idle error (no T1 or T2 stated)")
     return tuple(notes)
 
@@ -1056,20 +1058,6 @@ def _say(result: FactorResult) -> str:
 
 def _reason(result: FactorResult) -> str | None:
     return result.reason if isinstance(result, NoEstimate) else None
-
-
-def _on(qubits: Sequence[int]) -> str:
-    joined = "-".join(map(str, qubits))
-    return f"qubit {joined}" if len(qubits) == 1 else f"qubits {joined}"
-
-
-def _count(n: int, noun: str, kind: str = "") -> str:
-    kind = f"{kind} " if kind else ""
-    return f"{n} {kind}{noun}" + ("" if n == 1 else "s")
-
-
-def _words(items: Sequence[str]) -> str:
-    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 def _duration(age: timedelta) -> str:
