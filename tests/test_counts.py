@@ -304,11 +304,9 @@ def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) ->
     profile.write_text(json.dumps(toy()))
     wrong = tmp_path / "run.json.gz"
     wrong.write_bytes(b"\x1f\x8b\x08\x00 cut")
-    deep = tmp_path / "deep.counts.json"
-    deep.write_text("[" * 100_000 + "]" * 100_000)
 
     errors = {}
-    for path in (damaged, notes, profile, wrong, deep):
+    for path in (damaged, notes, profile, wrong):
         with pytest.raises(CountsError) as caught:
             load_counts(path)
         errors[path] = caught.value
@@ -320,8 +318,38 @@ def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) ->
     assert errors[profile].message == f"{profile} is a profile, not a counts file"
     assert errors[profile].hint == "nv compare takes the profile first and the counts file second"
     assert errors[wrong].message.startswith(f"{wrong} is a damaged gzip file (")
-    assert errors[deep].message.startswith(f"{deep} is not JSON (maximum recursion depth")
     assert all("\n" not in str(e) for e in errors.values())
+
+
+def _deeper_than_the_parser_takes() -> str:
+    """JSON arrays nested past the depth ``json.loads`` can parse in this interpreter.
+
+    Python 3.11 bounds that depth by the recursion limit, 3.12 and 3.13 by a fixed C limit, and
+    3.14 by the free stack, so the depth is found by doubling rather than fixed.
+    """
+    depth = 1024
+    while depth <= 2**23:
+        text = "[" * depth + "]" * depth
+        try:
+            json.loads(text)
+        except RecursionError:
+            return text
+        depth *= 2
+    pytest.skip("json.loads parses arrays nested 8 million deep here")
+
+
+def test_a_file_nested_deeper_than_the_parser_takes_is_one_counts_error_line(
+    tmp_path: Path,
+) -> None:
+    deep = tmp_path / "deep.counts.json"
+    deep.write_text(_deeper_than_the_parser_takes())
+
+    with pytest.raises(CountsError) as caught:
+        load_counts(deep)
+
+    assert caught.value.message.startswith(f"{deep} is not JSON (")
+    assert caught.value.hint == "the file is damaged or cut short; save the counts again"
+    assert "\n" not in str(caught.value)
 
 
 def test_a_file_with_several_problems_names_the_first_and_counts_them(tmp_path: Path) -> None:
