@@ -115,8 +115,8 @@ _DIRECTIVES = (
     SetUnitary,
 )
 _TRANSPILE_FIX = (
-    "transpile it for this simulator first: `from qiskit import transpile;"
-    " sim.run(transpile(circuit, sim))`"
+    "transpile it for this simulator first: from qiskit import transpile;"
+    " sim.run(transpile(circuit, sim))"
 )
 _PAULI = {
     "I": np.eye(2, dtype=complex),
@@ -216,7 +216,8 @@ class NoiseVaultSimulator(AerSimulator):
         if circuit.num_qubits > target.num_qubits:
             raise CircuitNotNativeError(
                 f"circuit {circuit.name!r} has {circuit.num_qubits} qubits but {self.profile.id}"
-                f" has {target.num_qubits}; {_TRANSPILE_FIX}"
+                f" has {target.num_qubits}",
+                hint=_TRANSPILE_FIX,
             )
         for instruction in circuit.data:
             op = instruction.operation
@@ -226,8 +227,8 @@ class NoiseVaultSimulator(AerSimulator):
             if not target.instruction_supported(op.name, qargs):
                 raise CircuitNotNativeError(
                     f"circuit {circuit.name!r}: {op.name} on qubits {list(qargs)} is not"
-                    f" available on {self.profile.id} ({self._why(op.name, qargs)}); "
-                    + _TRANSPILE_FIX
+                    f" available on {self.profile.id} ({self._why(op.name, qargs)})",
+                    hint=_TRANSPILE_FIX,
                 )
 
     def _why(self, name: str, qargs: tuple[int, ...]) -> str:
@@ -467,17 +468,16 @@ def _require_natives(
             )
         why = "; ".join(f"{n}: {omitted.get(n, 'disabled on every locus')}" for n in defined)
         if any(table.allowed(n, qargs) for n in defined for qargs in loci):
-            advice = (
-                "Simulate it with profile.to_cirq() instead, or give the profile a calibrated"
-                f" {word}-qubit native that Qiskit provides"
+            raise UnsupportedDevice(
+                f"{refusal} ({why})",
+                hint="simulate it with profile.to_cirq() instead, or give the profile a"
+                f" calibrated {word}-qubit native that Qiskit provides",
             )
-        else:
-            unit = "enabled qubit" if arity == 1 else "pair of enabled qubits"
-            advice = (
-                f"The profile allows no {word}-qubit native on any {unit}, so profile.to_cirq()"
-                " cannot run one either"
-            )
-        raise UnsupportedDevice(f"{refusal} ({why}). {advice}")
+        unit = "enabled qubit" if arity == 1 else "pair of enabled qubits"
+        raise UnsupportedDevice(
+            f"{refusal} ({why}). The profile allows no {word}-qubit native on any {unit}, so"
+            " profile.to_cirq() cannot run one either"
+        )
 
 
 def _loci(table: NoiseTable, enabled: Sequence[int]) -> dict[int, Sequence[tuple[int, ...]]]:
@@ -688,15 +688,15 @@ _TIME_UNITS_NS = {"s": 1e9, "ms": 1e6, "us": 1e3, "ns": 1.0, "ps": 1e-3}
 def _delay_ns(op: Delay, q: int) -> float:
     if isinstance(op.duration, qiskit.circuit.ParameterExpression):
         raise CircuitNotNativeError(
-            f"delay on qubit {q} has the unbound duration {op.duration}; delays relax before"
-            " parameter_binds apply, so bind delay durations before run:"
-            " sim.run(circuit.assign_parameters({...}))"
+            f"delay on qubit {q} has the unbound duration {op.duration}",
+            hint="delays relax before parameter_binds apply, so bind delay durations before run:"
+            " sim.run(circuit.assign_parameters({...}))",
         )
     if op.unit not in _TIME_UNITS_NS:
         raise CircuitNotNativeError(
-            f"delay on qubit {q} has duration {op.duration} {op.unit}; the profile has no sample"
-            " time, so give delays a time unit (s, ms, us, ns, ps), e.g."
-            " qc.delay(100, q, unit='ns')"
+            f"delay on qubit {q} has duration {op.duration} {op.unit}",
+            hint="the profile has no sample time, so give delays a time unit (s, ms, us, ns, ps),"
+            " e.g. qc.delay(100, q, unit='ns')",
         )
     return float(op.duration) * _TIME_UNITS_NS[op.unit]
 

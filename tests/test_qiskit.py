@@ -525,18 +525,32 @@ def test_target_carries_errors_and_durations_per_locus(manila: Profile) -> None:
     assert target["rz"][(0,)].error == 0.0
 
 
+_TRANSPILE_FIRST = (
+    "transpile it for this simulator first: from qiskit import transpile;"
+    " sim.run(transpile(circuit, sim))"
+)
+
+
 def test_run_rejects_an_untranspiled_circuit_with_the_fix(manila: Profile) -> None:
     sim = quiet_export(manila)
     with pytest.raises(
         CircuitNotNativeError, match=r"h on qubits \[0\].*transpile\(circuit, sim\)"
-    ):
+    ) as caught:
         sim.run(ghz(2))
-    wrong_pair = QuantumCircuit(3)
+    assert caught.value.hint == _TRANSPILE_FIRST
+    wrong_pair = QuantumCircuit(3, name="wrong_pair")
     wrong_pair.cx(0, 2)
-    with pytest.raises(CircuitNotNativeError, match="does not provide cx on that locus"):
+    with pytest.raises(CircuitNotNativeError) as caught:
         sim.run(wrong_pair)
-    with pytest.raises(CircuitNotNativeError, match="has 6 qubits"):
-        sim.run(QuantumCircuit(6))
+    assert caught.value.message == (
+        "circuit 'wrong_pair': cx on qubits [0, 2] is not available on ibm_manila (the device"
+        " does not provide cx on that locus)"
+    )
+    assert caught.value.hint == _TRANSPILE_FIRST
+    with pytest.raises(CircuitNotNativeError) as caught:
+        sim.run(QuantumCircuit(6, name="wide"))
+    assert caught.value.message == "circuit 'wide' has 6 qubits but ibm_manila has 5"
+    assert caught.value.hint == _TRANSPILE_FIRST
     assert sim.run(transpile(ghz(2), sim), shots=10).result().success
 
 
@@ -624,8 +638,13 @@ def test_delay_in_device_ticks_says_how_to_fix_it() -> None:
     sim = quiet_export(ring())
     circuit = QuantumCircuit(1)
     circuit.delay(100, 0)
-    with pytest.raises(CircuitNotNativeError, match=r"a time unit \(s, ms, us, ns, ps\)"):
+    with pytest.raises(CircuitNotNativeError) as caught:
         sim.run(circuit)
+    assert caught.value.message == "delay on qubit 0 has duration 100 dt"
+    assert caught.value.hint == (
+        "the profile has no sample time, so give delays a time unit (s, ms, us, ns, ps), e.g."
+        " qc.delay(100, q, unit='ns')"
+    )
 
 
 def test_unbound_delay_duration_says_to_bind_it_first() -> None:
@@ -633,8 +652,13 @@ def test_unbound_delay_duration_says_to_bind_it_first() -> None:
     t = Parameter("t")
     circuit = QuantumCircuit(1)
     circuit.delay(t, 0, unit="ns")
-    with pytest.raises(CircuitNotNativeError, match=r"unbound duration t.*assign_parameters"):
+    with pytest.raises(CircuitNotNativeError) as caught:
         sim.run(circuit, parameter_binds=[{t: [100.0]}])
+    assert caught.value.message == "delay on qubit 0 has the unbound duration t"
+    assert caught.value.hint == (
+        "delays relax before parameter_binds apply, so bind delay durations before run:"
+        " sim.run(circuit.assign_parameters({...}))"
+    )
     bound = circuit.assign_parameters({t: 100.0})
     assert sim.run(bound, shots=1).result().success
 
@@ -786,8 +810,14 @@ _ONE_QUBIT_NATIVES = {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}}
 _NO_EDGES = {"edges": []}
 
 
+_UNCALIBRATED = (
+    " and unknown_gates='error', so transpile does not use it there (unknown_gates='typical'"
+    " gives it the typical native's noise))"
+)
+
+
 @pytest.mark.parametrize(
-    ("sections", "unknown_gates", "ending"),
+    ("sections", "unknown_gates", "ending", "hint"),
     [
         (
             {
@@ -797,6 +827,7 @@ _NO_EDGES = {"edges": []}
             "typical",
             "compile to. Its connectivity allows no pair of enabled qubits, so profile.to_cirq()"
             " cannot run a two-qubit gate either",
+            None,
         ),
         (
             {
@@ -812,29 +843,47 @@ _NO_EDGES = {"edges": []}
             "compile to (cz: disabled on every locus; ms: ms has no calibration on (0, 1) and"
             " connectivity does not allow it). The profile allows no two-qubit native on any pair"
             " of enabled qubits, so profile.to_cirq() cannot run one either",
+            None,
         ),
         (
             {"gates": {"sx": {"disabled": True}, "cz": {"avg_infidelity": 1e-2}}},
             "typical",
             "compile to (sx: disabled on every locus). The profile allows no one-qubit native on"
             " any enabled qubit, so profile.to_cirq() cannot run one either",
+            None,
         ),
         (
             {"gates": {**_ONE_QUBIT_NATIVES, "cz": {}}},
             "error",
-            ". Simulate it with profile.to_cirq() instead, or give the profile a calibrated"
+            "compile to (cz: no error metric on qubits [(0, 1), (1, 0), (1, 2), (2, 1)]"
+            + _UNCALIBRATED,
+            "simulate it with profile.to_cirq() instead, or give the profile a calibrated"
             " two-qubit native that Qiskit provides",
         ),
+        (
+            {"gates": {"sx": {}, "cz": {"avg_infidelity": 1e-2}}},
+            "error",
+            "compile to (sx: no error metric on qubits [0, 1, 2]" + _UNCALIBRATED,
+            "simulate it with profile.to_cirq() instead, or give the profile a calibrated"
+            " one-qubit native that Qiskit provides",
+        ),
     ],
-    ids=["no pair", "disabled or unconnected", "one-qubit disabled", "uncalibrated"],
+    ids=[
+        "no pair",
+        "disabled or unconnected",
+        "one-qubit disabled",
+        "uncalibrated",
+        "one-qubit uncalibrated",
+    ],
 )
 def test_a_refusal_says_why_and_whether_cirq_can_run_the_gate(
-    sections, unknown_gates, ending
+    sections, unknown_gates, ending, hint
 ) -> None:
     with pytest.raises(UnsupportedDevice) as refused:
         to_qiskit(Profile.model_validate(toy(**sections)), unknown_gates=unknown_gates)
-    message = str(refused.value)
+    message = refused.value.message
     assert message.endswith(ending), message
+    assert refused.value.hint == hint
 
 
 def test_the_report_names_a_native_that_no_listed_pair_allows() -> None:
