@@ -462,7 +462,7 @@ def _require_natives(
         refusal = f"{profile.id} has no {word}-qubit native gate this Qiskit export can compile to"
         if not loci:
             raise UnsupportedDevice(
-                f"{refusal}: its connectivity allows no pair of enabled qubits, so"
+                f"{refusal}. Its connectivity allows no pair of enabled qubits, so"
                 f" profile.to_cirq() cannot run a {word}-qubit gate either"
             )
         why = "; ".join(f"{n}: {omitted.get(n, 'disabled on every locus')}" for n in defined)

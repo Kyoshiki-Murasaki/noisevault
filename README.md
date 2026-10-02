@@ -192,8 +192,8 @@ the development setup, the tests and how to add a source.
 
 If you use NoiseVault, cite the software with [CITATION.cff](CITATION.cff), or with
 **Cite this repository** on GitHub. Also give the fingerprint of every profile you used.
-`nv cite REF` prints it with the source, the calibration time and the NoiseVault version, and
-`nv cite REF --bibtex` prints a BibTeX entry.
+`nv cite REF` prints it with the source, the calibration time, the NoiseVault version and the
+ref that loads the calibration. `nv cite REF --bibtex` prints a BibTeX entry.
 
 ## License
 

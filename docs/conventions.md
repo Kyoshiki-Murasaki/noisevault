@@ -194,10 +194,10 @@ The `unknown_gates` option decides what happens:
 - `"error"` raises `MissingCalibrationError` instead.
 
 Z-family gates (`z`, `s`, `sdg`, `t`, `tdg`, `p`, `u1`, `rz`) are free when the profile's `rz`
-is virtual, so they never need the typical rule. Gates that need several native entanglers
-(`swap`, `cxswap`, `swapcx`, `czswap`, `cswap`, `ccx`) and gates on more than two qubits raise
-`MissingCalibrationError` with either `unknown_gates` value unless the profile calibrates them.
-Decompose them into native gates first.
+is virtual, so they never need the typical rule. Gates that need several native entanglers are
+`swap`, `cxswap`, `swapcx`, `czswap`, `cswap` and `ccx`. Unless the profile calibrates them,
+these gates and gates on more than two qubits raise `MissingCalibrationError` with either
+`unknown_gates` value. Decompose them into native gates first.
 
 The typical rule keeps an un-transpiled circuit runnable, but its gate count is not the
 device's. An `h` on IBM hardware is one `sx` between two virtual `rz` gates, and a `cx` is a

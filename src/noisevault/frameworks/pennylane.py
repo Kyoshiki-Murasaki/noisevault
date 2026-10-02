@@ -254,9 +254,9 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             self.report.warn_once(
                 "readout_skipped:shadow",
                 f"no readout noise applied to {mp}. A classical shadow picks a random measurement"
-                " basis for each shot, and a noise model acts before the measurement, so it cannot"
-                " flip the bit read in that basis. To fix: measure the Pauli words you need with"
-                " qml.expval or qml.sample, which get readout noise",
+                " basis for each shot. The noise model acts before the measurement, so the noise"
+                " model cannot flip the bit read in that basis. To fix: measure the Pauli words"
+                " you need with qml.expval or qml.sample, which get readout noise",
             )
             return
         if not mp.wires:
@@ -271,8 +271,8 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             self.report.omit("readout on observables not measured in one product basis")
             self.report.warn_once(
                 f"readout_skipped:{mp.obs}",
-                f"no readout noise applied to {mp}: its observable is not measured in one"
-                f" product basis. To fix: {_NO_BASIS_FIX}",
+                f"no readout noise applied to {mp}, because its observable is not measured in"
+                f" one product basis. To fix: {_NO_BASIS_FIX}",
             )
             return
         if basis:

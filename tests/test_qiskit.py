@@ -795,7 +795,7 @@ _NO_EDGES = {"edges": []}
                 "connectivity": _NO_EDGES,
             },
             "typical",
-            "compile to: its connectivity allows no pair of enabled qubits, so profile.to_cirq()"
+            "compile to. Its connectivity allows no pair of enabled qubits, so profile.to_cirq()"
             " cannot run a two-qubit gate either",
         ),
         (
