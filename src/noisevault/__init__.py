@@ -9,7 +9,7 @@ __version__ = "0.2.0"
 
 import importlib
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .catalog import ProfileInfo, load, profiles, pull
 from .errors import (
@@ -29,6 +29,11 @@ from .errors import (
 )
 from .profile import Profile, json_schema
 from .report import Report
+
+if TYPE_CHECKING:
+    from datetime import date, datetime
+
+    from .sources.hf_archive import ArchiveSpan
 
 _LAZY_MODULES = {"stim": "noisevault.frameworks.stim"}
 
@@ -65,6 +70,29 @@ def from_cirq_google(processor_id: str) -> Profile:
     return convert(processor_id)
 
 
+def from_calibration_archive(
+    path: str | Path, device: str, *, at: str | date | datetime | None = None
+) -> Profile:
+    """A profile from a local copy of the dataset phanerozoic/qiskit-calibration-drift.
+
+    Each property takes its newest calibration at or before ``at``; by default, the newest.
+    Install ``noisevault[hf]`` for pyarrow.
+    """
+    from .sources.hf_archive import from_calibration_archive as convert
+
+    return convert(path, device, at=at)
+
+
+def calibration_archive_devices(path: str | Path) -> dict[str, ArchiveSpan]:
+    """Each device in a local copy of phanerozoic/qiskit-calibration-drift, with its ``at`` range.
+
+    ``first`` is the earliest ``at`` accepted, and ``last`` is the device's newest calibration.
+    """
+    from .sources.hf_archive import calibration_archive_devices as devices
+
+    return devices(path)
+
+
 def __getattr__(name: str) -> Any:
     if name in _LAZY_MODULES:
         return importlib.import_module(_LAZY_MODULES[name])
@@ -89,7 +117,9 @@ __all__ = [
     "SourceUnavailable",
     "UnsupportedEffect",
     "__version__",
+    "calibration_archive_devices",
     "from_braket",
+    "from_calibration_archive",
     "from_cirq_google",
     "from_ibm_csv",
     "from_qiskit_backend",

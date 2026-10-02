@@ -7,7 +7,8 @@ NoiseVault gets calibrations three ways:
 - **Pulled.** `nv pull` (or `nv.pull`) fetches a live calibration from IBM or IonQ and saves it
   to your vault, `~/.noisevault/profiles`. Set `NOISEVAULT_HOME` to move the vault.
 - **Imported.** A converter reads data you already have: a Qiskit backend, an IBM calibration
-  CSV, saved Amazon Braket device properties, or a calibration that cirq-google ships.
+  CSV, saved Amazon Braket device properties, a calibration that cirq-google ships, or a local
+  copy of a published archive of IBM calibrations.
 
 `nv list` shows the vault first, then the bundled set. A vault profile with the same id,
 calibration time and fingerprint as a bundled one hides it. When one device has several
@@ -21,8 +22,9 @@ each profile's `provenance`. Everything else stays on your machine. The rule is 
 
 - `provenance.redistributable` is `"yes"`, `"no"` or `"unknown"`.
 - The build script refuses to bundle any profile that is not `"yes"`.
-- Pulled and imported profiles from IBM's services, IonQ, Braket and your own files are
-  `"no"` or `"unknown"`. They are written only to your vault or to the path you choose.
+- Pulled and imported profiles from IBM's services, the IBM calibration archive, IonQ, Braket
+  and your own files are `"no"` or `"unknown"`. They are written only to your vault or to the
+  path you choose.
 
 Check a profile's terms with `nv show REF`, which prints its source, license and
 redistributable flag. Before you publish a pulled profile, for example next to a paper, read
@@ -103,6 +105,7 @@ nv list
 | `nv.from_qiskit_backend(backend)` | Any Qiskit `BackendV2`, such as a fake backend or one from your account. | Only for account backends | No. It reads the backend's current `Target`. For an older IBM calibration, use `nv pull --at`. | Apache-2.0 for qiskit-ibm-runtime fake backends, else `unknown` | Per-qubit T1, T2 and readout, per-gate errors and durations of every native in the `Target`. |
 | `nv.from_ibm_csv(path, device=..., calibrated_at=...)` | The calibration CSV you download from the IBM Quantum platform. Formats from 2023 to 2026. | To download it | One file is one calibration. You give its time as `calibrated_at`. | `unknown` | Per-qubit T1, T2, readout errors and readout length, per-gate errors and durations, and qubits marked not operational. |
 | `nv.from_braket(path_or_dict, device=...)` | Braket device properties you saved with `AwsDevice(arn).properties.json()`, or their `standardized` part (v1, v2, v3). | AWS, to save it | No. One file is one snapshot. | AWS Customer Agreement, `no` | v1 and v2: per-qubit T1, T2 and fidelities, and per-pair gate fidelities. v3: device-level values. |
+| `nv.from_calibration_archive(path, device, at=...)` | A local copy of the Hugging Face dataset `phanerozoic/qiskit-calibration-drift`, which records each new IBM calibration of `ibm_fez`, `ibm_kingston`, `ibm_marrakesh` and `ibm_torino`. Install `noisevault[hf]`. | None | Yes. Each property takes its newest calibration at or before `at`. | `unknown`. The dataset is CC-BY-4.0, and the numbers are IBM's. | The same fields as a pull. Early dates have fewer gates, and `ibm_torino` has no durations. |
 | `nv.from_cirq_google(processor_id)` | The calibration cirq-google ships for `rainbow`, `weber` or `willow_pink`. Install `noisevault[google]` (cirq-google 1.6 or later). | None | No. cirq-google ships one calibration per processor. | Apache-2.0 | The same fields as the bundled Google profiles. |
 | `noisevault.sources.quantinuum.from_repository(machine, date)` | Any of the 15 datasets in Quantinuum's repository at the pinned commit, such as `("H1-1", "2023_01_20")`. Downloads from GitHub. | None | Yes. Each dataset is one date, and `date=None` gives the machine's newest. | Apache-2.0 | The same fields as the bundled Quantinuum profiles. |
 | `nv.Profile.uniform(...)`, or a file you write | A hypothetical device. | None | No | Yours | The values you give. |
@@ -128,6 +131,75 @@ so their profiles get `data_kind` `vendor_model` and a note in `provenance.notes
 the package. None of them is bundled.
 
 Imported profiles are not saved anywhere until you call `profile.save(path)`.
+
+### IBM calibration archive on Hugging Face
+
+The dataset [phanerozoic/qiskit-calibration-drift](https://huggingface.co/datasets/phanerozoic/qiskit-calibration-drift)
+records IBM calibrations. Its poller reads IBM's backend properties every 30 minutes and adds a
+row for each new calibration of a property. The dataset covers `ibm_fez`, `ibm_marrakesh` and
+`ibm_torino` from 31 January 2026, and `ibm_kingston` from 16 March 2026. NoiseVault reads a
+local copy of its one parquet file and never downloads it for you.
+
+To get the file, install the `hf` extra and the Hugging Face command line, then download the
+data folder. The file is about 66 MB.
+
+```bash
+pip install "noisevault[hf] @ git+https://github.com/Kyoshiki-Murasaki/noisevault" huggingface_hub
+hf download phanerozoic/qiskit-calibration-drift --repo-type dataset --include "data/*"
+```
+
+`hf download` prints the snapshot folder it wrote, which ends in `snapshots/<revision>`. The
+file is `data/train-00000-of-00001.parquet` inside it. A `git clone` without Git LFS gives a
+small pointer file in its place, and the importer rejects that file.
+
+<!-- not-run: needs the 66 MB file that hf download writes -->
+```python
+import noisevault as nv
+
+path = "<snapshot folder>/data/train-00000-of-00001.parquet"
+for device, span in nv.calibration_archive_devices(path).items():
+    print(device, span.first, span.last)
+fez = nv.from_calibration_archive(path, "ibm_fez", at="2026-06-01")
+```
+
+`calibration_archive_devices` returns each device with two times. `first` is when the archive
+first recorded the device, and `last` is its newest calibration. For each property, such as the
+T1 of one qubit or the `cz` error of one pair, `from_calibration_archive` takes the newest
+calibration at or before `at`. Without `at`, every property takes its newest calibration. An
+`at` before `first` raises `SourceDataError`, because the archive holds only the calibrations
+that were still current at its first poll. Each call reads the file again, which takes 2 to 3
+seconds for one device.
+
+The dataset's license is CC-BY-4.0, except for its sunspot column `SN`, which is CC-BY-NC-4.0.
+The importer never reads `SN`. Each profile credits the dataset and IBM Quantum in `provenance`:
+
+- `license` is `CC-BY-4.0`.
+- `attribution` is `IBM Quantum, via phanerozoic/qiskit-calibration-drift`.
+- `source` names the dataset and says that NoiseVault converted it. `source_url` links to the
+  dataset.
+- `source_hash` is the file's SHA-256, which equals the Hub's LFS object id, so it identifies the
+  revision. When the path contains `snapshots/<revision>`, `extra.revision` records the revision
+  and `source_url` links to that revision's file.
+- `redistributable` is `unknown`, as for `nv pull`, because the numbers are IBM's.
+
+The archive has these limits:
+
+- Until 8 May 2026, the poller wrote rows with no unit, and those rows give T1 and T2 in
+  seconds. The importer converts them to microseconds. They hold only T1, T2, the readout
+  errors and the `sx` and `cz` errors. Rows from a backfill of IBM snapshots, calibrated from
+  late January 2026, add the durations and most other gates.
+- If the device's newest calibration has a gate that the time you ask for lacks, the profile
+  leaves the gate out and `provenance.notes` names it. For example, `ibm_fez` at its `first`
+  time has no `xslow`.
+- IBM retired `ibm_torino` in April 2026, and the archive has only its rows with no unit.
+  Its profiles have the `sx` and `cz` errors and no durations.
+- The archive records a calibration when it first sees it. It never records that IBM stopped
+  listing a property, so a profile keeps such a property at its last value. At 2026-09-01,
+  `ibm_fez` has `xslow` errors from 29 May 2026 and a T2 on qubit 72 from 21 October 2025,
+  which IBM's own snapshot for that time leaves out. `nv pull ibm_fez --at 2026-09-01` and the
+  archive agree on all 1,132 gate records that both have.
+- A qubit whose `prob_meas1_prep0` or `prob_meas0_prep1` is 1 is disabled, and
+  `provenance.notes` names it. A gate error of 1 disables that gate, as in a pull.
 
 ## How each source's numbers are read
 
