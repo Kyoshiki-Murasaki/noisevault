@@ -36,12 +36,12 @@ from . import __version__, catalog
 from .diff import (
     METRICS,
     describe_delta,
+    distinguishing_stamps,
     fmt_error,
     fmt_metric,
     fmt_relative,
     fmt_time,
     fmt_us,
-    stamps,
 )
 from .errors import (
     REPOSITORY,
@@ -63,6 +63,7 @@ from .profile import (
 from .table import GateNoise
 
 if TYPE_CHECKING:
+    from .check import CheckResult, FrameworkCheck
     from .counts import MeasuredCounts
 
 # Click's UsageError; typer exports only this subclass of it.
@@ -74,7 +75,7 @@ _STRING = get_click_type(annotation=str, parameter_info=typer.Argument())
 
 
 class _Command(TyperCommand):
-    """A usage line names an argument as REF, not {ref}."""
+    """A usage line names an argument as REF, not {REF}."""
 
     def collect_usage_pieces(self, ctx: Any) -> list[str]:
         return [piece.strip("{}") for piece in super().collect_usage_pieces(ctx)]
@@ -341,7 +342,6 @@ _LIST_DROPS = ("source", "processor", "license")
 
 
 def _fit(build: Callable[[list[str]], Table], columns: list[str], drops: Sequence[str]) -> Table:
-    """The table of ``columns``, less the first of ``drops`` that make it fit the terminal."""
     table = build(columns)
     for column in drops:
         if _natural_width(table) <= out.width:
@@ -472,8 +472,6 @@ def _on_hand(ref: str, profile: Profile) -> _OnHand | None:
 
 
 def card(profile: Profile) -> dict[str, Any]:
-    """The facts ``nv show`` prints, as JSON-ready data: the calibration as stated, then the
-    unmodeled-error factors that simulations apply to it."""
     dev, prov, table = profile.device, profile.provenance, profile.table
     stated, unmodeled = profile.uncorrected(), profile.unmodeled_error
     medians = qubit_medians(stated)
@@ -505,13 +503,11 @@ def card(profile: Profile) -> dict[str, Any]:
 
 
 def _native_order(profile: Profile) -> list[str]:
-    """1-qubit gates, then 2-qubit gates, then reset, by name within each."""
     table = profile.table
     return sorted(profile.gates, key=lambda name: (name == "reset", table.arity(name) or 0, name))
 
 
 def _words(token: str) -> str:
-    """A schema token (vendor, technology, data kind, effect type) as prose."""
     return _WORDS.get(token) or token.replace("_", " ")
 
 
@@ -915,8 +911,7 @@ def _runs(indices: Sequence[int]) -> str:
 
 
 def _diff_title(first: Profile, second: Profile) -> str:
-    """``a@date -> b@date``, one device named once; with the times when the dates match."""
-    when = stamps(first.device.calibrated_at, second.device.calibrated_at)
+    when = distinguishing_stamps(first.device.calibrated_at, second.device.calibrated_at)
     if first.id != second.id:
         refs = (f"{p.id}@{w}" if w else p.id for p, w in zip((first, second), when, strict=True))
         return " -> ".join(f"[bold]{ref}[/bold]" for ref in refs)
@@ -1034,7 +1029,7 @@ def check(
 _CHECK_DROPS = ("tolerance", "circuits")
 
 
-def _check_row(f: Any, result: Any) -> dict[str, str]:
+def _check_row(f: FrameworkCheck, result: CheckResult) -> dict[str, str]:
     reduced = {n.circuit for n in f.not_run if n.ran_without}
     ran = len({c.circuit for c in f.circuits} - reduced)
     counted = f"{ran} of {len(result.circuits)}"
@@ -1085,11 +1080,7 @@ def _none_installed(missing: list[str], *, ref: str, framework: str | None) -> N
 
 
 def _uvx_hint(extra: str, command: str) -> str:
-    """The uvx command that runs ``command`` with an optional extra, installing nothing."""
     return f'uvx --from "noisevault[{extra}] @ git+{REPOSITORY}" {command}'
-
-
-# compare ------------------------------------------------------------------------------------
 
 
 @app.command()
@@ -1148,7 +1139,6 @@ _COUNTS_FILE = "give a counts file (.json or .json.gz)"
 
 
 def _profile_file(ref: str) -> Path:
-    """The file a ref loads: the path it names, or the vault or bundled file of a catalog ref."""
     target = catalog.parse_ref_preferring_id(ref)
     return target if isinstance(target, Path) else Path(str(catalog.resolve(target).path))
 
@@ -1156,7 +1146,6 @@ def _profile_file(ref: str) -> Path:
 def _check_fitted_output(
     output: Path, profile: Profile, *, counts: Path, profile_file: Path
 ) -> None:
-    """Refuse, before the fit, an -o that would replace an input or a profile NoiseVault holds."""
     elsewhere = f"save the fitted profile elsewhere, such as {profile.id}-fitted.json"
     for read, what in ((counts, "counts file"), (profile_file, "profile file")):
         if output.exists() and read.exists() and os.path.samefile(output, read):
@@ -1301,7 +1290,6 @@ def schema() -> None:
 
 
 def _load(ref: str, *, counts_hint: str | None = None) -> Profile:
-    """The profile REF names. ``counts_hint`` replaces the hint when REF is a counts file."""
     target = catalog.parse_ref_preferring_id(ref)
     if not isinstance(target, Path):
         return catalog.load(ref)
@@ -1366,7 +1354,6 @@ def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
 
 
 def _not_json_hint(path: Path) -> str:
-    """A file named like a profile has damaged content; any other file is the wrong kind."""
     return _DAMAGED_FILE if path.name.endswith((".json", ".json.gz")) else _PROFILE_FILE
 
 

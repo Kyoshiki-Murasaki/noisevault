@@ -1,17 +1,3 @@
-"""The README runs as written, its links resolve, and its generated parts match the code.
-
-Each Python block runs alone in a fresh interpreter with an empty vault. The ``# `` comment
-lines after a block's first print show its output; the text before any ``...`` on each line
-must appear in what it prints, in the same order. A framework's version number in that text,
-as in ``qiskit-aer 0.17.2``, matches any version. A block preceded by
-``<!-- not-run: reason -->`` is skipped. A missing optional
-package skips the run, unless NOISEVAULT_REQUIRE_ALL=1.
-
-The bundled-profiles table and the terminal screenshots in assets/ are generated. When a test
-here says one is stale, regenerate it with ``python tests/test_readme.py``.
-The hero images come from assets/hero.txt through ``python scripts/build_hero.py``.
-"""
-
 from __future__ import annotations
 
 import ast
@@ -145,7 +131,6 @@ def literal(text: str) -> Any:
 
 
 def unversioned(text: str) -> str:
-    """``text`` with each framework version replaced, because a block prints the installed one."""
     return FRAMEWORK_VERSION.sub(r"\1 *", text)
 
 
@@ -442,8 +427,6 @@ def compare_block() -> re.Match[str]:
 
 
 def compare_output(command: str, url: str) -> str:
-    """``nv compare`` as the README runs it, in a folder that holds only the downloaded file,
-    through its fit lines."""
     owner_and_name = REPOSITORY.removeprefix("https://github.com/")
     assert url == f"https://raw.githubusercontent.com/{owner_and_name}/main/{EXAMPLE_COUNTS}", url
     cwd = os.getcwd()

@@ -1,17 +1,3 @@
-"""Reader for NoiseVault 0.1 snapshots: a pure dict-to-dict upgrade to format 1.0.
-
-0.1 files were IBM-shaped: one record per (gate, qubits) with an average gate error, per-qubit
-T1/T2 and readout. The upgrade keeps every number and turns conventions into explicit fields:
-``error >= 1`` (IBM's dead-gate sentinel) or ``operational: false`` become ``disabled``, an
-``rz`` with usable records whose errors and durations are all explicitly zero becomes
-``virtual`` (its disabled records stay), a missing value stays missing (so an ``rz`` without
-that evidence stays a calibrated or uncalibrated native), and the per-qubit readout pair wins
-over the averaged ``readout_error``. A ``qiskit_fake`` file keeps the package's Apache-2.0
-license only when its ``raw_hash`` is a verified package snapshot. The 0.1 reader parsed
-``operational`` with pydantic's lax booleans, so ``"false"``, ``"no"``, ``"off"`` and ``0``
-disable as ``false`` does. The upgrade refuses any other value.
-"""
-
 from __future__ import annotations
 
 import json
@@ -149,7 +135,6 @@ def _fail(problem: str) -> NoReturn:
 
 
 def _parse(old: dict[str, Any]) -> dict[str, Any]:
-    """Return the 0.1 dict with its flags parsed. ValueError names the first unreadable field."""
     for key, kind in _FIELDS.items():
         if key not in old:
             _fail(f"{key} is missing")
@@ -201,13 +186,13 @@ def _parse(old: dict[str, Any]) -> dict[str, Any]:
     return {**old, "gates": gate_entries, "qubits": qubit_entries}
 
 
-_BOOL = TypeAdapter(bool)
+_V01_LAX_BOOL = TypeAdapter(bool)
 
 
 def _flag(entry: dict[str, Any], where: str) -> bool:
     value = entry.get("operational", True)
     try:
-        return _BOOL.validate_python(value)
+        return _V01_LAX_BOOL.validate_python(value)
     except ValidationError:
         _fail(f"{where}: operational should be true or false, not {_shown(value)}")
 

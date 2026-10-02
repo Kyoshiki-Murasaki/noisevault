@@ -1921,8 +1921,6 @@ def test_an_unexpected_failure_is_one_error_and_a_hint_unless_debugging(monkeypa
     assert isinstance(debug.exception, KeyError)
 
 
-# compare --------------------------------------------------------------------------------------
-
 ROOT = Path(__file__).resolve().parents[1]
 KINGSTON = "ibm_kingston@2026-04-15"
 EXAMPLE = "examples/kingston-simulated.counts.json"
@@ -1930,8 +1928,6 @@ FITS = ROOT / "tests" / "fixtures" / "compare"
 
 
 class _Pinned(NamedTuple):
-    """An nv compare command as a user types it in the folder it runs in."""
-
     ref: str
     counts: str
     cwd: Path
@@ -1946,9 +1942,6 @@ _PINNED = {
 
 
 def _pinned_inputs() -> dict[str, Any]:
-    """The files the pinned outputs read, other than the example, as test_compare.py builds
-    them: kingston with three times the readout error on qubit 150, fez with 9 readout shots
-    that read qubit 136 as 1, and one qubit that runs x then x."""
     from test_compare import LATER, XX, excess_readout, fez_with_impossible_shots
     from test_compare import toy as one_qubit_toy
 
@@ -1970,7 +1963,6 @@ def _compare(
 
 
 def _layout(lines: list[str]) -> None:
-    """The rules every nv compare output follows at 80 columns."""
     assert all(len(line) <= 80 and line == line.rstrip() for line in lines), lines
     assert all(lines[:3]) and lines[3] == "" and lines[4].startswith("circuit ")
     end = lines.index("", 4)
@@ -2021,7 +2013,6 @@ def test_compare_prints_the_ref_the_table_header_and_each_label_in_bold(monkeypa
 
 
 def _pair(folder: Path) -> tuple[str, str]:
-    """A two-qubit profile and counts simulated from it at gate x1.5 and readout x1.2."""
     profile = Profile.uniform(
         "pair",
         technology="superconducting",
@@ -2079,7 +2070,6 @@ def test_compare_o_refuses_a_file_it_reads_before_fitting(
 
 
 def _vault_ref_backed_elsewhere(vault: Path, folder: Path) -> Path:
-    """A vault entry that links to a copy of kingston's calibration outside the vault."""
     vault.mkdir(parents=True)
     copy = folder / "kingston-copy.json.gz"
     nv.load(KINGSTON).save(copy)

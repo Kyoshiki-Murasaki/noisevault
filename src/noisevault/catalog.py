@@ -31,6 +31,7 @@ from .errors import (
     ProfileNotFound,
     SourceUnavailable,
     did_you_mean,
+    parse_json,
 )
 from .profile import (
     Profile,
@@ -183,15 +184,6 @@ _INDEX_VERSION = 1
 
 
 def vault_profiles(*, reread: bool = False) -> list[ProfileInfo]:
-    """Profiles in the vault, indexed by file name so unchanged files are not parsed again.
-
-    The index (``.index.json`` in the vault) is only a cache. The listing reuses an entry
-    while its file's size, modification time and change time (moved by chmod and chown, which
-    can make it unreadable) are unchanged. The index names its format version and a digest of
-    its entries, so the listing ignores and replaces an index that this NoiseVault did not
-    write. Losing the index costs one re-read of each file. With ``reread=True`` the listing
-    reads every file and replaces the index.
-    """
     folder = vault_dir()
     cached = {} if reread else _read_vault_index(folder)
     index: dict[str, dict[str, Any]] = {}
@@ -216,6 +208,7 @@ def _vault_entry(path: Path, cached: Any) -> tuple[dict[str, Any], ProfileInfo]:
     stat = path.stat()
     if not S_ISREG(stat.st_mode):  # opening a pipe would block the listing
         raise OSError("not a regular file")
+    # chmod and chown move only the change time, and either can make the file unreadable.
     signature = [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
     if isinstance(cached, dict) and cached.get("signature") == signature:
         try:
@@ -245,23 +238,17 @@ def _skipped(path: Path, exc: Exception) -> str:
 
 
 def _read_vault_index(folder: Path) -> dict[str, dict[str, Any]]:
-    """The index entries, or nothing when the file is not one this NoiseVault wrote.
-
-    This code writes only regular files that it can parse and hash again, so a file that cannot
-    be read, parsed or hashed is not one. Increase ``_INDEX_VERSION`` whenever
-    :func:`index_entry` changes what an entry means.
-    """
     path = folder / _VAULT_INDEX
     try:
         if not S_ISREG(path.stat().st_mode):
             return {}
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = parse_json(path.read_bytes())
         if not isinstance(data, dict) or data.get("version") != _INDEX_VERSION:
             return {}
         entries = data.get("entries")
         if not isinstance(entries, dict) or data.get("digest") != _digest(entries):
             return {}
-    except (OSError, ValueError, RecursionError):
+    except (OSError, ValueError):
         return {}
     return entries
 
@@ -324,7 +311,7 @@ def _pick(ref: Ref, known: list[ProfileInfo], expect: str | None) -> ProfileInfo
         newest = max(_epoch(i.calibrated_at) for i in candidates)
         matches = [i for i in candidates if _epoch(i.calibrated_at) == newest]
     else:
-        matches = [i for i in candidates if _names(ref, i.calibrated_at)]
+        matches = [i for i in candidates if _ref_time_matches(ref, i.calibrated_at)]
     if not matches:
         raise _no_calibration(ref, candidates)
     if expect is not None:
@@ -384,11 +371,7 @@ def load(ref: str | Path, *, expect: str | None = None) -> Profile:
     return profile
 
 
-def _names(ref: Ref, when: datetime | None) -> bool:
-    """Whether a UTC calibration time is on the ref's date or at its timestamp.
-
-    A ref with neither accepts any time.
-    """
+def _ref_time_matches(ref: Ref, when: datetime | None) -> bool:
     if ref.timestamp is not None:
         return when == ref.timestamp
     if ref.date is not None:
@@ -397,7 +380,7 @@ def _names(ref: Ref, when: datetime | None) -> bool:
 
 
 def _answers(ref: Ref, profile: Profile) -> bool:
-    return profile.id == ref.id and _names(ref, profile.device.calibrated_at)
+    return profile.id == ref.id and _ref_time_matches(ref, profile.device.calibrated_at)
 
 
 def _pinned(profile: Profile, expect: str | None) -> bool:
@@ -452,9 +435,11 @@ def pull_and_save(
     if output is not None:
         return Pulled(profile, profile.save(output), written=True)
     listed = vault_profiles()
-    old = _held(profile, listed)
-    if old is not None and old.fingerprint == profile.fingerprint:
-        return Pulled(profile, Path(str(old.path)), written=False)
+    same_id = [i for i in listed if i.id == profile.id]
+    held = next((i for i in same_id if i.fingerprint == profile.fingerprint), None)
+    if held is not None:
+        return Pulled(profile, Path(str(held.path)), written=False)
+    old = next((i for i in same_id if i.calibrated_at == profile.device.calibrated_at), None)
     if old is not None:
         path = Path(str(old.path))  # may carry an older naming scheme; replace it in place
         warnings.warn(
@@ -479,15 +464,6 @@ def pull_and_save(
             )
     profile.save(path)
     return Pulled(profile, path, written=True)
-
-
-def _held(profile: Profile, listed: list[ProfileInfo]) -> ProfileInfo | None:
-    """The vault file that holds this profile, else the same calibration converted differently."""
-    same_id = [i for i in listed if i.id == profile.id]
-    same = next((i for i in same_id if i.fingerprint == profile.fingerprint), None)
-    return same or next(
-        (i for i in same_id if i.calibrated_at == profile.device.calibrated_at), None
-    )
 
 
 _DEFAULT_SOURCES = {"ibm_": "ibm", "ionq": "ionq"}  # id prefix -> source that pulls it

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -583,7 +584,6 @@ def _indexed(vault: Path) -> dict[str, dict[str, object]]:
 
 
 def _misindex(vault: Path, path: Path, **wrong: object) -> dict[str, object]:
-    """Index the vault and rewrite one entry with wrong values. Returns the entry as it was."""
     catalog.vault_profiles()
     index = vault / ".index.json"
     data = json.loads(index.read_text())
@@ -623,12 +623,52 @@ def test_an_index_this_noisevault_did_not_write_is_ignored_and_rewritten(
     assert [i.id for i in catalog.vault_profiles()] == ["test_toy"]
     data = json.loads(index.read_text())
     assert data["entries"] == {path.name: entry}
+    canonical = json.dumps(data["entries"], sort_keys=True, separators=(",", ":"))
     assert (data["version"], data["digest"]) == (
         catalog._INDEX_VERSION,
-        catalog._digest(data["entries"]),
+        hashlib.sha256(canonical.encode()).hexdigest(),
     )
     assert [i.id for i in catalog.vault_profiles()] == ["test_toy"]
     assert writes == [index]
+
+
+def test_what_an_index_entry_records_changes_only_with_the_index_version() -> None:
+    profile = Profile.model_validate(
+        toy(
+            device={
+                "name": "toy",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 3,
+                "processor": "Falcon r5.11",
+                "calibrated_at": "2025-01-01T00:00:00Z",
+            },
+            provenance={
+                "data_kind": "measured",
+                "source_kind": "package_snapshot",
+                "license": "Apache-2.0",
+                "attribution": "test",
+                "redistributable": "yes",
+            },
+        )
+    )
+    assert (catalog._INDEX_VERSION, catalog.index_entry(profile)) == (
+        1,
+        {
+            "id": "test_toy",
+            "date": "2025-01-01",
+            "calibrated_at": "2025-01-01T00:00:00Z",
+            "vendor": "test",
+            "technology": "superconducting",
+            "num_qubits": 3,
+            "processor": "Falcon r5.11",
+            "data_kind": "measured",
+            "source_kind": "package_snapshot",
+            "license": "Apache-2.0",
+            "redistributable": "yes",
+            "fingerprint": profile.fingerprint,
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -785,8 +825,6 @@ def test_a_pull_does_not_trust_a_stale_index_entry(
 def _saved_while_loading(
     monkeypatch: pytest.MonkeyPatch, path: Path, saved: Profile, then: Profile | None = None
 ) -> None:
-    """Another writer saves ``saved`` to ``path`` after a load resolves that file and before the
-    load reads it. With ``then``, it saves ``then`` right after the read."""
     real = catalog.ProfileInfo.load
 
     def load(self: catalog.ProfileInfo) -> Profile:
@@ -890,7 +928,7 @@ def test_a_load_through_the_index_reads_only_the_file_it_resolves(
     real = Path.read_bytes
     monkeypatch.setattr(Path, "read_bytes", lambda self: reads.append(self) or real(self))
     assert nv.load("test_toy@2025-01-03") == days[2]
-    assert reads == [vault_path(days[2])]
+    assert [p for p in reads if p != vault / ".index.json"] == [vault_path(days[2])]
 
 
 def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:

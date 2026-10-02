@@ -54,15 +54,13 @@ ACCOUNT_SETUP = (
     " QiskitRuntimeService.save_account(token=...)"
 )
 LABEL = 16
+SUB_JOB_OVERHEAD_S = 2.0
 
 Calibration = Callable[[datetime | None], Profile]
 
 
 @dataclass(frozen=True)
 class Batch:
-    """One SamplerV2 job: the planned circuits, the same circuits built for the backend, and the
-    options it is submitted with."""
-
     profile: Profile
     planned: tuple[PlannedCircuit, ...]
     circuits: tuple[Any, ...]
@@ -73,11 +71,13 @@ class Batch:
 
 
 @dataclass(frozen=True)
-class Submitted:
-    """A submitted job and what collecting it needs. Until its counts are saved, a file beside
-    the counts file holds it, so running the same command again collects this job instead of
-    submitting another."""
+class IsaCircuit:
+    circuit: Any
+    measure_at_ns: float
 
+
+@dataclass(frozen=True)
+class Submitted:
     job_id: str
     profile: Profile
     planned: tuple[PlannedCircuit, ...]
@@ -105,9 +105,6 @@ class Submitted:
 
 @dataclass(frozen=True)
 class Binding:
-    """The calibration the counts bind to. ``warning`` says why when it is not the one in effect
-    when the job ran."""
-
     profile: Profile
     warning: str | None = None
     hint: str | None = None
@@ -115,9 +112,6 @@ class Binding:
 
 @dataclass(frozen=True)
 class Ran:
-    """What the finished job returned: the counts of each circuit with classical bit 0 on the
-    right, when the job started running, and IBM's schedule of each circuit if it sent one."""
-
     job_id: str
     source: str
     run_at: datetime
@@ -128,34 +122,25 @@ class Ran:
 def prepare(
     calibration: Calibration, open_backend: Callable[[bool], Any], shots: int
 ) -> tuple[Any, Batch]:
-    """Plan from the calibration in effect now and build each circuit for the backend."""
     profile = calibration(None)
     planned = plan(profile)
     backend = open_backend(any(op.name in FRACTIONAL_GATES for c in planned for op in c.ops))
     target = backend.target
     built = [isa_circuit(circuit, profile, target) for circuit in planned]
-    circuits = tuple(qc for qc, _ in built)
+    circuits = tuple(b.circuit for b in built)
     rep_delay = backend.configuration().default_rep_delay
     return backend, Batch(
         profile=profile,
         planned=planned,
         circuits=circuits,
-        durations_ns=tuple(ns for _, ns in built),
+        durations_ns=tuple(b.measure_at_ns for b in built),
         shots=shots,
         options=sampler_options(shots, rep_delay),
         usage_s=usage_seconds(planned, circuits, target, rep_delay, shots),
     )
 
 
-def isa_circuit(circuit: PlannedCircuit, profile: Profile, target: Any) -> tuple[Any, float]:
-    """``circuit`` on the backend's physical qubits with every delay in whole dt, then a barrier
-    and one measurement per circuit qubit, and its duration before the measurements in ns.
-
-    Refuses an op the backend does not support on its qubits. Refuses a gate whose backend
-    duration differs from the calibration's, because the plan timed the delays from the
-    calibration. Refuses a delay that is not a whole number of dt or is shorter than the backend
-    allows, and an op or measurement that would start off the backend's timing grid.
-    """
+def isa_circuit(circuit: PlannedCircuit, profile: Profile, target: Any) -> IsaCircuit:
     from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
     from qiskit.circuit import Delay
 
@@ -217,14 +202,11 @@ def isa_circuit(circuit: PlannedCircuit, profile: Profile, target: Any) -> tuple
     qc.barrier(list(circuit.qubits))
     for i, q in enumerate(circuit.qubits):
         qc.measure(q, i)
-    return qc, end * dt_ns
+    return IsaCircuit(qc, end * dt_ns)
 
 
 def sampler_options(shots: int, rep_delay: float) -> dict[str, Any]:
-    """Every SamplerV2 option the counts format checks, set explicitly, plus the shots and the
-    backend's default repetition delay. The client sends no unset option, and the server would
-    choose its own default for it. ``scheduler_timing`` asks IBM to return how it scheduled each
-    circuit."""
+    """The client sends no unset option, and the server would choose its own default for it."""
     options: dict[str, Any] = {"default_shots": shots}
     for path, value in {**_SAMPLER_V2_OPTIONS, "execution.rep_delay": rep_delay}.items():
         *parents, leaf = path.split(".")
@@ -243,9 +225,8 @@ def usage_seconds(
     rep_delay: float,
     shots: int,
 ) -> float:
-    """IBM's estimate of the job's QPU usage: 2 s, plus each circuit's length, a reset and the
-    repetition delay for every shot."""
-    total = 2.0
+    """IBM's estimate, from https://quantum.cloud.ibm.com/docs/en/guides/estimate-job-run-time"""
+    total = SUB_JOB_OVERHEAD_S
     for circuit, qc in zip(planned, circuits, strict=True):
         reset = max(_seconds(target, "reset", (q,)) for q in circuit.qubits)
         total += (qc.estimate_duration(target, unit="s") + reset + rep_delay) * shots
@@ -253,7 +234,6 @@ def usage_seconds(
 
 
 def submit(backend: Any, batch: Batch) -> Any:
-    """Submit the circuits as one SamplerV2 job."""
     from qiskit_ibm_runtime import SamplerV2
 
     sampler = SamplerV2(mode=backend, options=batch.options)
@@ -267,7 +247,6 @@ def submit(backend: Any, batch: Batch) -> Any:
 
 
 def collect(job: Any, submitted: Submitted) -> Ran:
-    """Wait for the job and read its counts, its start time and IBM's schedule."""
     from qiskit_ibm_runtime import RuntimeJobV2
 
     result = job.result()
@@ -298,9 +277,6 @@ def started_at(metrics: dict[str, Any]) -> datetime:
 
 
 def bind(submitted: Submitted, ran: Ran, calibration: Calibration) -> Binding:
-    """The calibration the counts bind to: the one in effect when the job ran, if nv compare
-    accepts the counts against it and every gate keeps its planned duration. Otherwise the
-    planned calibration, with a warning that says why."""
     planned = submitted.profile
     try:
         latest = calibration(ran.run_at)
@@ -331,7 +307,6 @@ def bind(submitted: Submitted, ran: Ran, calibration: Calibration) -> Binding:
 
 
 def _unlike_the_plan(latest: Profile, submitted: Submitted, ran: Ran) -> str | None:
-    """Why the counts cannot bind to ``latest``, or None when they can."""
     try:
         _bind(latest, counts_file(latest, submitted, ran))
     except CountsError as exc:
@@ -353,8 +328,6 @@ def _unlike_the_plan(latest: Profile, submitted: Submitted, ran: Ran) -> str | N
 
 
 def counts_file(profile: Profile, submitted: Submitted, ran: Ran) -> MeasuredCounts:
-    """The run as a counts file bound to ``profile``. Each circuit's shots are the sum of its
-    counts, so the file records the shots that ran."""
     import qiskit
     import qiskit_ibm_runtime
 
@@ -388,9 +361,7 @@ def counts_file(profile: Profile, submitted: Submitted, ran: Ran) -> MeasuredCou
     )
 
 
-def ref_for(profile: Profile, output: Path) -> str:
-    """The shortest ref that loads ``profile``. When no catalog ref loads it, ``ref_for`` saves
-    the profile beside the counts and returns that file's path."""
+def catalog_ref(profile: Profile) -> str | None:
     when = profile.device.calibrated_at
     if when is not None:
         stamp = when.isoformat().replace("+00:00", "Z")
@@ -400,9 +371,7 @@ def ref_for(profile: Profile, output: Path) -> str:
                     return ref
             except NoiseVaultError:
                 continue
-    path = _beside(output, ".profile.json")
-    profile.save(path)
-    return str(path)
+    return None
 
 
 def run(
@@ -414,9 +383,6 @@ def run(
     open_job: Callable[[str], Any],
     confirm: Callable[[str], bool] | None,
 ) -> MeasuredCounts | None:
-    """Plan, check, ask, submit, wait, bind and save. When a job submitted earlier for ``output``
-    has no saved counts yet, ``run`` collects that job instead. Returns None when the user
-    declines."""
     pending = _beside(output, ".job.json")
     if pending.exists():
         submitted, job = _resume(pending, open_job)
@@ -436,18 +402,21 @@ def run(
     print("waiting for it to run")
     print("Ctrl-C stops waiting; run the same command again to collect the job")
     again = f"run the same command again to collect them, or delete {pending} to submit a new job"
+    uncollected = f"could not collect the counts of job {submitted.job_id}"
     try:
-        ran = collect(job, submitted)
+        try:
+            ran = collect(job, submitted)
+        except Exception as exc:
+            raise NoiseVaultError(f"{uncollected} ({_reason(exc)})", hint=again) from None
         binding = bind(submitted, ran, calibration)
         measured = counts_file(binding.profile, submitted, ran)
-        measured.save(output)
+        try:
+            measured.save(output)
+        except OSError as exc:
+            raise NoiseVaultError(f"{uncollected} ({_reason(exc)})", hint=again) from None
     except KeyboardInterrupt:
         raise NoiseVaultError(
             f"stopped before the counts of job {submitted.job_id} were saved", hint=again
-        ) from None
-    except Exception as exc:
-        raise NoiseVaultError(
-            f"could not collect the counts of job {submitted.job_id} ({_reason(exc)})", hint=again
         ) from None
     pending.unlink()
     bound = binding.profile
@@ -469,7 +438,10 @@ def run(
         timing = _beside(output, ".timing.json")
         timing.write_text(json.dumps(ran.timing, indent=1) + "\n", encoding="utf-8")
         lines.append(("timing", f"{timing}, how IBM scheduled each circuit"))
-    lines.append(("next", shlex.join(["nv", "compare", ref_for(bound, output), str(output)])))
+    ref = catalog_ref(bound)
+    if ref is None:
+        ref = str(bound.save(_beside(output, ".profile.json")))
+    lines.append(("next", shlex.join(["nv", "compare", ref, str(output)])))
     print()
     print("\n".join(f"{label:<{LABEL}}{value}" for label, value in lines))
     return measured
@@ -492,7 +464,6 @@ def _resume(pending: Path, open_job: Callable[[str], Any]) -> tuple[Submitted, A
 
 
 def summary(batch: Batch, output: Path) -> str:
-    """What the job runs and costs, for the user to read before submitting."""
     profile = batch.profile
     chain = tuple(dict.fromkeys(q for c in batch.planned for q in c.qubits))
     rows = [("circuit", "qubits", "gates", "duration")] + [
@@ -588,7 +559,6 @@ def _positive(text: str) -> int:
 
 
 def _writable(output: Path) -> None:
-    """Refuse an output the run could not write, before the job spends any usage."""
     if output.exists():
         raise NoiseVaultError(
             f"{output} exists", hint="give -o a new file name; the script never replaces counts"
@@ -636,7 +606,6 @@ def _warning_line(message: Warning | str, *_: Any, **__: Any) -> None:
 
 
 def _seconds(target: Any, name: str, qubits: tuple[int, ...]) -> float:
-    """The backend's duration of ``name`` on ``qubits`` in seconds, or 0 when it states none."""
     props = target[name].get(qubits) if name in target.operation_names else None
     return 0.0 if props is None or props.duration is None else props.duration
 

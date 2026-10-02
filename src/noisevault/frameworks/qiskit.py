@@ -104,7 +104,6 @@ def _cx_via_sqrt_iswap() -> QuantumCircuit:
 SessionEquivalenceLibrary.add_equivalence(CXGate(), _cx_via_sqrt_iswap())
 # Registry natives Qiskit has no gate for, exported as this module's own.
 _OWN_GATES: dict[str, type[Gate]] = {"sqrt_iswap": SqrtISwapGate}
-# Barriers and simulator directives, which act on no device resource.
 _DIRECTIVES = (
     Barrier,
     SaveData,
@@ -249,7 +248,6 @@ class NoiseVaultSimulator(AerSimulator):
 
 
 def _width_hint(circuit: QuantumCircuit, width: int) -> str:
-    """The next step for a circuit with more qubits than the device's ``width``."""
     if circuit.layout is None:
         acted_on = {
             q for i in circuit.data if not isinstance(i.operation, _DIRECTIVES) for q in i.qubits

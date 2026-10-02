@@ -1,11 +1,3 @@
-"""scripts/run_on_ibm.py, offline.
-
-The run goes through qiskit-ibm-runtime's local testing mode on FakeFez, which exists in every
-release the ``ibm`` extra allows. The fake gets an ideal AerSimulator. Without it, each local run
-deep-copies the fake and rebuilds its 156-qubit noise model, which took 8 s on an idle machine
-and up to 137 s under load. The script runs the same lines either way.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -69,19 +61,17 @@ script = _load_script()
 
 
 def _fez() -> Any:
-    """A FakeFez whose local runs sample the ideal circuits, without the noise model."""
     fake_provider = require("qiskit_ibm_runtime.fake_provider")
     aer = require("qiskit_aer")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         fake = fake_provider.FakeFez()
+    # Without a sim, each local run deep-copies the fake and rebuilds its 156-qubit noise model.
     fake.sim = aer.AerSimulator()
     return fake
 
 
 def _fractional_fez() -> Any:
-    """``_fez()`` with rx and rzz in its Target, from the same snapshot, as IBM opens a backend
-    with ``use_fractional_gates=True``."""
     converter = require("qiskit_ibm_runtime.utils.backend_converter")
     fake = _fez()
     configuration = copy.deepcopy(fake.configuration())
@@ -98,7 +88,6 @@ def _fez_profile() -> Profile:
 
 
 def _pinned_snapshot() -> Profile:
-    """The FakeFez profile, when it is the snapshot whose numbers the test pins."""
     profile = _fez_profile()
     if profile.short_fingerprint != FEZ:
         pytest.skip(f"FakeFez here is {profile.short_fingerprint}; the pinned numbers are {FEZ}'s")
@@ -107,7 +96,6 @@ def _pinned_snapshot() -> Profile:
 
 @contextlib.contextmanager
 def _five_hours_behind_utc() -> Iterator[None]:
-    """Local time 5 hours behind UTC, so a local time read as UTC is off by 5 hours."""
     try:
         with pytest.MonkeyPatch.context() as monkeypatch:
             monkeypatch.setenv("TZ", "NVT+5")
@@ -127,8 +115,6 @@ class Submission:
 def _recording_sampler(
     monkeypatch: pytest.MonkeyPatch, *, lose_the_first_wait: bool = False
 ) -> list[Submission]:
-    """Every job submitted through SamplerV2, in order. With ``lose_the_first_wait``, waiting for
-    the first job fails as a dropped connection would."""
     runtime = require("qiskit_ibm_runtime")
     submissions: list[Submission] = []
 
@@ -167,7 +153,6 @@ class LocalRun:
 
 @pytest.fixture(scope="module")
 def local_run(tmp_path_factory: pytest.TempPathFactory) -> LocalRun:
-    """One run of the script's ``run`` in local mode, 5 hours behind UTC."""
     folder = tmp_path_factory.mktemp("run_on_ibm")
     with pytest.MonkeyPatch.context() as monkeypatch, _five_hours_behind_utc():
         monkeypatch.setenv("NOISEVAULT_HOME", str(folder / "nv_home"))
@@ -251,8 +236,6 @@ def test_run_at_is_when_the_job_started_in_utc(local_run: LocalRun) -> None:
 
 
 def _instructions(qc: Any) -> list[tuple[Any, ...]]:
-    """Each instruction as (name, qubits, parameters, clbits); a delay's parameters are its
-    length and unit."""
     out = []
     for instruction in qc.data:
         operation = instruction.operation
@@ -361,7 +344,7 @@ def test_the_counts_keep_circuit_qubit_0_first() -> None:
     fake = _fez()
     profile = _fez_profile()
     flip = PlannedCircuit(name="flip", qubits=(136, 143), ops=(("x", [0], []),))
-    qc, _ = script.isa_circuit(flip, profile, fake.target)
+    qc = script.isa_circuit(flip, profile, fake.target).circuit
     batch = script.Batch(
         profile=profile,
         planned=(flip,),
@@ -553,6 +536,53 @@ def test_a_failed_pull_at_run_time_binds_the_counts_to_the_plan() -> None:
     )
 
 
+def _collecting_job_1(folder: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[], Any]:
+    profile = _fez_profile()
+    submitted, ran = _submitted_and_ran(profile)
+    submitted.save(folder / "fez.job.json")
+    monkeypatch.setattr(script, "collect", lambda *args: ran)
+
+    def plan_again(fractional: bool) -> Any:
+        raise AssertionError("the script planned a new job instead of collecting job-1")
+
+    return lambda: script.run(
+        shots=SHOTS,
+        output=folder / "fez.counts.json",
+        calibration=lambda at: profile,
+        open_backend=plan_again,
+        open_job=lambda job_id: job_id,
+        confirm=None,
+    )
+
+
+def test_a_disk_that_refuses_the_counts_leaves_the_job_to_collect_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _collecting_job_1(tmp_path, monkeypatch)
+    (tmp_path / "fez.counts.json").mkdir()
+    pending = tmp_path / "fez.job.json"
+    with pytest.raises(NoiseVaultError) as info:
+        run()
+    assert info.value.message.startswith("could not collect the counts of job job-1 (")
+    assert info.value.hint == (
+        f"run the same command again to collect them, or delete {pending} to submit a new job"
+    )
+    assert pending.exists()
+
+
+def test_a_defect_after_the_job_ran_raises_instead_of_asking_to_collect_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _collecting_job_1(tmp_path, monkeypatch)
+
+    def defect(*args: Any) -> Any:
+        raise TypeError("a defect in the script")
+
+    monkeypatch.setattr(script, "counts_file", defect)
+    with pytest.raises(TypeError, match="a defect in the script"):
+        run()
+
+
 @dataclass
 class Account:
     pulled_at: list[datetime | None]
@@ -562,8 +592,6 @@ class Account:
 def _account(
     monkeypatch: pytest.MonkeyPatch, fake: Any, submissions: list[Submission] | None = None
 ) -> Account:
-    """A stand-in IBM account whose ibm_fez calibration is FakeFez's snapshot, rx and rzz
-    included, whose backend is ``fake``, and whose jobs are ``submissions``."""
     runtime = require("qiskit_ibm_runtime")
     snapshot = fake.properties()
     seen = Account([], [])

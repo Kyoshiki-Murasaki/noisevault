@@ -160,7 +160,7 @@ def diff(a: Profile, b: Profile, *, top: int = 5) -> ProfileDiff:
     when_a, when_b = a.device.calibrated_at, b.device.calibrated_at
     delta = when_b - when_a if when_a and when_b else None
     if a.id == b.id and delta is not None and delta < timedelta(0):
-        first, second = (f"{a.id}@{stamp}" for stamp in stamps(when_a, when_b))
+        first, second = (f"{a.id}@{stamp}" for stamp in distinguishing_stamps(when_a, when_b))
         warnings.append(
             f"{second} is older than {first}; before and after follow argument order, not time"
         )
@@ -417,12 +417,7 @@ def _ref(profile: Profile) -> str:
     return f"{profile.id}@{when.date().isoformat()}" if when else profile.id
 
 
-def stamps(a: datetime | None, b: datetime | None) -> tuple[str | None, str | None]:
-    """Two calibration times as dates, or with the clock time when they share a date.
-
-    The clock is given to the minute, or to the second when the minutes agree. An undated
-    profile gives None.
-    """
+def distinguishing_stamps(a: datetime | None, b: datetime | None) -> tuple[str | None, str | None]:
     if a and b:
         a, b = a.astimezone(UTC), b.astimezone(UTC)
         if a.date() == b.date() and a != b:
@@ -444,7 +439,6 @@ def fmt_time(value: float | None) -> str:
 
 
 def fmt_us(value: float | None) -> str:
-    """Microseconds in a table column: one decimal, so the values line up."""
     return "-" if value is None else f"{value:.1f}"
 
 
