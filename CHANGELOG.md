@@ -104,6 +104,14 @@ All notable changes to NoiseVault. Versions follow [Semantic Versioning](https:/
     levels deep. The format now limits that data to 64 levels, so a profile nested deeper is
     invalid and `nv validate` names the field. A profile nested 65 to 256 levels deep loaded
     before and is now refused too.
+  - An importer's file that is not UTF-8 text, or a Braket or Quantinuum file that is not JSON.
+    `from_braket`, `from_ibm_csv` and the Quantinuum importers raised `UnicodeDecodeError`,
+    `json.JSONDecodeError` or, for an integer too long to parse, `ValueError`. They now raise
+    `nv.SourceDataError` that names the file and what is wrong with it, as in
+    `saved.json is not JSON (expecting value at line 1, column 7)` or
+    `saved.json is not UTF-8 text (byte 0xb5 on line 2)`.
+    `noisevault.sources.quantinuum.from_spec_csv` also refuses a quoted cell that runs on to the
+    next line, and the error names the line, as `from_ibm_csv` does.
   - A reply from IBM's public endpoint or IonQ's API that is not JSON, or is JSON of the wrong
     shape such as `[]` or `"maintenance"`. The error names the URL, and the first wrong field
     when there is one. The hint says to try again later. A damaged IBM device list or
@@ -150,7 +158,11 @@ All notable changes to NoiseVault. Versions follow [Semantic Versioning](https:/
     as in "ibm_manila@2024-05-27 is older than ibm_manila@2024-05-27". It now warns only about one
     device, and it gives the times when the dates match.
   - For a `.json` or `.json.gz` file that is not valid JSON, the hint said to give a profile file
-    with one of those names. It now says that the file is damaged or cut short. A file cut short
+    with one of those names, and for a damaged gzip file it said to copy or pull the file again.
+    Both hints now say that the file is damaged or cut short and to pull or export it again. A
+    file with another name gets the hint to give a profile file. A file that is not UTF-8 text
+    was "not JSON (not UTF-8 text)", and the error now names the first byte that is not UTF-8
+    and its line, as in `bad.json is not UTF-8 text (byte 0xff on line 2)`. A file cut short
     inside a string no longer reads "Unterminated string starting at at line 1".
   - When a vault copy replaced a bundled calibration, a dated ref with no calibration on that day
     listed the replaced calibration twice. It now lists each calibration once.
