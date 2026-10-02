@@ -40,6 +40,7 @@ from ..profile import Profile
 REPOSITORY = "https://github.com/Quantinuum/quantinuum-hardware-specifications"
 COMMIT = "59e68bb55bd616694dc8fa37a435e2a68fe1cb6b"  # pinned so a rebuild gives the same bundle
 _RAW = f"https://raw.githubusercontent.com/Quantinuum/quantinuum-hardware-specifications/{COMMIT}"
+_SPEC_SHEET = f"download notebooks/Spec sheet parameters.csv from {REPOSITORY}"
 
 # Every dataset at COMMIT and the machine's qubit count on that date. The data is keyed by gate
 # zone, not qubit, so the counts come from Quantinuum's announcements: H1 machines have 20
@@ -107,14 +108,14 @@ def from_repository(machine: str, date: str | None = None) -> Profile:
         raise ValueError(
             f"no {machine} dataset dated {date!r} at the pinned commit; known: {known}"
         )
-    files = {name: _get(_file_url(machine, date, name)) for name in FILES}
+    files = {name: _get(f"{_RAW}/{_file_path(machine, date, name)}") for name in FILES}
     return from_data(machine, date, files)
 
 
 def from_data(machine: str, date: str, files: Mapping[str, bytes]) -> Profile:
     """A profile from the raw dataset files (``FILES`` keys, bytes as downloaded)."""
     machine = _machine(machine)
-    data = {name: json.loads(files[name]) for name in FILES}
+    data = {name: _json(files[name], _file_path(machine, date, name)) for name in FILES}
     values = spec_values(machine, date, data)
     digest = hashlib.sha256(b"".join(files[name] for name in FILES)).hexdigest()
     return to_profile(
@@ -146,8 +147,18 @@ def from_spec_csv(
     """
     machine, date = _machine(machine), _date(date)
     raw = Path(path).read_bytes()
-    reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
-    headers = reader.fieldnames or []
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise _not_utf8(exc, str(path), hint=_SPEC_SHEET) from None
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    try:
+        headers = reader.fieldnames or []
+        records = list(reader)
+    except csv.Error as exc:
+        raise SourceDataError(
+            f"{path} line {reader.reader.line_num} is not valid CSV: {exc}"
+        ) from None
     for position, header in enumerate(headers, start=1):
         first = headers.index(header) + 1
         if first != position:
@@ -155,7 +166,9 @@ def from_spec_csv(
                 f"{path}: columns {first} and {position} are both {header!r}",
                 hint="delete one of them",
             )
-    rows = [row for row in reader if row["Machine"] == machine]
+    if missing := [repr(column) for column in ("Date", "Machine") if column not in headers]:
+        raise SourceDataError(f"{path} has no {' and no '.join(missing)} column", hint=_SPEC_SHEET)
+    rows = [row for row in records if row["Machine"] == machine]
     dated = [row for row in rows if row["Date"] == date]
     if len(dated) != 1:
         known = ", ".join(sorted({row["Date"] for row in rows})) or "none"
@@ -184,14 +197,45 @@ def _date(date: str) -> str:
     return date.strip().replace("-", "_")
 
 
+def _json(raw: bytes, where: str) -> dict[str, Any]:
+    try:
+        doc = json.loads(raw)
+    except UnicodeDecodeError as exc:
+        raise _not_utf8(exc, where) from None
+    except json.JSONDecodeError as exc:
+        reason = exc.msg.removesuffix(" at")
+        raise SourceDataError(
+            f"{where} is not valid JSON: {reason[:1].lower()}{reason[1:]} at line {exc.lineno},"
+            f" column {exc.colno}"
+        ) from None
+    if not isinstance(doc, dict):
+        raise SourceDataError(f"{where} is not a JSON object")
+    return doc
+
+
+def _not_utf8(exc: UnicodeDecodeError, where: str, hint: str | None = None) -> SourceDataError:
+    line = exc.object.count(b"\n", 0, exc.start) + 1
+    return SourceDataError(
+        f"{where} is not UTF-8 text: line {line} has the byte {exc.object[exc.start]:#04x}",
+        hint=hint,
+    )
+
+
+def _key(node: Mapping[str, Any], key: str, where: str) -> Any:
+    if key not in node:
+        raise SourceDataError(f"{where} has no {key!r}")
+    return node[key]
+
+
 # the qtm_spec analysis ----------------------------------------------------------------------
 
 
 def spec_values(machine: str, date: str, data: Mapping[str, Any]) -> SpecValues:
     """The data-sheet quantities from parsed dataset files, keyed as in ``FILES``."""
-    one, one_leak = _rb(data["SQ_RB"], num_qubits=1)
-    two, two_leak = _rb(data["TQ_RB"], num_qubits=2)
-    memory, _ = _rb(data["Memory_RB"], num_qubits=1)
+    where = {name: _file_path(machine, date, name) for name in FILES}
+    one, one_leak = _rb(data["SQ_RB"], where["SQ_RB"], num_qubits=1)
+    two, two_leak = _rb(data["TQ_RB"], where["TQ_RB"], num_qubits=2)
+    memory, _ = _rb(data["Memory_RB"], where["Memory_RB"], num_qubits=1)
     return SpecValues(
         machine=machine,
         date=date,
@@ -199,33 +243,35 @@ def spec_values(machine: str, date: str, data: Mapping[str, Any]) -> SpecValues:
         two_qubit=Estimate(two),
         one_qubit_leakage=None if one_leak is None else Estimate(one_leak),
         two_qubit_leakage=None if two_leak is None else Estimate(two_leak),
-        spam=_spam(data["SPAM"]),
+        spam=_spam(data["SPAM"], where["SPAM"]),
         memory=Estimate(memory),
     )
 
 
-def _rb(data: Mapping[str, Any], *, num_qubits: int) -> tuple[float, float | None]:
+def _rb(data: Mapping[str, Any], where: str, *, num_qubits: int) -> tuple[float, float | None]:
     """(average infidelity per native gate, leakage per gate or None), as qtm_spec reports them.
 
     With leakage data the error is ``legacy + leakage / d``: qtm_spec's leakage correction.
     """
     d = 2**num_qubits
     per_clifford = _TWO_QUBIT_CLIFFORD_ZZ if num_qubits == 2 else 1.0
-    shots = data["shots"]
-    rate = decay_rate(*_pooled(data["survival"], shots), asymptote=1 / d)
+    shots, survival = _key(data, "shots", where), _key(data, "survival", where)
+    rate = decay_rate(*_pooled(survival, shots, f"{where}: survival"), asymptote=1 / d)
     error = 1 - ((d - 1) * rate ** (1 / per_clifford) + 1) / d
     if "leakage_postselect" not in data:
         return error, None
-    leak_rate = decay_rate(*_pooled(data["leakage_postselect"], shots), asymptote=0.0)
+    leak_curve = _pooled(data["leakage_postselect"], shots, f"{where}: leakage_postselect")
+    leak_rate = decay_rate(*leak_curve, asymptote=0.0)
     leakage = (1 - leak_rate) / per_clifford
     return error + leakage / d, leakage
 
 
-def _pooled(survival: Mapping[str, Any], shots: int) -> tuple[np.ndarray, np.ndarray]:
+def _pooled(survival: Mapping[str, Any], shots: int, where: str) -> tuple[np.ndarray, np.ndarray]:
     """Sequence lengths and mean survival over every zone and repetition at each length."""
     lengths = list(next(iter(survival.values())))
+    zones = [(f"{where}[{zone!r}]", counts) for zone, counts in survival.items()]
     means = [
-        np.mean([count for zone in survival.values() for count in zone[m].values()]) / shots
+        np.mean([n for at, counts in zones for n in _key(counts, m, at).values()]) / shots
         for m in lengths
     ]
     return np.array([int(m) for m in lengths], dtype=float), np.array(means)
@@ -259,10 +305,14 @@ def decay_rate(lengths: np.ndarray, means: np.ndarray, *, asymptote: float) -> f
     return float((lo + hi) / 2)
 
 
-def _spam(data: Mapping[str, Any]) -> tuple[float, float]:
+def _spam(data: Mapping[str, Any], where: str) -> tuple[float, float]:
     """(P(1|0), P(0|1)): wrong outcomes for each prepared state, averaged over qubits."""
-    shots, rows = data["shots"], list(data["survival"].values())
-    wrong = [1 - float(np.mean([row[state] for row in rows])) / shots for state in ("0", "1")]
+    shots, survival = _key(data, "shots", where), _key(data, "survival", where)
+    rows = [(f"{where}: survival[{qubit!r}]", row) for qubit, row in survival.items()]
+    wrong = [
+        1 - float(np.mean([_key(row, state, at) for at, row in rows])) / shots
+        for state in ("0", "1")
+    ]
     # counts over shots are short decimals; drop the binary round-off of 1 - x
     return float(f"{wrong[0]:.12g}"), float(f"{wrong[1]:.12g}")
 
@@ -432,9 +482,10 @@ def _machine(name: str) -> str:
     return wanted
 
 
-def _file_url(machine: str, date: str, name: str) -> str:
+def _file_path(machine: str, date: str, name: str) -> str:
+    """Where the repository keeps one dataset file, e.g. ``data/H2-2/2024_12_06/SQ_RB.json``."""
     stem = "spam" if name == "SPAM" and date in _LOWERCASE_SPAM_DATES else name
-    return f"{_RAW}/data/{machine}/{date}/{stem}.json"
+    return f"data/{machine}/{date}/{stem}.json"
 
 
 def _get(url: str) -> bytes:

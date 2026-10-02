@@ -236,6 +236,24 @@ def test_public_api_and_errors() -> None:
         nv.from_cirq_google("sycamore")
 
 
+def test_a_pair_listed_twice_names_the_calibration_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cirq_google.engine import virtual_engine_factory as factory
+
+    metric = "two_qubit_parallel_sycamore_gate_xeb_pauli_error_per_cycle"
+    calibration = factory.load_median_device_calibration("rainbow")
+    metrics = {key: dict(calibration[key]) for key in calibration.keys()}
+    (a, b), value = next(iter(metrics[metric].items()))
+    metrics[metric][(b, a)] = value
+    doubled = cirq_google.Calibration(metrics=metrics)
+    monkeypatch.setattr(factory, "load_median_device_calibration", lambda name: doubled)
+    with pytest.raises(nv.SourceDataError) as info:
+        google.from_cirq_google("rainbow")
+    assert str(info.value) == (
+        f"cirq-google {cirq_google.__version__} rainbow_2021_11_16_calibration.json: {metric}"
+        " lists the pair q(4,3)-q(4,2) twice"
+    )
+
+
 def test_cirq_google_before_1_6_says_to_upgrade(monkeypatch: pytest.MonkeyPatch) -> None:
     # cirq-google 1.5 has no load_device_noise_properties and no willow_pink calibration
     import cirq_google

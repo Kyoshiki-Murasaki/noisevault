@@ -38,18 +38,18 @@ profile files still load.
     the gates it decomposes into.
   - `to_stim(circuit)`: a noisy copy of a Stim circuit for QEC-size sampling and decoding.
     `CXSWAP`, `SWAPCX` and `CZSWAP` are the registry gates `cxswap`, `swapcx` and `czswap`.
-    Each takes the profile's calibration of that gate. Without one, the export asks you to
-    decompose it.
+    Each takes the profile's calibration of that gate. Without one, the export raises
+    `MissingCalibrationError` and asks you to decompose it.
 - **One rule for fixed-angle gates in every export.** A gate such as `s`, `sx` or `ms` takes
   its own native's noise if the profile has it, else the noise of the rotation it equals.
 - **No typical noise for gates that need a decomposition.** A gate that needs several native
   entanglers, such as `swap` or `ccx`, or acts on more than two qubits, never takes the typical
   native gate's noise. If the profile does not calibrate it, the export raises
   `MissingCalibrationError` with either `unknown_gates` value and asks you to decompose it.
-- **Readable reports.** Approximation warnings point at your own line of code, and
-  `report.summary()` states counts as sentences, such as "cx took the typical native gate's
-  noise 40 times". The report's usage counts print on one line that starts with `used:`, and
-  the summary names included errors in plain words, such as "single-qubit gate error".
+- **Readable reports.** Approximation warnings point at your own line of code.
+  `report.summary()` states the usage counts as sentences on one line that starts with `used:`,
+  such as "cx took the typical native gate's noise 40 times". It names each `includes` item in
+  plain words, such as "single-qubit gate error".
 - **Live pulls without an account**: IBM's public calibration endpoint, with history through
   `--at`, and IonQ's published characterizations. Pulls through an IBM account are also
   supported. Pulled profiles are saved to `~/.noisevault/profiles`.
@@ -60,32 +60,40 @@ profile files still load.
   `FakeNighthawk`, as `vendor_model`. An IBM gate error missing from a CSV or a pull takes the
   device median, and `provenance.notes` names those qubits and pairs. `from_ibm_csv` reads
   IBM's CSV formats from 2023 to 2026 and treats a cell that says `undefined` as blank. It
-  refuses a file in an older format, a copy that a spreadsheet saved, or a file with two
-  columns for the same value, each with a one-line error that says why.
+  refuses a file in an older format, a copy in which a spreadsheet turned `partner:value` cells
+  into times, and a file with two columns for the same value. Each refusal is a one-line error
+  that says why. Importers raise `SourceDataError` for calibration data they cannot read.
+  `SourceDataError` is both a `NoiseVaultError` and a `ValueError`. Its `hint` holds the next
+  step, if there is one. `from_qiskit_backend` also raises `SourceDataError` for a backend with
+  no fixed qubit count.
 - **Hypothetical devices** with `Profile.uniform`, and `profile.suggest_layout(n)` to pick a
   well-calibrated chain of qubits that each have every one-qubit native the device has.
 - **Command line** `nv` (also `noisevault`): `list`, `show`, `pull`, `diff`, `check`, `cite`,
   `validate`, `doctor` and `schema`.
   - A bare `nv` prints the help, which ends with three commands to start with. A usage
     mistake prints one line with the closest match.
-  - A failure prints what went wrong on an `error:` line and the next step on a `hint:` line.
-    In Python, a `NoiseVaultError` keeps that step in `hint`, and `str(error)` ends with it.
+  - A failure prints what went wrong on an `error:` line, and the next step, if there is one,
+    on a `hint:` line. In Python, a `NoiseVaultError` keeps that step in `hint`. `str(error)`
+    ends with it.
   - `nv show` and `nv diff` label gate errors as average gate infidelity.
-    When you have several calibrations of a device, `nv show` and `nv check` say which one a
-    bare id loaded, and `nv check` names the calibration it checked.
-  - `nv check` lists missing frameworks with one install command, and with no framework
-    installed it prints one error and one install command. It counts a circuit that ran with
-    gates removed as reduced. It also samples a measurement-only circuit through each
-    framework's own readout. Each row shows the TVD and the tolerance of the circuit with the
-    highest ratio of TVD to tolerance. `--json` reports that circuit's name, TVD and tolerance
-    under `worst`.
-  - `nv list` keeps one device's calibrations together, newest first, and shows the time when
-    two calibrations share a date. It never cuts an id or a date. In a narrow terminal it
-    leaves out the source, then the processor, then the license column, and its last line
-    then names each license. A license all profiles share is stated once.
+  - When you have several calibrations of a device, `nv show` and `nv check` say which one a
+    bare id loaded. `nv check` names the calibration it checked on its first line.
+  - `nv check` lists missing frameworks with one install command. With no framework installed,
+    it prints one error and one install command. When an export refuses the profile,
+    `nv check` lists that framework as skipped with the reason and still checks the others.
+  - `nv check` counts a circuit that ran with gates removed as reduced. It also samples a
+    measurement-only circuit through each framework's own readout. Each row shows the TVD and
+    the tolerance of the circuit with the highest ratio of TVD to tolerance. `--json` reports
+    that circuit's name, TVD and tolerance under `worst`.
+  - `nv list` keeps one device's calibrations together, newest first. It shows the time when
+    two calibrations share a date. It never cuts an id or a date.
+  - In a narrow terminal, `nv list` leaves out the source column, then the processor column,
+    then the license column. Without the license column, the line that counts the profiles
+    names the most common license, then each other license with its profiles. When every
+    profile has the same license, that line names it and the table has no license column.
   - `nv validate` says what an unknown or a missing key means.
-  - Output writes commands plainly, without backticks, so they paste into a shell as they are,
-    and no line ends in padding spaces.
+  - `nv` prints commands without backticks, so you can paste them into a shell as they are. No
+    output line ends in padding spaces.
   - `nv diff` marks values as new or gone and compares both orders of a symmetric pair.
   - A damaged or unreadable file in the vault is skipped with a warning, and the other
     profiles still list and load.

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import contextlib
+import csv
 import hashlib
+import io
 import re
 import statistics
 from pathlib import Path
@@ -359,6 +362,77 @@ def test_a_header_with_no_qubit_rows_is_refused(tmp_path: Path) -> None:
     with pytest.raises(nv.SourceDataError) as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     assert str(info.value) == "empty.csv has a header but no qubit rows"
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "shown"),
+    [
+        (b'"T1 (us)"', b'"T1 (\xb5s)"', "line 1 has the byte 0xb5"),
+        (b'"No"', b'"N\xe3o"', "line 5 has the byte 0xe3"),
+    ],
+    ids=["latin-1 header", "latin-1 cell"],
+)
+def test_a_file_that_is_not_utf8_names_the_line_and_the_byte(
+    tmp_path: Path, old: bytes, new: bytes, shown: str
+) -> None:
+    path = tmp_path / "resaved.csv"
+    path.write_bytes(HERON.read_bytes().replace(old, new))
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert str(info.value) == (
+        f"resaved.csv is not UTF-8 text: {shown}; import the CSV as you downloaded it, not a"
+        " copy a spreadsheet saved"
+    )
+
+
+def test_a_file_with_carriage_return_line_ends_reads_like_the_download(tmp_path: Path) -> None:
+    path = tmp_path / HERON.name
+    path.write_bytes(HERON.read_bytes().replace(b"\n", b"\r"))
+    profile = nv.from_ibm_csv(path, device="ibm_example", calibrated_at="2026-01-06")
+    assert profile.fingerprint == _heron().fingerprint
+
+
+def test_a_cell_too_long_for_csv_names_its_line(tmp_path: Path) -> None:
+    header, first, *_ = HERON.read_text(encoding="utf-8").splitlines()
+    path = tmp_path / "long.csv"
+    path.write_text(f'{header}\n{first}\n"{"9" * 200_000}"\n', encoding="utf-8")
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert str(info.value) == (
+        "long.csv line 3 is not valid CSV: field larger than field limit (131072)"
+    )
+
+
+def _rows(source: Path) -> list[list[str]]:
+    return list(csv.reader(io.StringIO(source.read_text(encoding="utf-8"), newline="")))
+
+
+@pytest.mark.parametrize(
+    ("source", "cut"),
+    [
+        pytest.param(source, cut, id=f"{source.stem}:{header.strip()}")
+        for source in (EAGLE, FALCON, HERON)
+        for cut, header in enumerate(_rows(source)[0])
+    ],
+)
+def test_a_csv_missing_any_column_imports_or_raises_source_data_error(
+    tmp_path: Path, source: Path, cut: int
+) -> None:
+    path = tmp_path / source.name
+    with path.open("w", encoding="utf-8", newline="") as out:
+        csv.writer(out).writerows(row[:cut] + row[cut + 1 :] for row in _rows(source))
+    with contextlib.suppress(nv.SourceDataError):
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+
+
+def test_an_unknown_time_unit_names_its_column(tmp_path: Path) -> None:
+    path = _edited(tmp_path, HERON, '"T1 (us)"', '"T1 (hours)"')
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert str(info.value) == (
+        f"{path.name}: 'T1 (hours)' (column 2) has the unknown time unit 'hours'; expected ns,"
+        " us, µs, ms or s"
+    )
 
 
 def test_a_qubit_written_as_a_float_is_read_as_that_qubit(tmp_path: Path) -> None:

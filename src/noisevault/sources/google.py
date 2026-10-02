@@ -31,7 +31,7 @@ from importlib import resources
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import __version__
-from ..errors import SourceUnavailable, install_hint
+from ..errors import SourceDataError, SourceUnavailable, install_hint
 from ..profile import Profile
 
 if TYPE_CHECKING:
@@ -149,7 +149,9 @@ def _profile(
         {"gate": "r", "qubits": [index[q]], "process_infidelity": value}
         for q, value in one_qubit.items()
     ]
-    entanglers, pair_records = _entanglers(calibration, spec, index, one_qubit, times, notes)
+    entanglers, pair_records = _entanglers(
+        calibration, spec, index, one_qubit, times, notes, source
+    )
     gates |= entanglers
     records += pair_records
     effects, fsim = _coherent_effects(properties.fsim_errors, index)
@@ -220,6 +222,7 @@ def _entanglers(
     one_qubit: Mapping[Any, float],
     times: Mapping[str, float],
     notes: list[str],
+    source: str,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     """Definitions and per-pair records of every entangler the calibration has XEB data for."""
     from cirq_google.engine.calibration_to_noise_properties import GATE_PREFIX_PAIRS
@@ -227,7 +230,7 @@ def _entanglers(
     defs: dict[str, dict[str, Any]] = {}
     records = []
     for gate_type, prefix in GATE_PREFIX_PAIRS.items():
-        cycle = _per_pair(calibration, f"{prefix}_xeb_pauli_error_per_cycle")
+        cycle = _per_pair(calibration, f"{prefix}_xeb_pauli_error_per_cycle", source)
         if not cycle:
             continue
         canonical = _TWO_QUBIT[gate_type.__name__]
@@ -348,7 +351,7 @@ def _per_qubit(calibration: Any, metric: str) -> dict[Any, float]:
     }
 
 
-def _per_pair(calibration: Any, metric: str) -> dict[tuple[Any, Any], float]:
+def _per_pair(calibration: Any, metric: str, source: str) -> dict[tuple[Any, Any], float]:
     """Per unordered pair (cirq_google lists each pair once, in either order)."""
     if metric not in calibration:
         return {}
@@ -357,7 +360,9 @@ def _per_pair(calibration: Any, metric: str) -> dict[tuple[Any, Any], float]:
         a, b = calibration.key_to_qubits(key)
         pair = (a, b) if a < b else (b, a)
         if pair in out:
-            raise ValueError(f"{metric} lists the pair {_label(a)}-{_label(b)} twice")
+            raise SourceDataError(
+                f"{source}: {metric} lists the pair {_label(a)}-{_label(b)} twice"
+            )
         out[pair] = calibration.value_to_float(value)
     return out
 

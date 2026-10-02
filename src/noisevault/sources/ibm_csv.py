@@ -70,6 +70,7 @@ _HEADER = re.compile(r"^(?P<stem>.*?)\s*(?:\((?P<unit>[^()]*)\))?$")
 _UNITS = {"µs": "us", "μs": "us"}
 _SHOWN_HEADERS = 12  # an error message lists at most this many of the headers it found
 _SUPPORTED = "this reader imports only the 2023 to 2026 formats"
+_AS_DOWNLOADED = "import the CSV as you downloaded it, not a copy a spreadsheet saved"
 _ZERO_PADDED_TWO_FIELDS = r"(?:\d+:0\d|0\d:[0-5]\d)(?:\.\d+)?"
 _THREE_FIELDS = r"\d+:[0-5]\d:[0-5]\d(?:\.\d+)?"
 _AM_PM = r"\d+(?::[0-5]\d){1,2}(?:\.\d+)?\s*[ap]m"
@@ -90,18 +91,32 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: str | datetime
     """A profile from an IBM calibration CSV; ``device`` is e.g. ``"ibm_brisbane"``."""
     path = Path(path)
     raw = path.read_bytes()
-    text = raw.decode("utf-8-sig")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        line = exc.object.count(b"\n", 0, exc.start) + 1
+        raise SourceDataError(
+            f"{path.name} is not UTF-8 text: line {line} has the byte {exc.object[exc.start]:#04x}",
+            hint=_AS_DOWNLOADED,
+        ) from None
     if text.lstrip().startswith(("{", "[")):
         raise SourceDataError(
             f"{path.name} looks like IBM properties JSON, not a calibration CSV",
             hint="use nv.pull(<name>) for a device, or from_qiskit_backend(<backend>) for a Qiskit"
             " backend",
         )
-    reader = csv.DictReader(io.StringIO(text))
-    columns, ignored = _columns(reader.fieldnames or [], path.name)
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    try:
+        headers = reader.fieldnames or []
+        records = list(reader)
+    except csv.Error as exc:
+        raise SourceDataError(
+            f"{path.name} line {reader.reader.line_num} is not valid CSV: {exc}"
+        ) from None
+    columns, ignored = _columns(headers, path.name)
     rows = [
         _row(row, columns, path.name, line)
-        for line, row in enumerate(reader, start=2)
+        for line, row in enumerate(records, start=2)
         if any(_cell(row, column) for column in columns.values())
     ]
     if not rows:
@@ -133,6 +148,11 @@ def _columns(headers: list[str], name: str) -> tuple[dict[str, _Column], list[st
             column = _Column(header, "error:" + _GATE_COLUMNS[full.removesuffix(" error")], None)
         elif stem in _QUBIT_COLUMNS:
             column = _Column(header, _QUBIT_COLUMNS[stem], _UNITS.get(unit, unit) if unit else None)
+            if column.key in _TIME_UNITS and column.unit not in (None, "ns", "us", "ms", "s"):
+                raise SourceDataError(
+                    f"{name}: {header.strip()!r} (column {position}) has the unknown time unit"
+                    f" {unit!r}; expected ns, us, µs, ms or s"
+                )
         elif stem == "qubit":
             column = _Column(header, "qubit", None)
         elif full == "single-qubit pauli-x error":
@@ -273,7 +293,7 @@ def _pairs(text: str, row_qubit: int, where: str) -> dict[tuple[int, int], float
             raise SourceDataError(
                 f"{where}: {item!r} looks like a time that a spreadsheet made from a"
                 " 'partner:value' cell, so the value is lost",
-                hint="import the CSV as you downloaded it, not a copy a spreadsheet saved",
+                hint=_AS_DOWNLOADED,
             )
         locus, sep, value = item.partition(":")
         try:

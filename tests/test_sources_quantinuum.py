@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import json
 import urllib.error
 import urllib.request
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -189,6 +193,151 @@ def test_spec_csv_row_missing_a_value_names_it(
     with pytest.raises(SourceDataError) as info:
         quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
     assert str(info.value) == message
+
+
+_SPEC_SHEET_HINT = (
+    "download notebooks/Spec sheet parameters.csv from"
+    " https://github.com/Quantinuum/quantinuum-hardware-specifications"
+)
+
+
+_SPEC_COLUMNS = CSV.read_text(encoding="utf-8").splitlines()[0].split(",")
+
+
+def _spec_csv_without(tmp_path: Path, column: str) -> Path:
+    rows = [line.split(",") for line in CSV.read_text(encoding="utf-8").splitlines()]
+    cut = rows[0].index(column)
+    path = tmp_path / "other.csv"
+    path.write_text("\n".join(",".join(r[:cut] + r[cut + 1 :]) for r in rows), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("column", ["Date", "Machine"])
+def test_spec_csv_without_the_row_key_columns_names_the_missing_one(
+    tmp_path: Path, column: str
+) -> None:
+    path = _spec_csv_without(tmp_path, column)
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
+    assert str(info.value) == f"{path} has no {column!r} column; {_SPEC_SHEET_HINT}"
+
+
+@pytest.mark.parametrize("column", _SPEC_COLUMNS)
+def test_a_spec_csv_missing_any_column_imports_or_raises_source_data_error(
+    tmp_path: Path, column: str
+) -> None:
+    path = _spec_csv_without(tmp_path, column)
+    with contextlib.suppress(SourceDataError):
+        quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
+
+
+def test_spec_csv_that_is_not_utf8_names_the_line_and_the_byte(tmp_path: Path) -> None:
+    path = tmp_path / "resaved.csv"
+    path.write_bytes(CSV.read_bytes().replace(b"H1-2", b"H1\xad2", 1))
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
+    assert str(info.value) == (
+        f"{path} is not UTF-8 text: line 3 has the byte 0xad; {_SPEC_SHEET_HINT}"
+    )
+
+
+def test_spec_csv_with_carriage_return_line_ends_reads_the_same_row(tmp_path: Path) -> None:
+    path = tmp_path / "mac.csv"
+    path.write_bytes(CSV.read_bytes().replace(b"\n", b"\r"))
+    mac, unix = (
+        quantinuum.from_spec_csv(p, machine="H2-2", date="2024_12_06") for p in (path, CSV)
+    )
+    assert mac.fingerprint == unix.fingerprint
+
+
+_DATA = "data/H2-2/2024_12_06"
+
+
+@pytest.mark.parametrize(
+    ("name", "raw", "message"),
+    [
+        (
+            "SQ_RB",
+            b"<html><body>Sign in to this network</body></html>",
+            f"{_DATA}/SQ_RB.json is not valid JSON: expecting value at line 1, column 1",
+        ),
+        (
+            "SPAM",
+            b'{"shots": 10000,\n "survival": {"0": {"0": 9\xb5}}}',
+            f"{_DATA}/SPAM.json is not UTF-8 text: line 2 has the byte 0xb5",
+        ),
+        ("TQ_RB", b"[]", f"{_DATA}/TQ_RB.json is not a JSON object"),
+    ],
+    ids=["html", "latin-1", "array"],
+)
+def test_dataset_file_that_is_not_a_json_object_names_the_file(
+    name: str, raw: bytes, message: str
+) -> None:
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_data("H2-2", "2024_12_06", {**_files(), name: raw})
+    assert str(info.value) == message
+
+
+@pytest.mark.parametrize(
+    ("name", "path", "message"),
+    [
+        ("SQ_RB", ("shots",), f"{_DATA}/SQ_RB.json has no 'shots'"),
+        ("Memory_RB", ("survival",), f"{_DATA}/Memory_RB.json has no 'survival'"),
+        (
+            "TQ_RB",
+            ("survival", "(2, 3)", "32"),
+            f"{_DATA}/TQ_RB.json: survival['(2, 3)'] has no '32'",
+        ),
+        (
+            "TQ_RB",
+            ("leakage_postselect", "(4, 5)", "128"),
+            f"{_DATA}/TQ_RB.json: leakage_postselect['(4, 5)'] has no '128'",
+        ),
+        ("SPAM", ("survival", "3", "1"), f"{_DATA}/SPAM.json: survival['3'] has no '1'"),
+    ],
+    ids=["shots", "survival", "sequence-length", "leakage-length", "spam-state"],
+)
+def test_dataset_file_missing_a_value_names_where(
+    name: str, path: tuple[str, ...], message: str
+) -> None:
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_data("H2-2", "2024_12_06", _files_without(name, path))
+    assert str(info.value) == message
+
+
+def _files_without(name: str, path: tuple[str, ...]) -> dict[str, bytes]:
+    doc = json.loads(_files()[name])
+    parent = doc
+    for key in path[:-1]:
+        parent = parent[key]
+    del parent[path[-1]]
+    return {**_files(), name: json.dumps(doc).encode()}
+
+
+def _sampled_key_paths(node: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[str, ...]]:
+    """Each key path, taking only the first and the last of the keys that number qubits,
+    sequence lengths or repetitions, so the cases stay few."""
+    if isinstance(node, dict):
+        numbered = [key for key in node if key.isdigit()]
+        for key, value in node.items():
+            if key not in numbered[1:-1]:
+                yield (*path, key)
+                yield from _sampled_key_paths(value, (*path, key))
+
+
+@pytest.mark.parametrize(
+    ("name", "path"),
+    [
+        pytest.param(name, path, id=f"{name}:{'.'.join(path)}")
+        for name in quantinuum.FILES
+        for path in _sampled_key_paths(json.loads(_files()[name]))
+    ],
+)
+def test_a_dataset_file_missing_any_key_imports_or_raises_source_data_error(
+    name: str, path: tuple[str, ...]
+) -> None:
+    with contextlib.suppress(SourceDataError):
+        quantinuum.from_data("H2-2", "2024_12_06", _files_without(name, path))
 
 
 def test_a_failed_download_says_what_loads_offline(monkeypatch: pytest.MonkeyPatch) -> None:

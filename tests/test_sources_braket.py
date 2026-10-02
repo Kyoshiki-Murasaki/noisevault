@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -228,7 +231,7 @@ def test_errors_say_what_to_save(tmp_path: Path) -> None:
     other.write_text(json.dumps({"braketSchemaHeader": {"name": "something.else", "version": "1"}}))
     with pytest.raises(nv.SourceDataError) as info:
         from_braket(other)
-    assert info.value.message == "this is not Braket standardized gate-model properties"
+    assert info.value.message == "other.json is not Braket standardized gate-model properties"
     assert info.value.hint == "save AwsDevice(arn).properties.json() and pass that file"
     v3_alone = json.loads(IONQ.read_text())["standardized"]
     with pytest.raises(nv.SourceDataError) as info:
@@ -247,11 +250,160 @@ def test_values_it_cannot_read_are_named() -> None:
     newer = {**data, "braketSchemaHeader": {**data["braketSchemaHeader"], "version": "4"}}
     with pytest.raises(nv.SourceDataError) as info:
         from_braket(newer)
-    assert str(info.value) == "Braket standardized properties version 4 is not supported"
+    assert str(info.value) == (
+        "the dict passed in: Braket standardized properties version 4 is not supported"
+    )
     data["oneQubitProperties"]["0"]["T1"]["unit"] = "min"
     with pytest.raises(nv.SourceDataError) as info:
         from_braket(data)
     assert str(info.value) == "unknown Braket time unit 'min'; expected ns, us, ms or s"
+
+
+_SAVE = "save AwsDevice(arn).properties.json() and pass that file"
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        (
+            b'{"oneQubitProperties": {',
+            "is not valid JSON: expecting property name enclosed in double quotes at line 1,"
+            " column 25",
+        ),
+        (
+            b'{"braketSchemaHeader": {"name": "braket',
+            "is not valid JSON: unterminated string starting at line 1, column 33",
+        ),
+        (b'{\n  "braketSchemaHeader": "\xb5"}', "is not UTF-8 text: line 2 has the byte 0xb5"),
+        (b"[]", "is not Braket standardized gate-model properties"),
+        (b'{"standardized": [1]}', "is not Braket standardized gate-model properties"),
+    ],
+    ids=["truncated", "cut-in-a-string", "latin-1", "array", "standardized-array"],
+)
+def test_a_file_that_is_not_braket_json_names_the_file(
+    tmp_path: Path, raw: bytes, message: str
+) -> None:
+    path = tmp_path / "saved.json"
+    path.write_bytes(raw)
+    with pytest.raises(nv.SourceDataError) as info:
+        from_braket(path)
+    assert str(info.value) == f"saved.json {message}; {_SAVE}"
+
+
+_DELETE = object()
+
+
+def _parent(doc: Any, path: tuple[str | int, ...]) -> Any:
+    for key in path[:-1]:
+        doc = doc[key]
+    return doc
+
+
+@pytest.mark.parametrize(
+    ("fixture", "path", "value", "shown"),
+    [
+        (
+            IQM,
+            ("standardized", "oneQubitProperties", "1", "T1", "value"),
+            _DELETE,
+            "standardized.oneQubitProperties['1'].T1 has no 'value'",
+        ),
+        (
+            IQM,
+            ("standardized", "oneQubitProperties", "2", "oneQubitFidelity", 1, "fidelityType"),
+            _DELETE,
+            "standardized.oneQubitProperties['2'].oneQubitFidelity[1] has no 'fidelityType'",
+        ),
+        (
+            RIGETTI,
+            ("twoQubitProperties", "0-1", "twoQubitGateFidelity", 0, "gateName"),
+            _DELETE,
+            "twoQubitProperties['0-1'].twoQubitGateFidelity[0] has no 'gateName'",
+        ),
+        (
+            RIGETTI,
+            ("twoQubitProperties", "0-1", "twoQubitGateFidelity", 0, "direction", "target"),
+            _DELETE,
+            "twoQubitProperties['0-1'].twoQubitGateFidelity[0].direction has no 'target'",
+        ),
+        (
+            IONQ,
+            ("standardized", "readoutFidelity", 0, "fidelity"),
+            _DELETE,
+            "standardized.readoutFidelity[0] has no 'fidelity'",
+        ),
+        (
+            IONQ,
+            ("standardized", "twoQubitGateDuration", "value"),
+            _DELETE,
+            "standardized.twoQubitGateDuration has no 'value'",
+        ),
+        (
+            IQM,
+            ("standardized", "oneQubitProperties"),
+            [{"T1": {"value": 4.1e-05, "unit": "s"}}],
+            "standardized.oneQubitProperties is not a JSON object",
+        ),
+        (
+            RIGETTI,
+            ("oneQubitProperties", "0", "oneQubitFidelity"),
+            {"fidelityType": {"name": "RANDOMIZED_BENCHMARKING"}, "fidelity": 0.99},
+            "oneQubitProperties['0'].oneQubitFidelity is not a JSON array",
+        ),
+    ],
+    ids=[
+        "T1-value",
+        "fidelity-type",
+        "gate-name",
+        "direction-target",
+        "v3-readout-fidelity",
+        "v3-duration-value",
+        "object",
+        "array",
+    ],
+)
+def test_a_file_missing_a_value_the_reader_needs_names_where(
+    tmp_path: Path, fixture: Path, path: tuple[str | int, ...], value: object, shown: str
+) -> None:
+    doc = json.loads(fixture.read_text())
+    if value is _DELETE:
+        del _parent(doc, path)[path[-1]]
+    else:
+        _parent(doc, path)[path[-1]] = value
+    damaged = tmp_path / fixture.name
+    damaged.write_text(json.dumps(doc))
+    with pytest.raises(nv.SourceDataError) as info:
+        from_braket(damaged)
+    assert str(info.value) == f"{fixture.name}: {shown}; {_SAVE}"
+
+
+def _key_paths(node: Any, path: tuple[str | int, ...] = ()) -> Iterator[tuple[str | int, ...]]:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield (*path, key)
+            yield from _key_paths(value, (*path, key))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _key_paths(value, (*path, index))
+
+
+@pytest.mark.parametrize(
+    ("fixture", "path"),
+    [
+        pytest.param(fixture, path, id=f"{fixture.stem}:{'.'.join(map(str, path))}")
+        for fixture in (IQM, RIGETTI, IONQ)
+        for path in _key_paths(json.loads(fixture.read_text()))
+    ],
+)
+def test_a_file_missing_any_key_imports_or_raises_source_data_error(
+    tmp_path: Path, fixture: Path, path: tuple[str | int, ...]
+) -> None:
+    doc = json.loads(fixture.read_text())
+    del _parent(doc, path)[path[-1]]
+    damaged = tmp_path / fixture.name
+    damaged.write_text(json.dumps(doc))
+    with contextlib.suppress(nv.SourceDataError):
+        from_braket(damaged)
 
 
 def test_public_api() -> None:

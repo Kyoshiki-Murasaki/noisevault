@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ValidationError
+
 from .. import __version__, gates, units
 from ..errors import SourceDataError
 from ..profile import Profile
@@ -66,6 +68,68 @@ _ASSUMPTION = (
     "Braket gives a fidelity; 1 - fidelity is read as the average gate infidelity, as the Braket"
     " SDK's local emulator does"
 )
+_SAVE = "save AwsDevice(arn).properties.json() and pass that file"
+
+
+class _Time(BaseModel):
+    value: Any
+
+
+class _Fidelity(BaseModel):
+    fidelity: Any
+
+
+class _FidelityType(BaseModel):
+    name: Any
+
+
+class _TypedFidelity(_Fidelity):
+    fidelityType: _FidelityType
+
+
+class _Direction(BaseModel):
+    control: Any
+    target: Any
+
+
+class _GateFidelity(_Fidelity):
+    gateName: Any
+    direction: _Direction | None = None
+
+
+class _Qubit(BaseModel):
+    T1: _Time | None = None
+    T2: _Time | None = None
+    oneQubitFidelity: list[_TypedFidelity] | None = None
+
+
+class _Pair(BaseModel):
+    twoQubitGateFidelity: list[_GateFidelity] | None = None
+
+
+class _PerElement(BaseModel):
+    """The keys that _per_element reads from standardized v1 and v2."""
+
+    oneQubitProperties: dict[Any, _Qubit] | None = None
+    twoQubitProperties: dict[Any, _Pair] | None = None
+
+
+class _DeviceLevelQubit(BaseModel):
+    oneQubitFidelity: list[_Fidelity] | None = None
+
+
+class _DeviceLevel(BaseModel):
+    """The keys that _device_level reads from standardized v3."""
+
+    oneQubitProperties: dict[Any, _DeviceLevelQubit] | None = None
+    T1: _Time | None = None
+    T2: _Time | None = None
+    readoutFidelity: list[_Fidelity] | None = None
+    readoutDuration: _Time | None = None
+    singleQubitFidelity: list[_Fidelity] | None = None
+    singleQubitGateDuration: _Time | None = None
+    twoQubitGateFidelity: list[_Fidelity] | None = None
+    twoQubitGateDuration: _Time | None = None
 
 
 def bundled_profiles() -> list[Profile]:
@@ -80,26 +144,36 @@ def from_braket(
 
     ``device`` names the profile; by default it is the file name without its suffix.
     """
+    data: Any
     if isinstance(path_or_dict, Mapping):
         data = dict(path_or_dict)
         raw = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+        source = "the dict passed in"
         name, hashed = device or "braket_device", "the canonical JSON of the dict passed in"
     else:
         path = Path(path_or_dict)
         raw = path.read_bytes()
-        data = json.loads(raw)
+        source = path.name
+        data = _json(raw, source)
         name, hashed = device or path.stem, f"the bytes of {path.name}"
-    caps = data if "standardized" in data else {"standardized": data}
-    std = caps.get("standardized") or {}
-    header = std.get("braketSchemaHeader") or {}
-    if header.get("name") != _STANDARDIZED:
+    whole = isinstance(data, Mapping) and "standardized" in data
+    caps = data if whole else {"standardized": data}
+    std = caps["standardized"] or {}
+    header = std.get("braketSchemaHeader") if isinstance(std, Mapping) else None
+    if not isinstance(header, Mapping) or header.get("name") != _STANDARDIZED:
         raise SourceDataError(
-            "this is not Braket standardized gate-model properties",
-            hint="save AwsDevice(arn).properties.json() and pass that file",
+            f"{source} is not Braket standardized gate-model properties", hint=_SAVE
         )
     version = str(header.get("version"))
     if version not in ("1", "2", "3"):
-        raise SourceDataError(f"Braket standardized properties version {version} is not supported")
+        raise SourceDataError(
+            f"{source}: Braket standardized properties version {version} is not supported"
+        )
+    shape, build = (_DeviceLevel, _device_level) if version == "3" else (_PerElement, _per_element)
+    try:
+        shape.model_validate(std)
+    except ValidationError as exc:
+        raise _shape_error(exc, ("standardized",) if whole else (), source) from None
     vendor = _vendor(caps)
     paradigm = caps.get("paradigm") or {}
     notes = [
@@ -107,7 +181,6 @@ def from_braket(
         "Z rotations are taken as virtual (rz); Braket does not say",
         "readout is 1 - the READOUT fidelity, the same for both prepared states",
     ]
-    build = _device_level if version == "3" else _per_element
     physics = build(std, paradigm, notes)
     calibrated_at = _calibrated_at(caps, std, notes)
     return Profile.model_validate(
@@ -399,6 +472,43 @@ def _us(time: Mapping[str, Any]) -> float:
     if unit not in ("ns", "us", "ms", "s"):
         raise SourceDataError(f"unknown Braket time unit {unit!r}; expected ns, us, ms or s")
     return units.convert(float(time["value"]), unit, "us")
+
+
+def _json(raw: bytes, source: str) -> Any:
+    try:
+        return json.loads(raw)
+    except UnicodeDecodeError as exc:
+        line = exc.object.count(b"\n", 0, exc.start) + 1
+        raise SourceDataError(
+            f"{source} is not UTF-8 text: line {line} has the byte {exc.object[exc.start]:#04x}",
+            hint=_SAVE,
+        ) from None
+    except json.JSONDecodeError as exc:
+        reason = exc.msg.removesuffix(" at")
+        raise SourceDataError(
+            f"{source} is not valid JSON: {reason[:1].lower()}{reason[1:]} at line {exc.lineno},"
+            f" column {exc.colno}",
+            hint=_SAVE,
+        ) from None
+
+
+def _shape_error(exc: ValidationError, prefix: tuple[str, ...], source: str) -> SourceDataError:
+    """The first key the file lacks, or the first value that is not an object or array."""
+    error = exc.errors()[0]
+    *parents, last = (*prefix, *error["loc"])
+    if error["type"] == "missing":
+        problem = f"{_json_path(parents)} has no {last!r}"
+    else:
+        kind = "array" if error["type"] == "list_type" else "object"
+        problem = f"{_json_path([*parents, last])} is not a JSON {kind}"
+    return SourceDataError(f"{source}: {problem}", hint=_SAVE)
+
+
+def _json_path(keys: list[Any]) -> str:
+    """``standardized.oneQubitProperties['1'].oneQubitFidelity[0]``."""
+    return "".join(
+        f".{key}" if isinstance(key, str) and key.isidentifier() else f"[{key!r}]" for key in keys
+    ).removeprefix(".")
 
 
 def _vendor(caps: Mapping[str, Any]) -> str | None:
