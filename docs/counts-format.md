@@ -1,8 +1,9 @@
 # Counts format 1.0
 
-A counts file records what a device measured when it ran a set of circuits. It binds the run to
-the profile the circuits were planned from, to the physical qubits they ran on, and to the exact
-ops the device executed. `nv compare` scores a profile on a counts file.
+A counts file records what a device measured when it ran a set of circuits. The counts file binds
+the run to the profile that the circuits were planned from. The file also binds the run to the
+physical qubits that the circuits ran on and to the exact ops that the device executed.
+`nv compare` scores a profile on a counts file.
 
 NoiseVault reads a counts file with `load_counts(path)` from `noisevault.counts`. A file may be
 gzip-compressed (`.json.gz`). `plan(profile)` gives the circuits to run, and
@@ -10,8 +11,8 @@ gzip-compressed (`.json.gz`). `plan(profile)` gives the circuits to run, and
 
 ## An example
 
-A hypothetical run of two circuits on three qubits of ibm_kingston. The counts are made up to
-show the format.
+The example shows a hypothetical run of two circuits on three qubits of ibm_kingston. The example
+uses invented counts to show the format.
 
 ```json
 {
@@ -48,18 +49,18 @@ show the format.
 Circuit qubit i of a circuit is `qubits[i]`, so `ghz_chain` runs on qubits 148, 149 and 150. Ops
 name circuit qubits. The `cz` gate takes 68 ns on these qubits, so qubit 150 waits 68 ns for the
 first `cz`. Qubit 148 idles 68 ns while the second `cz` runs. Each wait is a `delay` op. After the
-last op, the device measures every circuit qubit, qubit i into classical bit i. With
+last op, the device measures each circuit qubit i into classical bit i. With
 `"bit_order": "qiskit"`, the rightmost character of a counts key is classical bit 0, so `"100"`
 means that qubit 150 read 1.
 
 ## Top-level fields
 
-Every field is required.
+`load_counts` requires every field.
 
 | Field | Content |
 | --- | --- |
 | `nv_counts` | The format version, `"1.0"`. |
-| `source` | `hardware`, or `simulated` for counts drawn from a model. |
+| `source` | `hardware`, or `simulated` for counts drawn from a profile. |
 | `profile` | The `id` and the calibration `fingerprint` of the profile the circuits were planned from. |
 | `backend` | The device that ran the circuits, as the profile's `device.name` spells it. |
 | `run_at` | When the device started the first circuit, an ISO 8601 time with a timezone. Stored in UTC. |
@@ -71,13 +72,13 @@ Unknown keys are errors everywhere except inside `execution.options`. Values are
 of `"4000"` or `4000.0`, or a flag of `1`, is an error rather than a coercion.
 
 `profile.fingerprint` is the fingerprint of the planning profile without `unmodeled_error`, as 64
-hex digits. In Python, it is `profile.calibration_fingerprint`, the fingerprint of
+hex digits. In Python, the value is `profile.calibration_fingerprint`, the fingerprint of
 `profile.uncorrected()`. `nv compare` scores the counts only against a profile with this
 calibration fingerprint and this `backend`.
 
 ## Execution
 
-Format 1.0 admits only a run of exactly the listed ops, with each shot starting from a fresh
+Format 1.0 accepts only a run of exactly the listed ops, where each shot starts from a fresh
 ground state. Each flag must have the value that starts its row, and `load_counts` refuses a file
 with the other value.
 
@@ -86,11 +87,11 @@ with the other value.
 | `client` | The software that ran the circuits, such as `"qiskit-ibm-runtime 0.49.0 SamplerV2, qiskit 2.5.2"`. |
 | `transpiled` | `false`. A transpiled run may have executed other ops than the listed ones. |
 | `gate_twirling` | `false`. Gate twirling adds random Pauli gates that the ops do not list. |
-| `measure_twirling` | `false`. Measurement twirling flips qubits at random before measuring them, which changes readout error. |
+| `measure_twirling` | `false`. Measurement twirling flips qubits at random before the measurement. The random flips change the readout error. |
 | `dynamical_decoupling` | `false`. Dynamical decoupling adds pulses on idle qubits that the ops do not list. |
-| `init_qubits` | `true`. Without it, a shot may start where the previous one ended, not from 0. |
+| `init_qubits` | `true`. Without `init_qubits`, a shot may start where the previous shot ended, not from 0. |
 | `job_ids` | The ids of the jobs that ran the circuits. Optional, default `[]`. |
-| `options` | The options the run was submitted with, as a JSON object nested at most 64 levels deep. `options` itself is level 1. Optional, default `{}`. |
+| `options` | The run's submission options, as a JSON object nested at most 64 levels deep. `options` itself is level 1. Optional, default `{}`. |
 
 When `options` holds one of these Qiskit Runtime `SamplerV2` options, the option must have the
 value shown, or `load_counts` refuses the file:
@@ -103,14 +104,14 @@ value shown, or `load_counts` refuses the file:
 | `execution.init_qubits` | `true` |
 | `execution.meas_type` | `"classified"` |
 
-These are the `SamplerV2` defaults in qiskit-ibm-runtime 0.40 and 0.49, so a run with the default
-options passes. `SAMPLER_V2_OPTIONS` in `noisevault.counts` holds this table as a mapping from
-each option's path to its required value.
+The required values are the `SamplerV2` defaults in qiskit-ibm-runtime 0.40 and 0.49, so a run
+with the default options passes. `SAMPLER_V2_OPTIONS` in `noisevault.counts` holds this table as a
+mapping from each option's path to its required value.
 
-A job id links to the IBM Quantum account that ran the job, so share a counts file only where you
-would share its job ids. NoiseVault reads counts files from your disk and never uploads them. A
-profile fitted with `nv compare` stores the SHA-256 of the counts file, not the counts or the job
-ids.
+A job id links to the IBM Quantum account that ran the job. Therefore, share a counts file only
+where you would share its job ids. NoiseVault reads counts files from your disk and never uploads
+them. A profile fitted with `nv compare` stores the SHA-256 of the counts file, not the counts or
+the job ids.
 
 ## Circuits
 
@@ -188,10 +189,11 @@ also does the following:
 
 - It sets `experimental.execution.scheduler_timing` to `true` in `execution.options`. This option
   asks IBM to return how it scheduled each circuit.
-- When IBM returns a schedule, the script writes it to `<stem>.timing.json` beside the counts
-  file, with an entry for each circuit that IBM returned a schedule for.
-- It saves the submitted job to `<stem>.job.json` beside the counts file, and deletes that file
-  once the counts are saved. If the wait for the job is interrupted, run the same command again.
+- When IBM returns a schedule, the script writes the schedule to `<stem>.timing.json` beside the
+  counts file. The timing file has an entry for each circuit that IBM returned a schedule for.
+- It saves the submitted job to `<stem>.job.json` beside the counts file. The script deletes the
+  job file after it saves the counts. If the wait for the job is interrupted, run the same
+  command again.
   The script then collects that job instead of submitting another.
 
 `<stem>` is the counts file name without `.counts.json`. For `kingston-0416.counts.json`, the
@@ -200,13 +202,14 @@ files are `kingston-0416.timing.json` and `kingston-0416.job.json`.
 ## SHA-256 and canonical form
 
 `counts.sha256` is `sha256:` plus the SHA-256 of the canonical JSON (sorted keys, no whitespace)
-of the loaded file. The loaded file has its keys in one order, with zero counts dropped, so the
-same run has one SHA-256 whether its file says `qiskit` or `clbit0_left`. `counts.save(path)`
-writes readable JSON of the loaded form, so the same run always gives the same bytes.
+of the loaded file. The loaded file has its keys in one order, with zero counts dropped. The
+same run therefore has one SHA-256, whether its file says `qiskit` or `clbit0_left`.
+`counts.save(path)` writes readable JSON of the loaded form, so the same run always gives the
+same bytes.
 
 ## Errors
 
 `load_counts` raises `nv.CountsError`, a `ValueError`, for a file it refuses. The message is one
 line that starts with the path and names the field, such as
-`run.counts.json: circuits[0]: counts sum to 3999, but shots is 4000`. `hint` says how to fix it.
-A file that cannot be read raises `OSError`.
+`run.counts.json: circuits[0]: counts sum to 3999, but shots is 4000`. `hint` says how to fix the
+problem. `load_counts` raises `OSError` for a file that it cannot read.

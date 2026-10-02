@@ -19,18 +19,19 @@
 
 <br/>
 
-Load a device by name and simulate your circuits under the noise it had on a given day. Pin the
-profile's fingerprint, and anyone can rerun your results with the same noise. Each export reports
-what it reproduces exactly, what it approximates and what it leaves out. With counts measured on
-the device, `nv compare` fits how far the profile's errors must scale to match them.
+Load a device by name. Then simulate your circuits under the noise that the device had on a given
+day. Pin the fingerprint of the profile, and anyone can rerun your simulations with the same
+noise. Each export reports what it reproduces exactly, what it approximates and what it leaves
+out. `nv compare` reads counts measured on the device and fits factors that scale the profile's
+errors to match the counts.
 
-Try it without installing, using [uv](https://docs.astral.sh/uv/):
+To try NoiseVault without an install, use [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault nv show ibm_fez
 ```
 
-<img src="assets/cli-show.svg" alt="Terminal output of nv show ibm_fez: a 156-qubit Heron r2 device with its native gates, their median average infidelity and duration, median T1, T2 and readout error, where the data comes from, its license, and the profile fingerprint." width="830">
+<img src="assets/cli-show.svg" alt="Terminal output of nv show ibm_fez. The output shows a 156-qubit Heron r2 device and its native gates, with the median average infidelity and duration of each gate. It also shows the median T1, T2 and readout error, the data source, the license and the profile fingerprint." width="830">
 
 ## Install
 
@@ -40,14 +41,14 @@ In a virtual environment with Python 3.11 to 3.14, install NoiseVault from GitHu
 pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
 ```
 
-Use `cirq`, `pennylane` or `stim` in place of `qiskit`, name several as in
-`noisevault[qiskit,stim]`, or use `all`. In a uv project, `uv add` takes the same quoted argument.
-`nv doctor` lists what is installed.
+For another framework, use `cirq`, `pennylane` or `stim` in place of `qiskit`. For several
+frameworks, name them all, as in `noisevault[qiskit,stim]`. For every extra, use `all`. In a uv
+project, `uv add` takes the same quoted argument. `nv doctor` lists what is installed.
 
 ## Quickstart
 
-Run a GHZ circuit under the calibrated noise of IBM Fez. The profile ships with the package, so
-this works offline.
+Run a GHZ circuit under the calibrated noise of IBM Fez. `ibm_fez` is a bundled profile, so this
+example runs offline.
 
 ```python
 from qiskit import QuantumCircuit, transpile
@@ -79,38 +80,38 @@ print(sim.report.summary())
 # Calibration-derived models approximate the hardware; they are not a digital twin.
 ```
 
-The report says what this model reproduces, approximates, clamps or leaves out. Save
+The report says what this noise model reproduces, approximates, clamps or leaves out. Save
 `sim.report.to_dict()` next to your results.
 
-`transpile` compiles to Fez's native gates and places the circuit by noise, because the
-simulator carries the device's gates, connectivity and errors. To add the idle noise the report
-lists as omitted, also pass `scheduling_method='alap'`.
+Because the simulator holds the device's gates, connectivity and errors, `transpile` compiles to
+Fez's native gates and places the circuit by noise. To add the idle noise that the report
+lists as omitted, also pass `scheduling_method='alap'` to `transpile`.
 
 `to_cirq()`, `to_pennylane()` and `to_stim(circuit)` give the same noise to the other three
-frameworks, each as the framework's own type with its own report.
-[Frameworks](docs/frameworks.md) has an example for each.
+frameworks. Each export is the framework's own type and has its own report.
+[Frameworks](docs/frameworks.md) has an example for each framework.
 
 ## Pin a calibration
 
-A bundled profile is one calibration. `nv pull` fetches others from IBM's public endpoint or
-from IonQ, with no account, and saves them to your vault in `~/.noisevault/profiles`. With `--at`,
-it fetches the calibration in effect at that date:
+A bundled profile holds one calibration. `nv pull` fetches other calibrations from IBM's public
+endpoint or from IonQ, with no account. It saves them to your vault, `~/.noisevault/profiles`.
+With `--at`, `nv pull` fetches the calibration that was in effect at that date:
 
 ```bash
 nv pull ibm_fez --at 2025-06-01   # saves ibm_fez@2025-05-31T22:01:04Z
-nv cite ibm_fez@2025-05-31        # cite it by the date the pull printed
+nv cite ibm_fez@2025-05-31        # cite the calibration by the date that nv pull printed
 nv diff ibm_fez@2025-02-26 ibm_fez@2025-05-31
 ```
 
 `nv diff` compares the device medians, lists the qubits and pairs that changed most, and names
 the gates that were disabled or re-enabled.
 
-A bare id such as `ibm_fez` loads the newest calibration you have. After this pull, the
-quickstart's `nv.load("ibm_fez")` loads 2025-05-31 instead of the bundled 2025-02-26. Add the
-date, as in `ibm_fez@2025-02-26`, to load a particular calibration.
+A bare id such as `ibm_fez` loads the newest calibration that you have. After this pull, the
+quickstart's `nv.load("ibm_fez")` loads 2025-05-31 instead of the bundled 2025-02-26. To load
+the calibration of a given date, add the date to the id, as in `ibm_fez@2025-02-26`.
 
-The fingerprint is a SHA-256 hash of a profile's physics. Pass it when you load a profile, and
-the load fails if the numbers ever differ:
+The fingerprint is a SHA-256 hash of a profile's physics. Pass the fingerprint as `expect` when
+you load a profile. If the numbers ever differ, the load fails:
 
 ```python
 import noisevault as nv
@@ -126,9 +127,9 @@ workflow for a paper.
 
 ## What ships
 
-These profiles ship inside the package and load offline with `nv.load(id)`. All come from
-openly licensed sources, and [NOTICE](NOTICE) lists each file with its source. `nv list` shows
-them with their qubit counts and processors.
+These bundled profiles ship inside the package and load offline with `nv.load(id)`. All of them
+come from sources with open licenses. [NOTICE](NOTICE) lists each file with its source. `nv list`
+shows the bundled profiles with their qubit counts and processors.
 
 | Vendor | Technology | Devices | Calibrated | Source and license |
 | --- | --- | --- | --- | --- |
@@ -136,15 +137,15 @@ them with their qubit counts and processors.
 | Quantinuum (5) | trapped ion | `quantinuum_h1-1`, `quantinuum_h1-2`, `quantinuum_h2-1`, `quantinuum_h2-2`, `quantinuum_reimei` | 2023-08-21 to 2025-08-28 | [hardware-specifications](https://github.com/Quantinuum/quantinuum-hardware-specifications) repository, Apache-2.0 |
 | Google (2) | superconducting | `google_rainbow`, `google_weber` | 2021-11-03 to 2021-11-16 | [cirq-google](https://github.com/quantumlib/Cirq/tree/main/cirq-google) calibrations, Apache-2.0 |
 
-For more devices and dates:
+You can get more devices and dates in three ways:
 
-- Pull from an IBM Quantum account with `nv pull --source ibm-account`, which needs the `ibm`
-  extra.
-- Import a Qiskit backend, an IBM calibration CSV, saved Amazon Braket device properties, a
-  cirq-google calibration, a Hugging Face archive of IBM calibrations or a dataset from
-  Quantinuum's repository. IBM's fake backends need the `ibm` extra, a cirq-google calibration
-  needs the `google` extra, and the archive needs the `hf` extra.
-- Describe a device that does not exist with `nv.Profile.uniform(...)`, as in
+- Pull from an IBM Quantum account with `nv pull --source ibm-account`. This source needs the
+  `ibm` extra.
+- Import a Qiskit backend, an IBM calibration CSV, saved Amazon Braket device properties or a
+  cirq-google calibration. You can also import a Hugging Face archive of IBM calibrations or a
+  dataset from Quantinuum's repository. IBM's fake backends need the `ibm` extra. A cirq-google
+  calibration needs the `google` extra. The archive needs the `hf` extra.
+- Use `nv.Profile.uniform(...)` to describe a device that does not exist, as in
   [Describe a hypothetical device](docs/recipes.md#describe-a-hypothetical-device).
 
 [Data sources](docs/data-sources.md) gives each source's fields and license.
@@ -170,7 +171,7 @@ circuits. It is not a measure of how well the model matches the hardware. Calibr
 models approximate the hardware. They are not a digital twin. [Limitations](docs/limitations.md)
 lists what no export models.
 
-To run the check on all four frameworks with uv and no install:
+To run the check on all four frameworks with uv and no install, use this command:
 
 ```bash
 uvx --from "noisevault[qiskit,cirq,pennylane,stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault" nv check ibm_fez
@@ -179,12 +180,12 @@ uvx --from "noisevault[qiskit,cirq,pennylane,stim] @ git+https://github.com/Kyos
 ## Compare with hardware
 
 `nv check` shows that the exports agree with the reference. `nv compare` measures how far the
-reference is from the device. It scores a profile on counts measured on the device and fits how
-far the profile's gate and readout errors must scale to match them.
+reference is from the device. It scores a profile on counts measured on the device. Then it fits
+how far the profile's gate errors and readout errors must scale to match the counts.
 
 NoiseVault has not yet been compared with counts from a real device. To see the output, score the
-bundled Kingston profile on example counts simulated with gate errors x1.8 and readout errors
-x1.3. Download the counts first:
+bundled Kingston profile on example counts. A simulation with gate errors x1.8 and readout errors
+x1.3 made these counts. First, download the counts file:
 
 ```bash
 curl -O https://raw.githubusercontent.com/Kyoshiki-Murasaki/noisevault/main/examples/kingston-simulated.counts.json
@@ -211,24 +212,24 @@ Fitted on these qubits, they absorb crosstalk, leakage, coherent error and
 idle error beyond T1 and T2. Saved with -o, they apply to every qubit.
 ```
 
-Both fitted intervals contain the factors the counts were simulated with. `nv compare` needs no
-framework, so it also runs with no install. Put
-`uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault` in front of it.
+Both intervals contain the factors that the simulation used. `nv compare` needs no framework. To
+run it with no install, put
+`uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault` in front of `nv compare`.
 
-`nv compare ... -o fitted.json` saves the profile with the fitted factors, and every export then
-applies them.
+`nv compare ... -o fitted.json` saves the profile with the fitted factors. Every export of the
+saved profile applies the factors.
 
-To measure an IBM device yourself, put your IBM Quantum API key in `IBM_QUANTUM_TOKEN` and run
-the `nv compare` circuits on it with uv. The script needs no clone or install:
+To measure an IBM device yourself, put your IBM Quantum API key in `IBM_QUANTUM_TOKEN`. Then use
+uv to run the `nv compare` circuits on the device. The script needs no clone or install:
 
 ```bash
 uv run https://raw.githubusercontent.com/Kyoshiki-Murasaki/noisevault/main/scripts/run_on_ibm.py ibm_kingston -o kingston.counts.json
 ```
 
-It shows IBM's estimate of the QPU time, asks before it submits the job, and prints the
-`nv compare` command for the counts.
+The script shows IBM's estimate of the QPU time and asks before it submits the job. It also prints
+the `nv compare` command for the counts.
 [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware) shows how
-to plan and record a run. [Counts format](docs/counts-format.md) describes the file, and
+to plan and record a run. [Counts format](docs/counts-format.md) describes the counts file.
 [Limitations](docs/limitations.md#what-the-unmodeled-error-factors-absorb) lists what the factors
 cannot express.
 
@@ -242,7 +243,7 @@ cannot express.
 | [Profile format](docs/profile-format.md) | Every field of format 1.0, with examples |
 | [Counts format](docs/counts-format.md) | The file that records a hardware run for `nv compare` |
 | [Conventions](docs/conventions.md) | Error metrics, channel construction, readout and qubit order |
-| [Limitations](docs/limitations.md) | What the models leave out and what has been checked |
+| [Limitations](docs/limitations.md) | What the noise models leave out and what has been checked |
 | [JSON Schema](docs/schema/profile-1.0.json) | The schema of format 1.0, also printed by `nv schema` |
 | [Examples](examples) | Runnable scripts, from the quickstart to a QEC memory experiment |
 
@@ -254,9 +255,9 @@ the development setup, the tests and how to add a source.
 ## Citing
 
 If you use NoiseVault, cite the software with [CITATION.cff](CITATION.cff), or with
-**Cite this repository** on GitHub. Also give the fingerprint of every profile you used.
-`nv cite REF` prints it with the source, the calibration time, the NoiseVault version and the
-ref that loads the calibration. `nv cite REF --bibtex` prints a BibTeX entry.
+**Cite this repository** on GitHub. Also give the fingerprint of every profile that you used.
+`nv cite REF` prints the fingerprint with the source, the calibration time, the NoiseVault version
+and the ref that loads the calibration. `nv cite REF --bibtex` prints a BibTeX entry.
 
 ## License
 
@@ -269,7 +270,7 @@ The bundled calibrations come from IBM Quantum through
 [qiskit-ibm-runtime](https://github.com/Qiskit/qiskit-ibm-runtime), from Google Quantum AI
 through [cirq-google](https://github.com/quantumlib/Cirq), and from Quantinuum's
 [hardware-specifications](https://github.com/Quantinuum/quantinuum-hardware-specifications)
-repository. NoiseVault builds on [Qiskit](https://github.com/Qiskit/qiskit) and
+repository. NoiseVault uses [Qiskit](https://github.com/Qiskit/qiskit) and
 [Qiskit Aer](https://github.com/Qiskit/qiskit-aer), [Cirq](https://github.com/quantumlib/Cirq),
 [PennyLane](https://github.com/PennyLaneAI/pennylane), [Stim](https://github.com/quantumlib/Stim)
 and [PyMatching](https://github.com/oscarhiggott/PyMatching).

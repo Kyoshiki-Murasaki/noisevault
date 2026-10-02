@@ -14,7 +14,7 @@ from pennylane import numpy as pnp
 import noisevault as nv
 
 fez = nv.load("ibm_fez")
-layout = fez.suggest_layout(3)  # wire i -> physical qubit layout[i]
+layout = fez.suggest_layout(3)  # wire i maps to physical qubit layout[i]
 model = fez.to_pennylane(layout=layout)
 dev = qml.device("default.mixed", wires=3)
 
@@ -39,7 +39,7 @@ print(f"<Z0 Z2>  ideal {ideal(params):+.4f}   noisy {noisy(params):+.4f}")
 grad = qml.grad(noisy)(params)
 print(f"noisy gradient, first layer: {pnp.round(grad[0], 4)}")
 
-# Minimize <Z0 Z2> under device noise; the noisy minimum cannot reach -1.
+# Minimize <Z0 Z2> under device noise. The noisy minimum cannot reach -1.
 opt = qml.GradientDescentOptimizer(stepsize=0.4)
 for step in range(1, 31):
     params = opt.step(noisy, params)

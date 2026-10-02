@@ -1,4 +1,6 @@
-"""Run a GHZ circuit under the calibrated noise of IBM Fez (bundled, works offline).
+"""Run a GHZ circuit under the calibrated noise of IBM Fez.
+
+Fez has a bundled profile, so the script works offline.
 
 Needs: pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
 """

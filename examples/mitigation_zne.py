@@ -1,10 +1,12 @@
 """Zero-noise extrapolation with Mitiq, against the calibrated noise of IBM Fez.
 
-A mirror circuit (layers of gates, then their inverse) ideally returns |000> with probability 1.
-Mitiq folds gates to amplify the noise, runs each folded circuit on the NoiseVault simulator and
-extrapolates back to zero noise.
+Without noise, a mirror circuit (layers of gates, then their inverse) returns |000> with
+probability 1. Mitiq folds gates to amplify the noise, runs each folded circuit on the NoiseVault
+simulator and extrapolates back to zero noise.
 
-Needs (Mitiq supports Python up to 3.12; its Qiskit conversion imports ply):
+Mitiq supports Python up to 3.12. Mitiq's Qiskit conversion imports ply.
+
+Needs:
     pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
     pip install mitiq ply
 """
@@ -40,7 +42,10 @@ mirror = half.compose(half.inverse())
 
 
 def p000(circuit: QuantumCircuit) -> float:
-    """Probability of 000 on Fez; level 0 translates folded inverses without cancelling them."""
+    """Return the probability of 000 on Fez.
+
+    Optimization level 0 translates the folded inverses and does not cancel them.
+    """
     measured = circuit.copy()
     measured.measure_all()
     native = transpile(measured, sim, initial_layout=layout, optimization_level=0)

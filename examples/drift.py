@@ -1,7 +1,10 @@
-"""How much did IBM Fez drift? Pull today's calibration and one from 90 days ago, then diff them.
+"""Show how much IBM Fez drifted in 90 days.
 
-Needs network access to IBM's public calibration endpoint (no account). Pulled profiles go to
-your local vault (~/.noisevault/profiles), so the same refs load offline afterwards.
+Pull today's calibration and the calibration from 90 days ago. Then diff the two profiles.
+
+The script needs network access to IBM's public calibration endpoint, but no account. Each
+nv.pull call saves the pulled profile in your vault (~/.noisevault/profiles), so the same refs
+load offline after that.
 """
 
 import sys

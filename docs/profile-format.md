@@ -1,18 +1,18 @@
 # Profile format 1.0
 
 A profile is one JSON file that records the calibrated noise of one quantum device at one point
-in time. It holds the numbers a simulator needs: gate errors and durations, coherence times,
-readout and preparation errors, and which qubits and gate pairs exist. It also records where the
-numbers came from and under what license.
+in time. It holds the numbers that a simulator needs. These numbers are gate errors and durations,
+coherence times, and readout and preparation errors. The profile also states which qubits and gate
+pairs exist. It also records where the numbers came from and under what license.
 
 NoiseVault reads a profile with `nv.load(path_or_ref)` and checks one with `nv validate FILE`.
 Every export (`to_qiskit`, `to_cirq`, `to_pennylane`, `to_stim`) starts from the same rules,
 described on this page. A file may be gzip-compressed (`.json.gz`).
 
 The JSON Schema in [`schema/profile-1.0.json`](schema/profile-1.0.json) describes the structure of
-a saved file. It does not express the cross-field rules below (one metric per spec, records
-that match their definitions, qubit indices in range), and it lists only the canonical unit
-spellings. `nv validate` checks everything. `nv schema` prints the schema.
+a saved file. The schema does not express the cross-field rules below (one metric per spec,
+records that match their definitions, qubit indices in range). The schema lists only the canonical
+unit spellings. `nv validate` checks everything. `nv schema` prints the schema.
 
 ## Two examples
 
@@ -33,12 +33,12 @@ A hand-written profile of a hypothetical 8-ion device:
 }
 ```
 
-Every gate of a kind has the same error, so the device-wide definitions in `gates` are the whole
-story. `duration_us` and `t2_s` are hand-writing aliases. The loader stores them as
+Every gate of a kind has the same error, so the device-wide definitions in `gates` are complete.
+`duration_us` and `t2_s` are hand-writing aliases. NoiseVault stores them as
 `duration_ns: 10000.0` and `t2_us: 1000000.0`. There is no T1, so gates get pure dephasing and
 no amplitude damping. The profile id is `example_demo-ions`.
 
-A hypothetical 5-qubit superconducting chip with per-qubit and per-gate records:
+A hypothetical 5-qubit superconducting device with per-qubit and per-gate records:
 
 ```json
 {
@@ -76,7 +76,7 @@ below.
 | --- | --- | --- |
 | `ecr` on (1, 0) | 7e-3, 500 ns | The record overrides the metric and keeps the default duration. |
 | `ecr` on (1, 2) | 8e-3, 500 ns | No record. The directed edge 1 to 2 allows the default. |
-| `ecr` on (0, 1) | unavailable | `ecr` is not symmetric and the edge only goes 1 to 0. |
+| `ecr` on (0, 1) | unavailable | `ecr` is not symmetric and the edge goes only from 1 to 0. |
 | `ecr` on (3, 2) | 1.2e-2, 660 ns | The record overrides both fields. |
 | `ecr` on (3, 4) | disabled | Using it raises `DisabledGateError`. Qiskit's transpiler avoids it. |
 | `sx` on 4 | Pauli channel, average infidelity 3.3e-4 | A `pauli` spec is the whole channel. |
@@ -104,10 +104,11 @@ below.
 | `extensions` | no | Free-form vendor data that is not part of the physics. |
 
 Unknown keys are errors everywhere except inside `benchmarks`, `extensions` and
-`provenance.extra`. Those three hold JSON data only: objects with string keys, arrays, strings,
-finite numbers, `true`, `false` and `null`. From Python, a key that is not a string, a set, or
-any other object is an error rather than a value converted on save. Values are strict: `"1"`, `3.0` for an integer field, or `1` for a boolean
-are errors, not coercions.
+`provenance.extra`. Those three fields hold JSON data only. The allowed values are objects with
+string keys, arrays, strings, finite numbers, `true`, `false` and `null`. From Python, a key that
+is not a string, a set, or any other object is an error rather than a value converted on save.
+Values are strict. `"1"`, `3.0` for an integer field, or `1` for a boolean are errors, not
+coercions.
 
 ## Device
 
@@ -116,21 +117,22 @@ are errors, not coercions.
 | `name` | Device name, such as `ibm_fez` or `H1-1`. No `@`, `/` or `\`, and no padding. |
 | `vendor` | Vendor, such as `ibm`, `quantinuum` or `google`. Optional. |
 | `technology` | One of `superconducting`, `trapped_ion`, `neutral_atom`, `spin`, `photonic`, `other`. |
-| `num_qubits` | Number of qubits, at least 1. Qubits are numbered `0` to `num_qubits - 1`. |
+| `num_qubits` | Number of qubits, at least 1. The format numbers the qubits `0` to `num_qubits - 1`. |
 | `processor` | Processor family, such as `Heron r2`. Optional. |
-| `calibrated_at` | When the calibration was taken, an ISO 8601 time with a timezone. Stored in UTC. Optional. |
+| `calibrated_at` | The time of the calibration, an ISO 8601 time with a timezone. NoiseVault stores the time in UTC. Optional. |
 
 ### Profile ids and refs
 
-The profile id is `name` when it already starts with `vendor_`, else `vendor_name`, lowercased,
-with spaces as `-`: `ibm_fez`, `google_weber`, `quantinuum_h1-1`. With no vendor, the id is the
-name. An id may use only `a-z`, `0-9`, `_`, `.` and `-`.
+The profile id is `name` when `name` already starts with `vendor_`, else `vendor_name`.
+NoiseVault lowercases the id and writes spaces as `-`. Example ids are `ibm_fez`, `google_weber`
+and `quantinuum_h1-1`. With no vendor, the id is the name. An id may use only `a-z`, `0-9`, `_`,
+`.` and `-`.
 
 `nv.load` and every CLI command take a ref:
 
 | Ref | Meaning |
 | --- | --- |
-| `path/to/file.json` | A file: anything with a path separator, a `.json` or `.gz` suffix, or an existing file name. |
+| `path/to/file.json` | A file. Any ref with a path separator, a `.json` or `.gz` suffix, or an existing file name is a file. |
 | `ibm_fez` | The newest profile with that id. |
 | `ibm_fez@2025-02-26` | The profile calibrated on that UTC date. |
 | `ibm_fez@2025-02-26T20:16:25Z` | The profile calibrated at that time. |
@@ -146,24 +148,27 @@ fingerprint (see [Fingerprint and artifact hash](#fingerprint-and-artifact-hash)
 {"edges": [[0, 1], [1, 2]], "directed": false}
 ```
 
-Undirected edges allow both operand orders and are stored as `[low, high]`, sorted. Directed
-edges (`"directed": true`) allow only the listed order. Self-loops, repeated edges and indices
-outside `0..num_qubits-1` are errors.
+Undirected edges allow both operand orders. NoiseVault stores undirected edges as `[low, high]`,
+sorted. Directed edges (`"directed": true`) allow only the listed order. Self-loops, repeated
+edges and indices outside `0..num_qubits-1` are errors.
 
 ## Gates
 
 `gates` maps each gate name the device offers to its definition. Use the canonical names of the
 gate registry so every framework recognizes the gate:
 
-`id`, `x`, `y`, `z`, `h`, `s`, `sdg`, `t`, `tdg`, `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `u1`, `u`,
-`r`, `cx`, `cy`, `cz`, `ecr`, `swap`, `cxswap`, `swapcx`, `czswap`, `iswap`, `sqrt_iswap`, `rzz`,
-`rxx`, `ryy`, `zz`, `ms`, `cswap`, `ccx`, `measure`, `reset`, `delay`.
+- `id`, `x`, `y`, `z`, `h`, `s`, `sdg`, `t`, `tdg`, `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `u1`,
+  `u`, `r`
+- `cx`, `cy`, `cz`, `ecr`, `swap`, `cxswap`, `swapcx`, `czswap`, `iswap`, `sqrt_iswap`, `rzz`,
+  `rxx`, `ryy`, `zz`, `ms`
+- `cswap`, `ccx`
+- `measure`, `reset`, `delay`
 
-`zz` is exp(-i pi/4 ZZ), the native entangler of Quantinuum machines. `ms` is IonQ's
-Molmer-Sorensen gate with two phases. `r(theta, phi)` is a rotation about an axis in the XY
-plane. `cxswap`, `swapcx` and `czswap` are Stim's `CXSWAP`, `SWAPCX` and `CZSWAP`. `cxswap`
-applies `cx` and then `swap`, and `swapcx` applies them in the other order. Other names are
-allowed (Google's `sycamore`, for example) but must state their arity with `qubits`. The Qiskit
+`zz` is exp(-i pi/4 ZZ), the native entangler of Quantinuum devices. `ms` is IonQ's Molmer-Sorensen
+gate with two phases. `r(theta, phi)` is a rotation about an axis in the XY plane. `cxswap`,
+`swapcx` and `czswap` are Stim's `CXSWAP`, `SWAPCX` and `CZSWAP`. `cxswap` applies `cx` and then
+`swap`, and `swapcx` applies them in the other order. The format allows other names (Google's
+`sycamore`, for example), but their definitions must state the arity with `qubits`. The Qiskit
 export reports such a gate as omitted. The other exports apply it only when a circuit uses a gate
 that they map to that name.
 
@@ -174,45 +179,57 @@ A definition and a calibration record share these fields:
 | `avg_infidelity` | Average gate infidelity, 1 - F_avg. |
 | `process_infidelity` | Process (entanglement) infidelity. |
 | `depolarizing_param` | The lambda of Qiskit's `depolarizing_error`. |
-| `pauli` | Pauli error probabilities: 3 numbers for 1 qubit, 15 for 2 qubits. |
+| `pauli` | Pauli error probabilities, 3 numbers for 1 qubit and 15 for 2 qubits. |
 | `duration_ns` | Gate duration in nanoseconds. |
 | `virtual` | `true` for a gate done in software, such as a frame change. No error, no duration. |
 | `disabled` | `true` when the gate must not be used. |
-| `method` | How the error was measured: `rb`, `irb`, `srb`, `xeb`, `gst`, `layer`, `model`, `vendor`. |
+| `method` | How the error was measured. One of `rb`, `irb`, `srb`, `xeb`, `gst`, `layer`, `model`, `vendor`. |
 | `measured` | `isolated` or `simultaneous`. |
 | `statistic` | `individual`, `median` or `mean`. |
 | `scope` | `gate` or `cycle`. A cycle error includes the surrounding layer. |
-| `includes` | What the number already contains: `1q_dressing` (single-qubit gate error), `leakage`, `spam` (state preparation and measurement error). |
+| `includes` | What the number already contains. The values are `1q_dressing` (single-qubit gate error), `leakage` and `spam` (state preparation and measurement error). |
 | `stderr` | Standard error of the metric. |
 | `assumption` | How an importer read a vendor number, in words. `nv show` prints it. |
 
-A definition also has `qubits` (the arity, required for names outside the registry) and
-`symmetric` (whether a calibration on one operand order holds for the other).
+A definition also has `qubits` and `symmetric`. `qubits` is the arity, and a definition for a
+name outside the registry must have `qubits`. `symmetric` states whether a calibration record on
+one operand order holds for the other.
 
 ### Metric keys name the metric
 
 A spec holds at most one of `avg_infidelity`, `process_infidelity`, `depolarizing_param` and
-`pauli`. The key says what the number means, so nothing is guessed. For an n-qubit gate with
-d = 2^n, NoiseVault converts with:
+`pauli`. The key says what the number means, so NoiseVault does not guess. For an n-qubit gate
+with d = 2^n, NoiseVault converts with:
 
 - process infidelity = avg_infidelity * (d + 1) / d
 - avg_infidelity = depolarizing_param * (d - 1) / d
 - the sum of the `pauli` entries is the process infidelity
 
-Bounds are checked: avg_infidelity is at most d / (d + 1), process infidelity at most 1,
-depolarizing_param at most d^2 / (d^2 - 1), and `pauli` entries are non-negative with a sum of
-at most 1. Two-qubit `pauli` vectors use Stim's order `IX, IY, IZ, XI, XX, ..., ZZ`, and the
+NoiseVault checks these bounds:
+
+- avg_infidelity is at most d / (d + 1)
+- process infidelity is at most 1
+- depolarizing_param is at most d^2 / (d^2 - 1)
+- the `pauli` entries are non-negative, and their sum is at most 1
+
+Two-qubit `pauli` vectors use Stim's order `IX, IY, IZ, XI, XX, ..., ZZ`, and the
 first letter acts on `qubits[0]`. [Conventions](conventions.md) derives these relations.
 
-A number is the total error of the operation. When T1, T2 and the duration are known, an export
-adds relaxation for the duration and solves for the depolarizing part so the composed channel
-has the stated error. A `pauli` spec is the whole channel, and no relaxation is added to it.
+A number is the total error of the operation. When the profile states T1, T2 and the duration, an
+export adds relaxation for the duration. The export then solves for the depolarizing part so the
+composed channel has the stated error. A `pauli` spec is the whole channel, and an export adds no
+relaxation to it.
 
-The qualifiers (`method` through `assumption`) do not change the conversion. They record what
-the number is, so a reader can judge it. An export's report lists a gate it used under
-"approximated" if the gate's number has any of these: `scope: cycle`, an `includes` list, a
-`statistic` of `median` or `mean`, or an `assumption`. `nv validate` warns about calibration
-records with `scope: cycle`.
+The qualifiers (`method` through `assumption`) do not change the noise that an export applies.
+They record what the number is, so a reader can judge it. An export's report lists a gate that
+the export used under "approximated" if the gate's number has any of these qualifiers:
+
+- `scope: cycle`
+- an `includes` list
+- a `statistic` of `median` or `mean`
+- an `assumption`
+
+`nv validate` warns about calibration records with `scope: cycle`.
 
 ### Gate states
 
@@ -240,26 +257,31 @@ Merge rules:
 
 - Record fields override the definition field by field. A record with only `duration_ns` keeps
   the definition's metric.
-- The metric is replaced as a whole. A record with `pauli` drops the definition's
-  `avg_infidelity`, so a spec never ends up with two metrics.
+- A record replaces the metric as a whole. A record with `pauli` drops the definition's
+  `avg_infidelity`, so a spec never has two metrics.
 - `disabled: true` ends the lookup. The gate is unusable on those qubits.
 
-These are errors: two records for the same gate and qubits, a record for a gate missing from
-`gates`, a record whose qubit count differs from the gate's arity, repeated qubits within one
-record, and qubit indices outside the device.
+These cases are errors:
+
+- two records for the same gate and qubits
+- a record for a gate missing from `gates`
+- a record whose qubit count differs from the gate's arity
+- repeated qubits within one record
+- qubit indices outside the device
 
 ### Direction and symmetry
 
-`symmetric` defaults from the registry: `cz`, `rzz`, `rxx`, `ryy`, `zz`, `ms`, `iswap`, `swap`
-and `sqrt_iswap` are symmetric, and `cx`, `cy`, `ecr` and unknown names are not. A definition
-may override it.
+The registry sets the default of `symmetric`. `cz`, `rzz`, `rxx`, `ryy`, `zz`, `ms`, `iswap`,
+`swap` and `sqrt_iswap` are symmetric. `cx`, `cy`, `ecr` and unknown names are not symmetric. A
+definition may override the default.
 
 The lookup of gate G on qubits (a, b) takes the first of:
 
 1. A record for G on (a, b).
-2. If G is symmetric, a record for G on (b, a). Its `pauli` labels are swapped to match.
+2. If G is symmetric, a record for G on (b, a). NoiseVault swaps the `pauli` labels of that
+   record to match.
 3. G's definition, if connectivity allows (a, b). Undirected edges allow both orders, directed
-   edges only the listed one, and `all_to_all` allows every pair.
+   edges allow only the listed order, and `all_to_all` allows every pair.
 4. Otherwise G is unavailable on (a, b).
 
 ## Qubits, readout, preparation and idle
@@ -278,7 +300,7 @@ Device-wide defaults:
 - `idle` holds `t1_us`, `t2_us`, `t2_kind` (`echo`, `ramsey` or `cpmg`) and
   `dephasing_rate_per_s`, an extra Z error with probability rate x time.
 
-A record in `qubits` overrides these for one qubit:
+A record in `qubits` overrides these defaults for one qubit:
 
 | Field | Content |
 | --- | --- |
@@ -287,7 +309,7 @@ A record in `qubits` overrides these for one qubit:
 | `readout` | Replaces the default readout as a whole. |
 | `prep` | Replaces the default preparation error as a whole. |
 | `label` | The vendor's name for the qubit, such as `q(0,5)`. |
-| `coords` | Position on the chip. Cirq maps `GridQubit(r, c)` to the qubit at `[r, c]`. |
+| `coords` | Position on the device. Cirq maps `GridQubit(r, c)` to the qubit at `[r, c]`. |
 | `disabled` | `true` when the qubit must not be used. A layout onto it raises `LayoutError`. |
 
 A missing readout or preparation error stays unknown. Exports apply no noise for it and list it
@@ -297,7 +319,7 @@ clamp it to 2 T1 and report the clamp.
 ### Units and aliases
 
 Saved files use `duration_ns`, `t1_us` and `t2_us`. A hand-written file may use any of these
-spellings, and the loader converts them:
+spellings, and NoiseVault converts them:
 
 | Field | Accepted spellings |
 | --- | --- |
@@ -310,13 +332,13 @@ less are errors.
 
 ## Effects
 
-`effects` records physics that the gate-and-readout model does not cover. The list is closed in
-format 1.0:
+`effects` records physics that the gate-and-readout model does not cover. Format 1.0 allows only
+these `type` values:
 
 | `type` | Meaning |
 | --- | --- |
 | `leakage` | Population leaves the qubit subspace. |
-| `atom_loss` | A neutral atom is lost from its trap. |
+| `atom_loss` | A neutral atom leaves its trap. |
 | `erasure` | An error at a known location, such as a lost photon in dual-rail encoding. |
 | `crosstalk_measurement` | Measuring one qubit disturbs others. |
 | `crosstalk_zz` | An always-on ZZ coupling between qubits. |
@@ -329,11 +351,11 @@ carry `qubits`, `prob`, `rate_per_s`, `strength_hz`, `angle_rad` and `heralded`.
 {"type": "atom_loss", "on": "readout", "prob": 0.005}
 ```
 
-`allow` states the strictest treatment you accept: `omit` (the default), `approximate` or
-`exact`. No export models effects in this release. Every export lists them under "omitted" in
-its report, and an effect with `allow` set to `approximate` or `exact` makes the export raise
-`UnsupportedEffect`. The format carries effects now so profiles do not need to change when
-exports start modeling them.
+`allow` states the strictest treatment that you accept. The value is `omit` (the default),
+`approximate` or `exact`. No export models effects in this release. Every export lists them
+under "omitted" in its report, and an effect with `allow` set to `approximate` or `exact` makes
+the export raise `UnsupportedEffect`. The format carries effects now so profiles do not need to
+change when exports start modeling them.
 
 ## Unmodeled error
 
@@ -345,7 +367,7 @@ profile's own error rates. A profile without it gives the noise the calibration 
 ```
 
 This hand-written factor makes every calibrated gate err about 2.3 times as often. A fitted
-block also carries the 95% interval of each factor and a record of the counts it was fitted to:
+block also carries the 95% interval of each factor and a record of the counts that the fit used:
 
 ```json
 "unmodeled_error": {
@@ -357,16 +379,17 @@ block also carries the 95% interval of each factor and a record of the counts it
 }
 ```
 
-This example shortens the two hashes. A file holds all 64 hex digits of each.
+This example shortens the `counts` and `calibration` values. A file holds all 64 hex digits of
+each.
 
 | Field | Content |
 | --- | --- |
 | `gates` | The factor on every calibrated gate error, of any arity, `pauli` specs included. |
 | `readout` | The factor on `p1_given_0` and `p0_given_1` of every qubit. The profile must state a readout error. |
-| `fit` | The counts the factors were fitted to. A hand-written factor has no `fit`. |
+| `fit` | The counts that the fit used. A hand-written factor has no `fit`. |
 
-The block needs `gates`, `readout` or both. T1, T2, `dephasing_rate_per_s`, preparation error,
-durations and effects are never scaled.
+The block needs `gates`, `readout` or both. NoiseVault never scales T1, T2,
+`dephasing_rate_per_s`, preparation error, durations or effects.
 
 ### Error factors
 
@@ -407,8 +430,8 @@ factor, and `nv show` and every export's report name them:
 
 - A gate error at or past full depolarization.
 - A `pauli` spec with a negative Pauli-Lindblad rate.
-- A readout pair whose `p1_given_0` and `p0_given_1` sum to 1 or more, which is no better than
-  chance.
+- A readout pair whose `p1_given_0` and `p0_given_1` sum to 1 or more. Such a pair is no better
+  than chance.
 
 A scaled gate error below what the gate's relaxation alone causes keeps the relaxation, as a
 stated error does (see [Channel construction](conventions.md#channel-construction)).
@@ -418,24 +441,25 @@ stated error does (see [Channel construction](conventions.md#channel-constructio
 | Field | Content |
 | --- | --- |
 | `counts` | The SHA-256 of the [counts file](counts-format.md#sha-256-and-canonical-form), as `sha256:` and 64 hex digits. |
-| `source` | `hardware`, or `simulated` for counts drawn from a model. |
+| `source` | `hardware`, or `simulated` for counts drawn from a profile. |
 | `qubits` | The measured qubits, in the order the circuits first use them. |
-| `run_at` | When the device started the first circuit, an ISO 8601 time with a timezone. Stored in UTC. |
+| `run_at` | When the device started the first circuit, an ISO 8601 time with a timezone. NoiseVault stores the time in UTC. |
 | `calibration` | The fingerprint of this profile without `unmodeled_error`, as 64 hex digits. |
-| `p_value` | The p-value of the goodness-of-fit test, from 0 to 1. Below 0.01, every printout calls it a poor fit. `null` when the fit left no degrees of freedom to test it. |
-| `impossible_shots` | Shots on outcomes the profile gives probability 0. When it is above 0, `p_value` is 0. |
+| `p_value` | The p-value of the goodness-of-fit test, from 0 to 1. Below 0.01, every printout calls the fit poor. `null` when the fit left no degrees of freedom for the test. |
+| `impossible_shots` | Shots on outcomes the profile gives probability 0. When `impossible_shots` is above 0, `p_value` is 0. |
 
-Every field is required, `p_value` included. The qubits are distinct and inside the device.
+The fit record requires every field, `p_value` included. The qubits are distinct and inside the
+device.
 
-`calibration` binds the factors to the calibration they were fitted on. A change to any physics
+`calibration` binds the factors to the calibration that the fit used. A change to any physics
 outside `unmodeled_error`, such as a gate error or a T1, fails validation with "drop
 unmodeled_error or refit with nv compare". Provenance and extensions can change.
 
 ### Fingerprint, display and compatibility
 
 `unmodeled_error` is part of the fingerprint, so one fingerprint pins a calibration and its
-factors. `profile.uncorrected()` returns the profile without the block, and its fingerprint is
-`fit.calibration`. `nv cite` names the factors and the counts.
+factors. `profile.uncorrected()` returns the profile without the block, and the fingerprint of
+that profile is `fit.calibration`. `nv cite` names the factors and the counts.
 
 `nv show` and `profile.summary()` print the calibration as stated, then the factors on a row of
 their own. Every export applies the factors, and its report states them in one line.
@@ -449,8 +473,8 @@ NoiseVault 0.2.0 does not know this field and refuses a file that sets it.
 part of the fingerprint.
 
 `extensions` holds vendor data that is not physics NoiseVault uses, such as Google's fSim error
-angles. It is excluded from the fingerprint. Data for out-of-scope technologies goes here (see
-[How technologies map](#how-technologies-map)).
+angles. The fingerprint does not include `extensions`. Data for out-of-scope technologies goes
+here (see [How technologies map](#how-technologies-map)).
 
 `benchmarks`, `extensions` and `provenance.extra` hold JSON nested at most 64 levels deep. The
 field's own object is level 1, so `"extensions": {"fsim": {"theta": 0.1}}` is two levels deep. A
@@ -466,7 +490,7 @@ profile with deeper data is invalid, and `nv validate` names the field.
 | `source_url` | Where the data came from. |
 | `license` | The data's license, such as `Apache-2.0`. |
 | `attribution` | Who to credit. `citation()` uses it. |
-| `redistributable` | `yes`, `no` or `unknown`. Only `yes` can be bundled. |
+| `redistributable` | `yes`, `no` or `unknown`. Only a profile with `yes` can be a bundled profile. |
 | `retrieved_at` | When NoiseVault fetched the data. |
 | `source_hash` | `sha256:<hex>` of the raw source bytes. |
 | `tool` | The NoiseVault version that wrote the profile. |
@@ -485,12 +509,12 @@ as Python `repr`):
   `nv:06404cefa54f`.
 - The **artifact hash** covers the whole profile, provenance included.
 
-Canonical form makes the fingerprint independent of how a file is written. Records are sorted,
-edges are sorted, and a `symmetric` or `qubits` value that only restates the registry default
-is dropped. Re-ordering `calibrations` does not change the fingerprint. Editing
+Canonical form makes the fingerprint independent of how a file is written. NoiseVault sorts the
+records and the edges. NoiseVault also drops a `symmetric` or `qubits` value that only restates
+the registry default. Re-ordering `calibrations` does not change the fingerprint. Editing
 `provenance.notes` changes the artifact hash but not the fingerprint.
 
-Pin a fingerprint when you load, and a different profile fails loudly:
+Pin a fingerprint when you load, and a different profile fails with an error:
 
 ```python
 import noisevault as nv
@@ -500,14 +524,14 @@ print(fez.fingerprint)
 ```
 
 `expect` takes the 12-digit short form or the full 64-digit hex. A mismatch raises
-`FingerprintMismatch`. A paper should cite the full fingerprint; `nv cite` prints it.
+`FingerprintMismatch`. A paper should cite the full fingerprint. `nv cite` prints it.
 
 `profile.save(path)` writes canonical JSON. A `.gz` suffix writes gzip with a zero timestamp,
 so the same profile always produces the same bytes.
 
 ## Files in format 0.1
 
-NoiseVault 0.1 files (`"schema_version": "0.1"`) still load. The loader upgrades them in memory
+NoiseVault 0.1 files (`"schema_version": "0.1"`) still load. NoiseVault upgrades them in memory
 and emits a `MigrationWarning`. Save the profile to keep the 1.0 form.
 
 ## How technologies map
@@ -515,23 +539,23 @@ and emits a `MigrationWarning`. Save the profile to keep the 1.0 form.
 The format describes gates on qubits with Markovian errors. Each technology fits it this way:
 
 - **Superconducting.** Natives such as `sx`, `x`, a virtual `rz`, and `cz`, `ecr` or `cx`.
-  Coupling edges, directed for `ecr` and `cx` when the device only calibrates one direction.
-  Per-qubit T1, T2 and asymmetric readout. Google's `sqrt_iswap` is a registry gate, and
-  `sycamore` is defined with `"qubits": 2`.
+  Coupling edges, directed for `ecr` and `cx` when the device calibrates only one direction.
+  Per-qubit T1, T2 and asymmetric readout. Google's `sqrt_iswap` is a registry gate, and the
+  definition of `sycamore` has `"qubits": 2`.
 - **Trapped ion.** `"connectivity": "all_to_all"`, natives such as `r`, a virtual `rz`, and `zz`
-  or `ms`. Vendors often publish device-wide medians or means, recorded with `statistic`. T1 is
-  usually absent and T2 long. Leakage goes in `effects`.
+  or `ms`. Vendors often publish device-wide medians or means, and `statistic` records which one.
+  T1 is usually absent, and T2 is long. Leakage goes in `effects`.
 - **Neutral atom in gate mode.** Natives such as `rz`, `r` and `cz`, with `all_to_all` or the
   edges within the interaction radius. Atom loss goes in `effects` as `atom_loss`.
-- **Spin qubits.** Like superconducting devices: coupling edges, per-qubit T1 and T2, and
-  `dephasing_rate_per_s` for extra dephasing.
+- **Spin qubits.** The mapping is like the superconducting one, with coupling edges, per-qubit T1
+  and T2, and `dephasing_rate_per_s` for extra dephasing.
 - **Photonic dual-rail.** Each qubit is a pair of modes. Gate errors map to the metrics above.
   Photon loss is an `erasure` effect with `"heralded": true`.
 
 Out of scope, and why:
 
 - **Analog neutral-atom computing** (programs as time-dependent Rydberg Hamiltonians). There is
-  no gate set, so there are no per-gate errors to record. Keep the vendor's parameters in
-  `extensions` if you want them pinned next to a gate-mode profile.
+  no gate set, so there are no per-gate errors to record. To pin the vendor's parameters next to
+  a gate-mode profile, keep them in `extensions`.
 - **Continuous-variable photonics** (squeezed states, homodyne measurement). The modes are not
   qubits, so qubit channels do not describe them. The same `extensions` rule applies.

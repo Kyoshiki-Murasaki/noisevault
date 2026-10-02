@@ -1,9 +1,10 @@
 # Frameworks
 
-Each export turns a profile into an object of the framework's own type, so it plugs into code
-you already have. Each one carries a `.report` that lists what the simulator reproduces exactly,
-what it approximates, what it leaves out, and what the profile does not know. Print it with
-`.report.summary()`, or save `.report.to_dict()` next to your results.
+Each export turns a profile into an object of the framework's own type. You can use that object
+in code that you already have. Each export carries a `.report`. The report lists what the
+simulator reproduces exactly, what it approximates, what it leaves out, and what the profile does
+not know. Print the report with `.report.summary()`. You can also save `.report.to_dict()` next
+to your results.
 
 | Framework | Call | Returns | Simulate with |
 | --- | --- | --- | --- |
@@ -12,8 +13,9 @@ what it approximates, what it leaves out, and what the profile does not know. Pr
 | PennyLane | `profile.to_pennylane()` | `NoiseVaultPennyLaneModel`, a `qml.NoiseModel` | `qml.add_noise(qnode, model)` on `default.mixed` |
 | Stim | `profile.to_stim(circuit)` | `NoiseVaultStimCircuit`, a `stim.Circuit` | its own samplers, or `detector_error_model()` |
 
-Each framework installs with the extra of the same name: `qiskit`, `cirq`, `pennylane` or
-`stim`. The `all` extra installs every one. Importing `noisevault` imports no framework.
+Each framework installs with the extra of the same name. These extras are `qiskit`, `cirq`,
+`pennylane` and `stim`. The `all` extra installs every framework. Importing `noisevault` imports
+no framework.
 
 ```bash
 pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
@@ -21,15 +23,16 @@ pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noise
 
 Every export takes `unknown_gates`. With `"typical"` (the default), a gate the profile does not
 calibrate gets the noise of the typical native gate of its arity, with a warning. With
-`"error"`, it raises `MissingCalibrationError`. [Conventions](conventions.md) defines that rule,
-the channels and the readout matrix.
+`"error"`, the export raises `MissingCalibrationError`. [Conventions](conventions.md) defines that
+rule, the channels and the readout matrix.
 
 A gate that the profile does not define takes the calibration of a defined gate that it equals.
 `sx` and `x` take `rx`, and `zz` takes `rzz`. The fixed phase gates `z`, `s`, `t` and their
-inverses take `p`, which they equal exactly, and else `rz`, which they equal up to a global
-phase. `u1` follows the same order, and `p` itself falls back to `rz`. Cirq, PennyLane, Stim and the `nv check` reference share
-this rule. Qiskit circuits are compiled to the profile's natives first, so there the Qiskit
-transpiler picks the gate.
+inverses take `p`, which they equal exactly. If the profile does not define `p`, these gates take
+`rz`, which they equal up to a global phase. `u1` follows the same order, and `p` itself falls
+back to `rz`. Cirq, PennyLane, Stim and the `nv check` reference share this rule. The Qiskit
+transpiler first compiles Qiskit circuits to the profile's natives, so for Qiskit the transpiler
+picks the gate.
 
 ## Scale the errors a calibration leaves out
 
@@ -73,16 +76,15 @@ print(fez.suggest_layout(4))
 `suggest_layout(n)` returns a connected chain of n enabled qubits with low summed gate and
 readout error. It prefers complete qubits. A complete qubit has every single-qubit native,
 apart from the identity, that is usable on at least one qubit of the device. The records that
-enable or disable a gate decide where it is usable.
-It is a starting point, not a placer. A layout onto a disabled or missing qubit raises
-`LayoutError` with the fix.
+enable or disable a gate decide where it is usable. `suggest_layout` is a starting point, not a
+placer. A layout onto a disabled or missing qubit raises `LayoutError` with the fix.
 
 ## Qiskit
 
-`to_qiskit()` builds an Aer simulator with a Qiskit `Target`: every native gate on every
-allowed locus, with the error and duration the simulator applies. `transpile(circuit, sim)`
-therefore compiles to the device's natives, routes around disabled gates and places circuits by
-noise. The noise model is keyed on physical qubits.
+`to_qiskit()` builds an Aer simulator with a Qiskit `Target`. The `Target` holds every native
+gate on every allowed locus, with the error and duration that the simulator applies.
+`transpile(circuit, sim)` therefore compiles to the device's natives, routes around disabled
+gates and places circuits by noise. `to_qiskit()` keys the noise model on physical qubits.
 
 ```python
 from qiskit import QuantumCircuit, transpile
@@ -100,25 +102,26 @@ print(counts)
 print(sim.report.summary())
 ```
 
-`sim.run` accepts only circuits already in native gates on allowed loci. Anything else raises
-`CircuitNotNativeError` with the `transpile` call that fixes it. `sim.target`, `sim.noise_model`
-and `sim.profile` are available for inspection.
+`sim.run` accepts only circuits already in native gates on allowed loci. Any other circuit raises
+`CircuitNotNativeError` with the `transpile` call that fixes the circuit. You can inspect
+`sim.target`, `sim.noise_model` and `sim.profile`.
 
 What the report can list:
 
 - **Exact.** Gate noise as an Aer `QuantumError` per native and physical locus. Readout as
   P(1|0) and P(0|1) per qubit with Aer's `ReadoutError`. Thermal relaxation during `delay`.
   A bit flip with the preparation error after each `reset`, when the profile has one.
-- **Approximated.** T2 values above 2 T1 are clamped. Natives with no Qiskit instruction of
-  their own are exported under the gate that contains them: `zz` as `rzz` and `ms` as `rxx`,
-  and the alias gets the native's noise at any angle. Google's `sqrt_iswap` is an instruction of
-  its own, but Qiskit's transpiler reaches it only through `cx` (two `sqrt_iswap` each), so a
-  general two-qubit block costs six where three would do; the report says so. The initial state
-  is ideal, which the report notes when the profile has a preparation error.
+- **Approximated.** `to_qiskit()` clamps T2 values above 2 T1. It exports natives
+  with no Qiskit instruction of their own under the gate that contains them. `zz` becomes `rzz`,
+  and `ms` becomes `rxx`. The alias gets the native's noise at any angle. Google's `sqrt_iswap`
+  is an instruction of its own, but Qiskit's transpiler reaches `sqrt_iswap` only through `cx`.
+  Each `cx` takes two `sqrt_iswap`. A general two-qubit block therefore costs six `sqrt_iswap`
+  where three are enough. The report states this cost. The initial state is ideal. When the
+  profile has a preparation error, the report notes that the initial state is ideal.
 - **Omitted.** Idle time outside explicit delays. Transpile with `scheduling_method="alap"` to
-  insert delays on idle qubits. Effects. Natives Qiskit cannot target, such as Google's
-  `sycamore`, are left out of the simulator and named in the report.
-- **Unknown.** Values the profile lacks. The bundled IBM snapshots have no preparation error, so
+  insert delays on idle qubits. Effects. `to_qiskit()` leaves natives that Qiskit cannot target,
+  such as Google's `sycamore`, out of the simulator. The report names these natives.
+- **Unknown.** Values the profile lacks. The bundled IBM profiles have no preparation error, so
   resets add none. A `delay` on a qubit with no T1, T2 or dephasing rate adds no noise, and the
   report names the qubit.
 
@@ -126,13 +129,14 @@ What the report can list:
 
 On a profile with disabled qubits or gates, transpile with
 `initial_layout=list(profile.suggest_layout(n).values())`. Qiskit's `optimization_level=0`
-places circuit qubit i on physical qubit i, and levels 1 to 3 do not check that a qubit has the
+places circuit qubit i on physical qubit i. Levels 1 to 3 do not check that a qubit has the
 single-qubit gates a circuit needs. `suggest_layout` does check. It skips a qubit that lacks a
 single-qubit native other qubits have, so the chain has the same basis as the rest of the
-device. This holds even when the qubit's other gates could make the missing one: an IBM qubit
-without `x` is skipped although `rz` and `sx` can make `x`. When no chain of n complete qubits
-exists, `suggest_layout` uses as few incomplete ones as it can and warns with the qubits and
-their missing gates. The transpiler can fail on those qubits.
+device. `suggest_layout` skips such a qubit even when the qubit's other gates could make the
+missing one. For example, `suggest_layout` skips an IBM qubit without `x`, although `rz` and
+`sx` can make `x`. When no chain of n complete qubits exists, `suggest_layout` uses as few
+incomplete qubits as it can. It then warns and names those qubits and their missing gates. The
+transpiler can fail on those qubits.
 
 ## Cirq
 
@@ -156,12 +160,11 @@ print(result.histogram(key="m"))
 print(model.report.summary())
 ```
 
-Qubits map this way: `LineQubit(i)` is device qubit i, and `GridQubit(r, c)` is the qubit whose
-`coords` are `[r, c]` (Google profiles record them). Other qubit types need
-`layout={qubit: index, ...}`. Gates match by Cirq class and exponent. `cirq.X**0.5` is `sx`,
-`cirq.ZZ**0.5` is `zz`, and `cirq.Z**t` is the phase gate `p`, or `s`, `t` or their inverses at
-those exponents. `cirq.PhasedXZGate` is split into the `r` gate and `cirq.Z**z`, and each part
-gets the noise it would get on its own.
+`LineQubit(i)` is device qubit i. `GridQubit(r, c)` is the qubit whose `coords` are `[r, c]`. Google
+profiles record `coords`. Other qubit types need `layout={qubit: index, ...}`. Gates match by Cirq
+class and exponent. `cirq.X**0.5` is `sx`, `cirq.ZZ**0.5` is `zz`, and `cirq.Z**t` is the phase gate
+`p`, or `s`, `t` or their inverses at those exponents. The model splits `cirq.PhasedXZGate` into the
+`r` gate and `cirq.Z**z`. Each part gets the noise that it would get on its own.
 
 What the report can list:
 
@@ -169,7 +172,7 @@ What the report can list:
   on mid-circuit measurements and the equivalent channel before terminal ones. The preparation
   error after each reset. Thermal relaxation during `cirq.WaitGate`.
 - **Approximated.** The state after a terminal measurement includes the readout flips. Sampled
-  results are exact; to inspect states, build the model with `readout=False`.
+  results are exact. To inspect states, build the model with `readout=False`.
 - **Omitted.** The preparation error of the initial state, idle time outside `WaitGate`, and the
   profile's leakage effects.
 
@@ -215,11 +218,11 @@ What the report can list:
   `StatePrep`, `QubitDensityMatrix`, `AmplitudeEmbedding` or `BasisEmbedding` is noiseless.
   Templates that prepare a state with gates, such as `MottonenStatePreparation`, get noise like
   other templates. `qml.add_noise` at its default `level="user"` noises `qml.adjoint` gates and
-  templates through their decomposition; pass `level="top"` to noise `Adjoint(SX)`, `Adjoint(S)`
-  and `Adjoint(T)` as the profile's `sxdg`, `sdg` and `tdg`. Operator arithmetic, such as
+  templates through their decomposition. To noise `Adjoint(SX)`, `Adjoint(S)` and `Adjoint(T)`
+  as the profile's `sxdg`, `sdg` and `tdg`, pass `level="top"`. Operator arithmetic, such as
   `qml.prod`, `@`, `qml.pow`, `qml.exp` or `qml.ctrl`, gets the noise of the gates it
   decomposes into, after the whole operator. An operator with its own gate name, such as
-  `qml.CNOT` or `qml.CRX`, is noised as one gate. The basis rotation
+  `qml.CNOT` or `qml.CRX`, gets noise as one gate. The basis rotation
   before a Pauli measurement is ideal. Gates conditioned on mid-circuit measurements get their
   noise whether or not the condition holds. A measurement without wires gets readout error on
   the wires that the circuit's operations and measurements use.
@@ -231,30 +234,30 @@ What the report can list:
 Operator arithmetic with no decomposition into gates, such as `qml.sum`, raises an error. It
 has no gate noise, and `default.mixed` cannot run it. Before PennyLane 0.45, a QNode leaves
 `qml.sum`, `qml.Hamiltonian` and `qml.s_prod` off its tape, so the circuit runs without them
-and the model never sees them.
+and the model never gets them.
 
-`qml.add_noise` keeps only part of a shot vector's results (`shots=[100, 200]`) when readout
-noise is on, so the model raises an error for shot vectors instead of returning wrong numbers.
-Run each shot count separately, or pass `readout=False`.
+When readout noise is on, `qml.add_noise` keeps only part of a shot vector's results
+(`shots=[100, 200]`). The model therefore raises an error for shot vectors instead of returning
+wrong numbers. Run each shot count separately. You can also pass `readout=False`.
 
 PennyLane has no operation named after the `r`, `zz` and `ms` natives of trapped-ion profiles.
-A `qml.Rot(a, theta, -a)` gets the profile's `r` noise and `qml.IsingZZ(pi/2)` its `zz` noise.
-On a profile with an `ms` native, `qml.IsingXX(±pi/2)` and `qml.IsingYY(±pi/2)` get its `ms`
-noise. Other angles, and gates the profile has no native for, get typical noise with a warning,
-and the report counts each use. A broadcast operation gets one noise channel for all its
-elements, so the model raises an error when its angles call for different gates' noise, such as
-`qml.IsingXX` over `[pi/2, 0.4]`. Expand the broadcast before adding noise:
-`qml.add_noise(qml.transforms.broadcast_expand(qnode), model)`.
+A `qml.Rot(a, theta, -a)` gets the profile's `r` noise, and `qml.IsingZZ(pi/2)` gets its `zz`
+noise. On a profile with an `ms` native, `qml.IsingXX(±pi/2)` and `qml.IsingYY(±pi/2)` get its
+`ms` noise. Other angles, and gates the profile has no native for, get typical noise with a
+warning, and the report counts each use. A broadcast operation gets one noise channel for all
+its elements. The model therefore raises an error when the operation's angles need the noise of
+different gates, such as `qml.IsingXX` over `[pi/2, 0.4]`. Expand the broadcast before you add
+noise, with `qml.add_noise(qml.transforms.broadcast_expand(qnode), model)`.
 
-Every wire a circuit uses, including wires it only measures, is checked against the layout and
-the profile, also with `readout=False`. A model built by adding or subtracting noise models
-checks only the wires its operations or readout reach.
+The model checks every wire that a circuit uses against the layout and the profile, also with
+`readout=False`. The check includes wires that the circuit only measures. A model built by adding
+or subtracting noise models checks only the wires its operations or readout reach.
 
 ## Stim
 
 `to_stim(circuit)` returns a copy of a Stim circuit with each gate followed by the Pauli twirl
-of its channel, as `PAULI_CHANNEL_1` or `PAULI_CHANNEL_2`, or on three or more qubits as a chain
-of `CORRELATED_ERROR` and `ELSE_CORRELATED_ERROR`. Annotations, `REPEAT` blocks,
+of its channel. The twirl is a `PAULI_CHANNEL_1` or `PAULI_CHANNEL_2`, or on three or more qubits
+a chain of `CORRELATED_ERROR` and `ELSE_CORRELATED_ERROR`. Annotations, `REPEAT` blocks,
 detectors and observables pass through, so decoders such as PyMatching work on the result.
 
 ```python
@@ -271,13 +274,14 @@ print(dem.num_errors, shots.mean())
 print(noisy.report.summary())
 ```
 
-`CX` is not a Fez native, so here it gets the noise of `cz` on the same pair, with a warning,
-and the report says so. For a grid device, `noisevault.stim.layout_from_coords(circuit, profile)`
-places a circuit by matching its `QUBIT_COORDS` to the profile's qubit coords.
+`CX` is not a Fez native, so here `CX` gets the noise of `cz` on the same pair, with a warning.
+The report also states this substitution. For a grid device,
+`noisevault.stim.layout_from_coords(circuit, profile)` places a circuit by matching its
+`QUBIT_COORDS` to the profile's qubit coords.
 
-In `MPP` and `SPP`, a Pauli product is reduced first. Factors on one qubit multiply, a qubit
-whose factors cancel is neither read out nor busy, and a product that reduces to the identity
-gets no readout flip.
+In `MPP` and `SPP`, the export first reduces each Pauli product. Pauli factors on one qubit
+multiply. A qubit whose Pauli factors cancel is neither read out nor busy. A product that reduces
+to the identity gets no readout flip.
 
 Options:
 
@@ -287,16 +291,16 @@ Options:
   `readout="none"` adds no readout error.
 - `tick_ns=` is the duration of one `TICK` layer. Qubits idle in a layer get twirled relaxation
   for that time.
-- `existing_noise` decides what happens to noise already in the circuit: `"error"` (default)
-  raises, `"keep"` keeps it and `"strip"` removes it.
+- `existing_noise` decides what happens to noise already in the circuit. `"error"` (default)
+  raises an error, `"keep"` keeps the noise and `"strip"` removes the noise.
 
 What the report can list:
 
 - **Exact.** Readout error, only with `readout="exact"` and `sample_with_readout`.
-- **Approximated.** Gate noise is the Pauli twirl of each gate's channel, which keeps each
+- **Approximated.** Gate noise is the Pauli twirl of each gate's channel. The twirl keeps each
   gate's average fidelity and drops relaxation's bias toward |0>. `detector_error_model()`
   treats the Pauli channel components as independent (Stim's `approximate_disjoint_errors`, on
-  by default here). Symmetric readout. Idle noise per `TICK` when `tick_ns` is set.
+  by default here). Symmetric readout. Idle noise per `TICK` when you set `tick_ns`.
 - **Omitted.** The initial preparation error, idle noise without `tick_ns`, and effects.
 
 Stim simulates Clifford circuits only. Write non-Clifford circuits for one of the other three
@@ -304,18 +308,19 @@ frameworks.
 
 ## Check a conversion
 
-`nv check REF` runs small circuits through each installed export and compares them with
-NoiseVault's own density-matrix reference simulator. Use it after changing a profile by hand.
-Stim is sampled with exact readout and compared with the reference after each gate's Pauli
-twirl. Its widest circuit and a circuit that only measures are also sampled with the default
-symmetrized readout and compared with a reference that uses each qubit's mean readout error.
-The measurement-only circuit is needed because readout error leaves a uniform distribution
-unchanged. When the profile calibrates `p`, the check also runs a fixed phase gate that the
-profile does not define, such as `s`, which every export must charge as `p`.
+`nv check REF` runs small circuits through each installed export and compares the results with
+NoiseVault's own density-matrix reference simulator. Use `nv check` after you change a profile by
+hand. `nv check` samples the Stim export with exact readout. It compares the samples with the
+reference after each gate's Pauli twirl. `nv check` also samples two Stim circuits with the default
+symmetrized readout. These circuits are the widest circuit and a circuit that only measures.
+`nv check` compares those samples with a reference that uses each qubit's mean readout error. The
+check needs the measurement-only circuit because readout error leaves a uniform distribution
+unchanged. When the profile calibrates `p`, the check also runs a fixed phase gate that the profile
+does not define, such as `s`. Every export must charge that gate as `p`.
 
-A framework that cannot express one of a circuit's gates runs the circuit without it, or skips
-the circuit when nothing useful is left. The `circuits` column counts only circuits that ran
-whole, for example `3 of 4, 1 reduced`. A line under the table names each gate left out and
+A framework that cannot express one of a circuit's gates runs the circuit without that gate. It
+skips the circuit when nothing useful remains. The `circuits` column counts only circuits that
+ran whole, for example `3 of 4, 1 reduced`. A line under the table names each gate left out and
 why, such as `stim: two_qubit_natives ran without rxx, ryy, rzz`. A pass covers only the gates
-that ran. `--json` lists the same under each framework's `not_run`, with `ran_without` naming
-the gates a reduced circuit left out.
+that ran. `--json` lists the same information under each framework's `not_run`. There,
+`ran_without` names the gates that a reduced circuit left out.

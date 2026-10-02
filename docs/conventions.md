@@ -2,7 +2,7 @@
 
 This page defines the numbers in a profile and how NoiseVault turns them into channels. Every
 export follows these rules, so a gate on a given qubit gets the same channel in Qiskit, Cirq,
-PennyLane and the reference simulator. Stim gets its Pauli twirl.
+PennyLane and the reference simulator. Stim gets the Pauli twirl of the same channel.
 
 ## Error metrics
 
@@ -11,12 +11,12 @@ under each. For an n-qubit gate with d = 2^n:
 
 | Metric | Profile key | Definition |
 | --- | --- | --- |
-| Average gate infidelity r | `avg_infidelity` | r = 1 - F_avg, with F_avg the fidelity averaged over pure input states. Randomized benchmarking reports this. |
+| Average gate infidelity r | `avg_infidelity` | r = 1 - F_avg, with F_avg the fidelity averaged over pure input states. Randomized benchmarking reports r. |
 | Process infidelity e | `process_infidelity` | e = 1 - F_pro, with F_pro the entanglement fidelity. |
 | Depolarizing parameter lambda | `depolarizing_param` | The channel (1 - lambda) rho + lambda I/d, as in Qiskit's `depolarizing_error(lambda, n)`. |
 | Pauli probabilities | `pauli` | p_P for each non-identity Pauli P. Their sum is the total Pauli error. |
 
-The conversions:
+These equations convert between the metrics:
 
 - F_avg = (d F_pro + 1) / (d + 1), so e = r (d + 1) / d.
 - r = lambda (d - 1) / d.
@@ -46,15 +46,15 @@ print(toy.to_stim(stim.Circuit("CZ 0 1\nH 0")))
 ```
 
 The quantity (d F_avg - 1) / (d - 1) is the randomized-benchmarking decay parameter, not the
-process fidelity. Reading one as the other overstates the error by a factor of d^2 / (d^2 - 1),
-which is 4/3 for one qubit.
+process fidelity. If you read one as the other, the error is d^2 / (d^2 - 1) times too high. That
+ratio is 4/3 for one qubit.
 
 Three vendor numbers need care:
 
 - IBM's two-qubit error comes from benchmarking layers that include single-qubit Cliffords.
   Importers record `"includes": ["1q_dressing"]`.
-- Google's XEB "Pauli error per cycle" is the process error of one cycle, which is a random
-  single-qubit gate on each qubit followed by the entangler. The Google importer subtracts the
+- Google's XEB "Pauli error per cycle" is the process error of one cycle. One cycle is a random
+  single-qubit gate on each qubit, followed by the entangler. The Google importer subtracts the
   single-qubit part, as Google does to infer a per-gate error, and stores the result as
   `process_infidelity`.
 - IonQ publishes fidelities without naming the metric. The IonQ importer reads them as average
@@ -73,21 +73,21 @@ pure dephasing at rate 1/T2 - 1/(2 T1). A `dephasing_rate_per_s` adds a Z error 
 probability rate x t, capped at 1/2. With no T1, there is no amplitude damping. With no T2,
 T2 = 2 T1 (no pure dephasing).
 
-The depolarizing part is solved so the composed channel has the stated error. This is Qiskit
-Aer's rule for device noise. With F_relax the average gate fidelity of relaxation alone and
-r_relax = 1 - F_relax:
+NoiseVault solves for the depolarizing part so that the composed channel has the stated error.
+Qiskit Aer uses the same rule for device noise. With F_relax the average gate fidelity of
+relaxation alone and r_relax = 1 - F_relax:
 
 lambda = d (r - r_relax) / (d F_relax - 1)
 
 These edge cases change the result, and the report records each:
 
-- **T2 clamp.** A T2 above 2 T1 is unphysical for this model. It is clamped to 2 T1 and the
-  report lists "T2 of qubit q: clamped to 2*T1".
-- **Relaxation floor.** If r_relax already exceeds r, no depolarizing noise is added and the
-  gate keeps the full relaxation. The gate is then noisier than stated.
-- **Depolarizing ceiling.** If r is above what the strongest depolarizing channel on top of the
-  relaxation can reach, the depolarizing part stops at that maximum and the gate is less noisy
-  than stated. This needs an error far above any real calibration.
+- **T2 clamp.** A T2 above 2 T1 is unphysical for this model. NoiseVault clamps such a T2 to
+  2 T1, and the report lists "T2 of qubit q: clamped to 2*T1".
+- **Relaxation floor.** If r_relax already exceeds r, NoiseVault adds no depolarizing noise, and
+  the gate keeps the full relaxation. The gate is then noisier than stated.
+- **Depolarizing ceiling.** If r is above the highest error that a depolarizing channel and the
+  relaxation together can reach, the depolarizing part stops at that maximum. The gate is then
+  less noisy than stated. That case needs an error far above any real calibration.
 
 For the floor and the ceiling, the report's `clamped` list records each gate's requested and
 achieved error.
@@ -95,8 +95,8 @@ achieved error.
 A gate with a `pauli` spec gets exactly that Pauli channel and no relaxation, because the spec
 is the whole channel. A virtual gate gets no channel.
 
-In this example, a 500 ns gate on qubits with T1 = 10 us cannot have an error as low as 1e-3,
-so it hits the relaxation floor.
+In this example, a 500 ns gate on qubits with T1 = 10 us cannot have an error as low as 1e-3.
+The gate therefore reaches the relaxation floor.
 
 ```python
 import stim
@@ -132,18 +132,18 @@ M[measured, prepared] = [[1 - a,     b],
                          [    a, 1 - b]]
 ```
 
-so measured probabilities are M p. Each framework receives it in its own form:
+so measured probabilities are M p. Each framework receives the matrix in its own form:
 
-| Framework | How readout is applied |
+| Framework | How the export applies readout |
 | --- | --- |
-| Qiskit Aer | `ReadoutError(M.T)`: Aer's rows are the prepared state. |
-| Cirq | Mid-circuit: `cirq.MeasurementGate(confusion_map={...: M.T})`, whose rows are the true state. Terminal: the confusion channel just before the measurement, because Cirq's sampling of terminal measurements would drop a confusion map. |
+| Qiskit Aer | `ReadoutError(M.T)`. Aer's rows are the prepared state. |
+| Cirq | A mid-circuit measurement gets `cirq.MeasurementGate(confusion_map={...: M.T})`, whose rows are the true state. A terminal measurement gets the confusion channel immediately before the measurement, because Cirq's sampling of terminal measurements would drop a confusion map. |
 | PennyLane | The confusion channel, as a `qml.QubitChannel`, before each measurement in the measured basis. Mid-circuit measurements get no readout error. |
-| Stim | `readout="symmetrize"` (default): `M((a + b) / 2)`, a symmetric flip. `readout="exact"`: perfect measurements in the circuit, then `noisevault.stim.sample_with_readout` flips each recorded bit with a or b. |
+| Stim | With `readout="symmetrize"` (the default), the export writes `M((a + b) / 2)`, a symmetric flip. With `readout="exact"`, the circuit has perfect measurements, and `noisevault.stim.sample_with_readout` then flips each recorded bit with a or b. |
 
 The confusion channel has Kraus operators `K_mp = sqrt(M[m, p]) |m><p|` for m, p in {0, 1}. It
 handles any column-stochastic M, including a + b > 1. A generalized amplitude
-damping channel (GAD) can also reproduce readout error, but only when a + b <= 1, and the two
+damping channel (GAD) can also reproduce readout error, but only when a + b <= 1. The two
 frameworks define its p parameter in opposite ways. With gamma = a + b:
 
 | Framework | Call that reproduces (a, b) |
@@ -151,46 +151,49 @@ frameworks define its p parameter in opposite ways. With gamma = a + b:
 | PennyLane | `qml.GeneralizedAmplitudeDamping(a + b, a / (a + b), wires=q)` |
 | Cirq | `cirq.generalized_amplitude_damp(b / (a + b), a + b)` |
 
-Using PennyLane's p in Cirq swaps a and b. NoiseVault does not use GAD, but this matters if you
-build readout noise by hand.
+If you use PennyLane's p in Cirq, the call swaps a and b. NoiseVault does not use GAD, but the
+difference matters if you build readout noise by hand.
 
 ## Preparation and idle time
 
 - A reset gets a bit flip with probability `prep.error` after it, in every framework.
 - The initial state is ideal |0...0>. Profiles do not distinguish initial preparation from
   reset, and reports list the initial state as approximated or omitted.
-- Idle noise is applied only where a circuit states a duration: Qiskit `delay` instructions and
-  Cirq `WaitGate` get thermal relaxation for their duration, and Stim gets relaxation on qubits
-  idle in a TICK layer when you pass `tick_ns=`. PennyLane circuits have no timing, so they get
-  no idle noise. Qiskit circuits get delays when you transpile with `scheduling_method="alap"`.
+- The exports apply idle noise only where a circuit states a duration. Qiskit `delay`
+  instructions and Cirq `WaitGate` get thermal relaxation for their duration. Stim gets
+  relaxation on qubits idle in a TICK layer when you pass `tick_ns=`. PennyLane circuits have no
+  timing, so they get no idle noise. Qiskit circuits get delays when you transpile with
+  `scheduling_method="alap"`.
 
 ## Qubit order
 
-Profiles number physical qubits `0..num_qubits-1`. A `layout` maps circuit qubits to them; by
-default integer label i is physical qubit i. Kraus operators inside NoiseVault are big-endian
-(the first qubit is the most significant tensor factor). Each framework then reports outcomes in
-its own order:
+Profiles number physical qubits `0..num_qubits-1`. A `layout` maps circuit qubits to physical
+qubits. By default, integer label i is physical qubit i. Kraus operators inside NoiseVault are
+big-endian (the first qubit is the most significant tensor factor). Each framework then reports
+outcomes in its own order:
 
 | Framework | Circuit qubits | Bit order in results |
 | --- | --- | --- |
-| Qiskit | Transpiled circuits act on physical qubits directly. | Little-endian: qubit 0 is the rightmost bit of a counts key. |
+| Qiskit | Transpiled circuits act on physical qubits directly. | Little-endian. Qubit 0 is the rightmost bit of a counts key. |
 | Cirq | `LineQubit(i)` is qubit i. `GridQubit(r, c)` is the qubit at coords `[r, c]`. Others need `layout=`. | The order of the qubits in `cirq.measure(...)`, first qubit first. |
-| PennyLane | Integer wire i is qubit i. Other wire labels need `layout=`. | `qml.probs(wires=[...])`: the first wire is the most significant bit. |
+| PennyLane | Integer wire i is qubit i. Other wire labels need `layout=`. | In `qml.probs(wires=[...])`, the first wire is the most significant bit. |
 | Stim | Stim qubit i is qubit i. `noisevault.stim.layout_from_coords` matches `QUBIT_COORDS` to profile coords. | Measurement record order. |
 
 ## Gates the profile does not calibrate
 
-A circuit may use a gate the profile does not calibrate: a gate missing from `gates` (such as
-`h` on an IBM device), a native with no error metric, or a pair the connectivity does not allow.
-The `unknown_gates` option decides what happens:
+A circuit may use a gate that the profile does not calibrate. The gate can be missing from
+`gates`, such as `h` on an IBM device. The gate can also be a native with no error metric, or a
+gate on a pair that the connectivity does not allow. The `unknown_gates` option decides what
+happens:
 
 - `"typical"` (the default) gives the gate the noise of the typical native gate of its arity on
   the same qubits. The typical native is the calibrated native with the most calibration
-  records, ties broken by name. The identity `id` is an idle slot, so it is used only when no
-  other native fits. If the typical native is disabled there, the next one is used. A directed
-  two-qubit native may lend its record from the reversed pair. The export warns once per gate
-  name with a `NoiseApproximationWarning`, lists the gate under "approximated" in the report and
-  counts each use in the report's `typical_noise_used` events.
+  records. NoiseVault breaks ties by name. The identity `id` is an idle slot, so NoiseVault uses
+  `id` only when no other native fits. If the profile marks the typical native as disabled on
+  those qubits, NoiseVault uses the next one. For a directed two-qubit native, NoiseVault can use
+  the record from the reversed pair. The export warns once per gate name with a
+  `NoiseApproximationWarning`. It lists the gate under "approximated" in the report and counts
+  each use in the report's `typical_noise_used` events.
 - `"error"` raises `MissingCalibrationError` instead.
 
 Z-family gates (`z`, `s`, `sdg`, `t`, `tdg`, `p`, `u1`, `rz`) are free when the profile's `rz`
@@ -202,4 +205,4 @@ these gates and gates on more than two qubits raise `MissingCalibrationError` wi
 The typical rule keeps an un-transpiled circuit runnable, but its gate count is not the
 device's. An `h` on IBM hardware is one `sx` between two virtual `rz` gates, and a `cx` is a
 `cz` with single-qubit gates around it. For realistic noise, compile to the profile's native
-gates first: `transpile(circuit, sim)` in Qiskit, or a Cirq target gateset.
+gates first. In Qiskit, use `transpile(circuit, sim)`. In Cirq, use a target gateset.

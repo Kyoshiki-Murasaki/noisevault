@@ -7,10 +7,10 @@ output it shows. The drift recipe needs the network, and the Mitiq recipe needs 
 ## Pin and cite a calibration for a paper
 
 A result simulated under device noise is reproducible only if readers can get the same noise.
-Pin the calibration by its fingerprint and publish both.
+Pin the calibration by its fingerprint. Publish the calibration and the fingerprint.
 
-1. Choose the calibration. This recipe uses the bundled `ibm_fez@2025-02-26`, which loads
-   offline and is the same on every machine. `nv list` shows the other bundled profiles.
+1. Choose the calibration. This recipe uses the bundled profile `ibm_fez@2025-02-26`, which
+   loads offline and is the same on every computer. `nv list` shows the other bundled profiles.
 
    To use the newest calibration instead, run `nv pull ibm_fez`. The first line of its output
    is the saved ref and fingerprint, such as `ibm_fez@2026-10-01T20:14:09Z` and
@@ -25,7 +25,7 @@ Pin the calibration by its fingerprint and publish both.
    nv cite ibm_fez@2025-02-26 --bibtex
    ```
 
-3. Load the profile by ref and fingerprint in your code, and save the conversion report next to
+3. Load the profile by ref and fingerprint in your code. Save the report of the export next to
    your results:
 
 ```python
@@ -41,16 +41,17 @@ with open("noise_manifest.json", "w") as f:
 print(fez.citation())
 ```
 
-If the profile ever changes, `expect=` raises `FingerprintMismatch` instead of running with
+If the profile changes, `expect=` raises `FingerprintMismatch` instead of running with
 different noise. The manifest records the profile id, fingerprint, framework versions, options
 and everything the export approximated.
 
-Readers of a pulled (not bundled) calibration need the profile file itself. Check its terms
-with `nv show REF` before you publish it; the fingerprint alone is always shareable.
+If you use a pulled calibration and not a bundled profile, your readers need the profile file
+itself. Before you publish the profile file, check its terms with `nv show REF`. You can always
+share the fingerprint alone.
 
 ## Compare drift between two dates
 
-IBM's public endpoint keeps calibration history. Pull two dates and diff them:
+IBM's public endpoint keeps calibration history. Pull two dates. Then diff the two calibrations:
 
 ```bash
 nv pull ibm_fez --at 2026-07-03
@@ -61,7 +62,8 @@ nv diff ibm_fez@2026-07-02 ibm_fez@2026-09-30
 `nv pull --at` returns the newest calibration before that time. Here the pulls print
 `ibm_fez@2026-07-02T23:05:55Z` and `ibm_fez@2026-09-30T23:14:35Z`, so the diff uses those dates.
 For other dates, use the dates your pulls print. The diff lists device medians, the qubits and
-pairs that changed most, and gates that were disabled or re-enabled. The start of the output:
+pairs that changed most, and gates that IBM disabled or re-enabled. The output starts with
+these lines:
 
 ```
 ibm_fez 2026-07-02 -> 2026-09-30  (90 days later)
@@ -184,16 +186,16 @@ print(f"logical error rate per 3 rounds: {failures / 20_000:.4f}")
 ```
 
 The CNOTs in Stim's circuit get the grid's `cx` calibration, and `tick_ns=50` adds relaxation on
-idle qubits at each `TICK`. To run on a real chip's topology, use a profile whose qubits record
-`coords`, such as `google_weber`, and check that `layout_from_coords` finds a placement.
+idle qubits at each `TICK`. To run on a real device's topology, use a profile whose qubits record
+`coords`, such as `google_weber`. Then check that `layout_from_coords` finds a placement.
 [examples/qec_surface_code.py](../examples/qec_surface_code.py) compares distances 3 and 5.
 
 ## Describe a hypothetical device
 
 `Profile.uniform` gives every 1- and 2-qubit registry gate one error per arity. Z-family gates
 such as `s` and `t` are free through a virtual `rz`. `Profile.uniform` leaves out `swap`,
-`cxswap`, `swapcx` and `czswap`, because each needs several native entanglers. Decompose them
-first. In every other circuit of 1- and 2-qubit gates, each gate gets its own calibrated noise
+`cxswap`, `swapcx` and `czswap`, because each needs several native entanglers. Decompose these
+gates first. In every other circuit of 1- and 2-qubit gates, each gate gets its own calibrated noise
 and none falls back to typical noise:
 
 ```python
@@ -214,9 +216,9 @@ ions.save("toy-ions.json")
 print(nv.load("toy-ions.json").short_fingerprint == ions.short_fingerprint)
 ```
 
-A neutral-atom device in gate mode loses atoms during imaging. Record that as an `atom_loss`
-effect. No export models effects yet, so the report lists it as omitted rather than dropping it
-silently:
+A neutral-atom device in gate mode loses atoms during imaging. Record the atom loss as an
+`atom_loss` effect. No export models effects yet, so the report lists the effect as omitted
+rather than dropping it silently:
 
 ```python
 import stim
@@ -241,16 +243,16 @@ print([line for line in noisy.report.summary().splitlines() if line.startswith("
 # ['omitted: effect atom_loss on readout, initial state preparation error ...']
 ```
 
-To require that an effect be modeled, set `"allow": "approximate"` or `"exact"` on it. Exports
-then raise `UnsupportedEffect` instead of omitting it.
+To require that the exports model an effect, set `"allow": "approximate"` or `"exact"` on the
+effect. Exports then raise `UnsupportedEffect` instead of omitting it.
 
-Edit the saved JSON by hand to give qubits or pairs their own values (see
-[Profile format](profile-format.md)), then run `nv validate toy-ions.json`.
+To give qubits or pairs their own values, edit the saved JSON by hand. See
+[Profile format](profile-format.md). Then run `nv validate toy-ions.json`.
 
 ## Train a PennyLane circuit under device noise
 
 `qml.add_noise` applies the model to a QNode on `default.mixed`. Write the circuit in the
-profile's native gates (for IBM: `RZ`, `SX`, `CZ`) so every gate gets its own calibration:
+profile's native gates so every gate gets its own calibration. For IBM, use `RZ`, `SX` and `CZ`:
 
 ```python
 import pennylane as qml
@@ -286,18 +288,18 @@ The noisy minimum stays above -1 because gate and readout errors shrink the expe
 ## Measure a profile against hardware
 
 `nv check` shows that each export implements the profile's noise model. It does not show how
-close that model is to the device. To measure that, run circuits on the device and score the
-profile on their counts. `nv compare` fits two factors, one on every gate error rate and one on
-every readout error rate. Each factor has a 95% interval, and a goodness-of-fit test says whether
-one pair of factors explains every circuit.
+close that model is to the device. To measure how close the noise model is to the device, run
+circuits on the device. Then score the profile on the circuits' counts. `nv compare` fits two
+factors, one on every gate error rate and one on every readout error rate. Each factor has a 95%
+interval, and a goodness-of-fit test says whether one pair of factors explains every circuit.
 [How nv compare fits the factors](limitations.md#how-nv-compare-fits-the-factors) explains the
-fit and how its intervals were tested.
+fit and the tests of its intervals.
 
 On an IBM device, `scripts/run_on_ibm.py` runs the circuits and saves the counts file. It needs
 [uv](https://docs.astral.sh/uv/) and an IBM Quantum account. Put your API key in
-`IBM_QUANTUM_TOKEN`, or save the account once with `QiskitRuntimeService.save_account(token=...)`.
-uv reads the script's dependencies from its first lines and installs them, so the script needs no
-clone or install:
+`IBM_QUANTUM_TOKEN`. You can also save the account once with
+`QiskitRuntimeService.save_account(token=...)`. uv reads the script's dependencies from its first
+lines and installs them, so the script needs no clone or install:
 
 ```bash
 uv run https://raw.githubusercontent.com/Kyoshiki-Murasaki/noisevault/main/scripts/run_on_ibm.py ibm_kingston --shots 4000 -o kingston-0416.counts.json
@@ -328,7 +330,7 @@ Submit the job to ibm_kingston? [y/N]
 
 `--yes` submits without asking. The script then submits one job and waits for IBM to run it. The
 wait depends on the device's queue. If you press Ctrl-C or the connection drops during the wait,
-the job keeps running at IBM. Run the same command again to collect its counts instead of
+the job keeps running at IBM. Run the same command again to collect the job's counts instead of
 submitting another job. When the job has run, the script saves the counts file and ends with the
 command that scores it:
 
@@ -336,23 +338,25 @@ command that scores it:
 next            nv compare ibm_kingston@2026-04-15 kingston-0416.counts.json
 ```
 
-The counts bind to the calibration in effect when the job started running, which can be newer
-than the one the script planned from. When the newer calibration still calibrates every gate in
-the circuits with the same duration, the counts bind to it, and the script says that IBM
-recalibrated. When it does not, the counts bind to the planned calibration, and a warning names
-both fingerprints, says what changed and suggests running the script again.
+The counts bind to the calibration in effect when the job started running. That calibration can
+be newer than the one that the script planned from. When the newer calibration still calibrates
+every gate in the circuits with the same duration, the counts bind to the newer calibration. The
+script then says that IBM recalibrated. When the newer calibration does not, the counts bind to
+the planned calibration. A warning then names both fingerprints, says what changed and suggests
+running the script again.
 
 On another device, take steps 1 to 3 by hand. Step 4 is the same for every device.
 
 1. Plan the circuits. `plan(profile)` from `noisevault.counts` returns the `nv check` circuits on
-   the qubits that `nv check` picks. It schedules each gate as soon as its qubits are free and
-   writes every wait as a `delay`, so the device and the model see the same idle time.
+   the qubits that `nv check` picks. `plan` schedules each gate as soon as its qubits are free.
+   It writes every wait as a `delay`, so the device and the noise model get the same idle time.
 2. Run each circuit on the device exactly as planned. Do not transpile the circuits, twirl them
-   or add dynamical decoupling. Start each shot in the ground state, and measure every circuit
-   qubit after the last op.
+   or add dynamical decoupling. Start each shot in the ground state. Measure every circuit qubit
+   after the last operation.
 3. Save the counts as a [counts file](counts-format.md). The file records the calibration that
-   the circuits were planned from, and `nv compare` refuses counts planned from another one.
-4. Score the profile, then save it with the fitted factors:
+   you planned the circuits from. `nv compare` refuses counts that you planned from another
+   calibration.
+4. Score the profile. Then save the profile with the fitted factors:
 
    ```bash
    nv compare ibm_kingston@2026-04-15 kingston-0416.counts.json
@@ -362,8 +366,8 @@ On another device, take steps 1 to 3 by hand. Step 4 is the same for every devic
    ```
 
    Every export of `kingston-fitted.json` applies the factors, and `nv check` confirms that each
-   export reproduces the fitted model. `nv cite` prints one fingerprint that pins the calibration
-   and the factors.
+   export reproduces the noise model of the fitted profile. `nv cite` prints one fingerprint that
+   pins the calibration and the factors.
 
 The Python below takes the same steps. In place of a device run, it simulates counts at twice
 the calibration's gate error:
@@ -388,11 +392,12 @@ print(result)
 ```
 
 `print(result)` prints the text that `nv compare` shows, and `result.gates` and `result.readout`
-hold each factor with its interval. A fit beyond shot noise has p below 0.01. It means that no
-pair of factors explains every circuit, as when one qubit reads out worse than its calibration
-states. `nv compare` still prints the best pair and exits with status 0.
+hold each factor with its interval. A fit beyond shot noise has p below 0.01. Such a fit means
+that no pair of factors explains every circuit, as when one qubit reads out worse than its
+calibration states. `nv compare` still prints the best pair and exits with status 0.
 
-When a profile states a readout error of exactly 0 for a measured qubit, a wrong reading on that
-qubit has probability 0 at every factor. `nv compare` counts the shots that read such a qubit
-wrong, reports p = 0 and names the qubit. [Limitations](limitations.md#what-the-unmodeled-error-factors-absorb) lists what the
-factors absorb and what they cannot express.
+A profile can state a readout error of exactly 0 for a measured qubit. A wrong reading on that qubit
+then has probability 0 at every factor. `nv compare` counts the shots that read such a qubit wrong,
+reports p = 0 and names the qubit.
+[Limitations](limitations.md#what-the-unmodeled-error-factors-absorb) lists what the factors absorb
+and what they cannot express.

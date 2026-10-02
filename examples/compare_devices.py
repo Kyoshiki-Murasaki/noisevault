@@ -1,8 +1,8 @@
-"""The same GHZ-n circuit on five devices: GHZ success probability against n.
+"""Plot the GHZ success probability against n for the same GHZ-n circuit on five devices.
 
-Four bundled calibrations (two IBM superconducting chips, two Quantinuum trapped-ion machines)
-and one hypothetical neutral-atom device. Writes compare_devices.svg in the current folder, or
-the path given as the first argument.
+The five devices are four bundled profiles (two IBM superconducting devices, two Quantinuum
+trapped-ion devices) and one hypothetical neutral-atom device. The script writes
+compare_devices.svg in the current folder, or at the path given as the first argument.
 
 Needs:
     pip install "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
@@ -36,7 +36,8 @@ atoms = nv.Profile.uniform(
     one_qubit_ns=500,
     two_qubit_ns=250,
 )
-# Colors read on both white and GitHub's dark background; text labels carry identity too.
+# Each color is readable on white and on GitHub's dark background. Text labels also name each
+# device.
 DEVICES = [
     (nv.load("ibm_fez"), "#3987e5", "o", "-"),
     (nv.load("ibm_brisbane"), "#d95926", "s", "-"),
@@ -63,8 +64,9 @@ def success(profile: nv.Profile, sim, n: int) -> float:
     return (counts.get("0" * n, 0) + counts.get("1" * n, 0)) / SHOTS
 
 
-# The transparent figure sits on GitHub's white or #0d1117. No gray reaches 4.5:1 on both; this
-# one has the best worst case (4.29:1 on white, 4.41:1 on #0d1117).
+# The transparent figure shows on GitHub's white or #0d1117 background. No gray reaches a
+# contrast of 4.5:1 on both. This gray has the highest minimum contrast (4.29:1 on white, 4.41:1
+# on #0d1117).
 INK, GRID = "#7a7a7a", "#7a7a7a40"
 plt.rcParams.update(
     {"font.family": "sans-serif", "font.size": 10, "text.color": INK, "svg.hashsalt": "nv"}

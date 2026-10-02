@@ -1,6 +1,6 @@
 """Describe hypothetical devices, save and reload them, and run them in Qiskit and Stim.
 
-The numbers below are illustrative, not measurements of any machine.
+The numbers below are illustrative, not measurements of any device.
 
 Needs: pip install "noisevault[qiskit,stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
 """
@@ -21,7 +21,7 @@ ions = nv.Profile.uniform(
     one_qubit_error=3e-5,
     two_qubit_error=1e-3,
     readout_error=2e-3,
-    t2_us=1e6,  # 1 s of coherence; ions have no meaningful T1 decay
+    t2_us=1e6,  # 1 s of coherence. Ions have no meaningful T1 decay.
     one_qubit_ns=10_000,
     two_qubit_ns=200_000,
 )

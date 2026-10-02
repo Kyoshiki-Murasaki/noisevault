@@ -1,4 +1,6 @@
-"""Surface-code memory on a calibrated grid device: Stim export, then decoding with PyMatching.
+"""Surface-code memory on a calibrated grid device.
+
+The script exports to Stim, then decodes with PyMatching.
 
 Needs:
     pip install "noisevault[stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault"
@@ -17,7 +19,7 @@ SIDE, SHOTS = 11, 20_000
 
 
 def grid_device(side: int) -> nv.Profile:
-    """A hypothetical square-grid device whose qubits carry (row, col) coords."""
+    """A hypothetical square-grid device whose qubits have (row, col) coords."""
     edges = [(r * side + c, r * side + c + 1) for r in range(side) for c in range(side - 1)]
     edges += [(r * side + c, (r + 1) * side + c) for r in range(side - 1) for c in range(side)]
     device = nv.Profile.uniform(
@@ -35,7 +37,7 @@ def grid_device(side: int) -> nv.Profile:
     )
     data = device.to_dict()
     data["qubits"] = [{"index": i, "coords": divmod(i, side)} for i in range(side * side)]
-    data["prep"] = {"error": 1e-3}  # the code resets ancillas every round
+    data["prep"] = {"error": 1e-3}  # the surface code resets ancillas every round
     return nv.Profile.from_dict(data)
 
 
