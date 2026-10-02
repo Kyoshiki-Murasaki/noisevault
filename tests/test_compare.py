@@ -202,6 +202,59 @@ def test_dense_counts_cover_the_true_factor_without_wide_intervals() -> None:
     assert 180 <= hits <= 199
 
 
+LONG_GATE = 1.13
+
+
+def long_circuit(seed: int, shots: int = 1_000_000) -> tuple[Profile, MeasuredCounts]:
+    profile = Profile.uniform(
+        "long", technology="superconducting", num_qubits=1, one_qubit_error=0.001
+    )
+    circuit = PlannedCircuit(name="x1000", qubits=(0,), ops=(Op("x", (0,)),) * 1000)
+    truth = scaled(profile, LONG_GATE)
+    return profile, simulate(truth, [circuit], shots=shots, seed=seed, run_at=LATER)
+
+
+def test_a_long_circuit_gets_nodes_until_its_interval_covers_the_truth() -> None:
+    result = compare(*long_circuit(0))
+    assert covers(result.gates, LONG_GATE), result.gates
+
+
+@slow
+def test_each_interval_covers_its_truth_on_a_long_circuit() -> None:
+    hits = sum(covers(compare(*long_circuit(seed)).gates, LONG_GATE) for seed in range(100))
+    assert hits >= 93, hits
+
+
+def test_nodes_that_one_comparison_adds_leave_the_next_unchanged() -> None:
+    first = compare(*long_circuit(0)).to_dict()
+    compare(*long_circuit(1, shots=10_000_000))
+    assert compare(*long_circuit(0)).to_dict() == first
+
+
+def two_peaks(seed: int) -> tuple[Profile, MeasuredCounts]:
+    profile = one_qubit("peaks", {"r": {"pauli": [0.04875, 0.00375, 0.00125]}})
+    angles = [(math.pi / 2, math.pi / 2), (math.pi / 4, math.pi / 2)]
+    angles += [(3 * math.pi / 4, math.pi / 2), (7 * math.pi / 4, 0.0)]
+    circuit = PlannedCircuit(name="r4", qubits=(0,), ops=tuple(Op("r", (0,), a) for a in angles))
+    return profile, simulate(profile, [circuit], shots=1_000_000, seed=seed, run_at=LATER)
+
+
+def test_an_interval_spans_every_range_the_test_accepts() -> None:
+    result = compare(*two_peaks(0))
+    assert covers(result.gates, 1.0) and result.gates.high > 8, result.gates
+
+
+def test_of_two_equal_peaks_the_estimate_is_the_one_nearest_factor_1() -> None:
+    result = compare(*two_peaks(5))
+    assert isinstance(result.gates, ErrorFactor) and result.gates.high > 8
+    assert 0.9 < result.gates.factor < 1.1, result.gates
+
+
+def test_intervals_with_two_peaks_cover_the_true_factor() -> None:
+    hits = sum(covers(compare(*two_peaks(seed)).gates, 1.0) for seed in range(100))
+    assert hits >= 93, hits
+
+
 def test_two_runs_of_one_plan_build_the_surface_once(monkeypatch: pytest.MonkeyPatch) -> None:
     built = []
     build = fit._Surface.build.__func__
@@ -326,7 +379,7 @@ def test_x_then_x_counts_identify_neither_factor() -> None:
     same = NoEstimate("gate error and readout error move these counts the same way")
     assert (result.gates, result.readout) == (same, same)
     center = fit._exact(profile, counts.circuits, 1.0, 1.0)
-    eigen = np.linalg.eigvalsh(fit._fisher(profile, counts, center, 1.0, 1.0))
+    eigen = np.linalg.eigvalsh(fit._fisher(profile, counts.circuits, [4000], center, 1.0, 1.0))
     assert eigen[0] < fit.SEPARABLE * eigen[1]
     assert (result.dof, result.p_value) == (0, None)
     assert "not testable (no degrees of freedom left after fitting)" in str(result)
@@ -419,6 +472,26 @@ def test_counts_the_profile_rules_out_entirely_identify_neither_factor() -> None
     result = compare(fez, MeasuredCounts.model_validate(data))
     assert result.gates == result.readout == NoEstimate("the profile rules out every shot")
     assert result.p_value == 0 and result.impossible_shots == 4000
+
+
+def test_shots_that_leave_the_fit_carry_no_information() -> None:
+    profile = Profile.model_validate(
+        {
+            "noisevault": "1.0",
+            "device": {"name": "pair", "technology": "superconducting", "num_qubits": 2},
+            "connectivity": "all_to_all",
+            "gates": {"x": {"avg_infidelity": 0.01}},
+            "qubits": [
+                {"index": 0, "readout": {"error": 0.01}},
+                {"index": 1, "readout": {"error": 0.0}},
+            ],
+        }
+    )
+    xx = ("xx", XX, {"0": 3862, "1": 138})
+    result = compare(profile, written(profile, [xx, ("blank", (), {"01": 4000})]))
+    same = NoEstimate("gate error and readout error move these counts the same way")
+    assert (result.gates, result.readout) == (same, same)
+    assert (result.impossible_shots, result.dof) == (4000, 0)
 
 
 def refused(profile: Profile, counts: MeasuredCounts) -> str:

@@ -126,6 +126,17 @@ runs, the probabilities are linear in log factor, so they stay between 0 and 1. 
 readout error exactly at every point. The deviance, the fitted TVDs and the counts drawn for the
 p-value all come from an exact run at the fitted factors.
 
+The error of the straight line between two runs does not get smaller with more shots, but the
+statistical error does. An example is one qubit with 1000 `x` gates and a million shots. There,
+the line alone moved the 95% interval off the true factor in 64 of 100 runs. The fit therefore
+checks the line near the likelihood maximum, where the likelihood-ratio statistic is at most
+nine times the interval cutoff. In each gap between two runs there, the reference also runs at
+the midpoint. The check multiplies the shots of each circuit by the chi-square distance between
+that run and the line. When the sum is more than 0.04, the midpoint becomes a new run, and the
+check repeats on each half. This limit keeps the shift of the estimate below 0.2 standard errors.
+The new runs depend only on the profile and the counts, so earlier comparisons never change a
+result.
+
 ### Which factors the counts identify
 
 Gate error and readout error can move counts the same way. The `readout` circuit from `plan()` has
@@ -148,7 +159,8 @@ The deviance is twice the gap between the log-likelihood of the counts' own freq
 that of the fitted model. The test compares the deviance with its degrees of freedom. The test
 counts the outcomes that the profile can produce at some factor in the range. The degrees of
 freedom are that count minus one for each circuit, minus the rank of the Fisher information. That
-rank is 2 when the counts determine both factors, and less when they do not.
+rank is 2 when the counts determine both factors, and less when they do not. A circuit whose
+shots all leave the likelihood adds no degrees of freedom and no Fisher information.
 
 The p-value ranks the deviance among the deviances of 400 sets of counts drawn from the fitted
 model. The smallest possible p is therefore 1/401, about 0.0025. Below 0.01, `nv compare` reports
@@ -180,6 +192,12 @@ NoiseVault locates the outermost passing end to within 2% of the chi-square half
 inside the chi-square cutoff always passes, so this step can only widen an interval. In the
 one-qubit case, the probability rises to 0.975.
 
+The likelihood can have more than one peak. For example, an `r` gate with unequal Pauli errors
+can give the same outcome probabilities at two separate gate factors. The 95% interval then runs
+from the lowest accepted factor to the highest. It can therefore contain factors between the
+peaks that the test rejects. The estimate is the highest peak. When two peaks differ by at most 0.02 in
+log-likelihood, the counts cannot order them, and the estimate is the peak nearest factor 1.
+
 ### Outcomes the profile rules out
 
 An outcome can have probability 0 at every factor, as when the profile states a readout error of
@@ -196,9 +214,12 @@ of the runs. The gate interval contains the true gate factor in 93 runs, and the
 interval contains the true readout factor in 95. To run the job locally, set
 `NOISEVAULT_SLOW=1`. Then run `pytest tests/test_compare.py -k each_interval_covers`.
 
-Two faster tests run with the rest of the suite. In the one-qubit case above, the probability
+Three faster tests run with the rest of the suite. In the one-qubit case above, the probability
 must be at least 0.95. The second test uses one qubit with a readout error of 0.1 and a million
-shots. Its interval must contain the true factor in 180 to 199 of 200 runs.
+shots. Its interval must contain the true factor in 180 to 199 of 200 runs. A third test uses the
+`r` gate with two peaks. Its interval must contain factor 1 in at least 93 of 100 runs, and it
+contains factor 1 in 99. The CI job also runs the 1000-gate case above. That interval must contain
+the true factor in at least 93 of 100 runs, and it contains the true factor in 96.
 
 Each of these tests draws its counts from the model it fits, and the two-factor test covers one
 device at one pair of true factors. The tests show that the intervals cover factors the model can

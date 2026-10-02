@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import math
 import re
 from collections import OrderedDict
@@ -45,6 +46,9 @@ IMPOSSIBLE = 1e-12
 MIN_INFORMATIVE_SHOTS = 100
 SEPARABLE = 1e-6
 FD_STEP = 1e-3
+REFINE_TOL = 0.04
+REGION = 9.0
+TIE = REFINE_TOL / 2
 NOTE = (
     "Factors multiply the profile's error rates, so x2 means about twice the errors.",
     "On these qubits, the factors absorb crosstalk, leakage, coherent error and idle",
@@ -60,6 +64,7 @@ _AXES: tuple[Axis, Axis] = ("gate", "readout")
 _LO, _HI = math.log(FACTOR_RANGE[0]), math.log(FACTOR_RANGE[1])
 _STEP = (_HI - _LO) / (FINE_POINTS - 1)
 _MIN_WINDOW = 0.05
+_MIN_GAP = _STEP / 16
 _SAME_WAY = "gate error and readout error move these counts the same way"
 _LABEL = 16
 _WIDTH = 80
@@ -356,20 +361,23 @@ def compare(profile: Profile, counts: MeasuredCounts) -> Comparison:
     observed = np.where(surface.supported, measured, 0.0)
     shots = np.array([observed[part].sum() for part in surface.slices])
 
-    log_gate, log_readout, best = surface.maximum(observed)
+    surface, values = surface.refined(observed, CHI2_95)
+    log_gate, log_readout, best = surface.maximum(observed, values)
     gate = None if surface.gate is None else math.exp(log_gate)
     readout = None if surface.readout is None else math.exp(log_readout)
     fitted = _exact(base, circuits, gate, readout)
-    info = _fisher(base, counts, fitted, gate, readout)
+    info = _fisher(base, circuits, shots, fitted, gate, readout)
     unfitted = _identify(surface, observed, info)
     eigen = np.linalg.eigvalsh(info)
     rank = int(np.sum(eigen > SEPARABLE * eigen[-1])) if eigen[-1] > 0 else 0
-    dof = int(surface.supported.sum()) - len(circuits) - rank
+    used = [part for part, n in zip(surface.slices, shots, strict=True) if n]
+    dof = sum(int(surface.supported[part].sum()) - 1 for part in used) - rank
     deviance = _deviance(observed, fitted, surface.slices)
     dispersion = _dispersion(deviance, dof)
+    surface, values = surface.refined(observed, CHI2_95 * dispersion, values)
 
     seed = int(counts.sha256[7:23], 16)
-    fit = _Fit(surface, observed, (log_gate, log_readout, best), shots, dispersion, seed)
+    fit = _Fit(surface, values, observed, (log_gate, log_readout, best), shots, dispersion, seed)
     results = {axis: unfitted[axis] or fit.interval(axis) for axis in _AXES}
 
     draws = fit.draw(fitted, np.random.default_rng(seed))
@@ -432,6 +440,7 @@ class _Surface:
         slices: tuple[slice, ...],
         gate: np.ndarray | None,
         readout: np.ndarray | None,
+        run: Callable[[float], ByCell],
     ) -> None:
         self.gate_nodes = gate_nodes
         self.before_readout = before_readout
@@ -439,6 +448,7 @@ class _Surface:
         self.slices = slices
         self.gate = gate
         self.readout = readout
+        self.run = run
         reads = _grid(readout)
         peaks = [self.probs_at(np.full(len(reads), x), reads).max(axis=0) for x in gate_nodes]
         self.supported = np.max(peaks, axis=0) > IMPOSSIBLE
@@ -469,8 +479,12 @@ class _Surface:
         starts = np.cumsum([0, *sizes])
         slices = tuple(slice(int(a), int(b)) for a, b in zip(starts[:-1], starts[1:], strict=True))
 
+        runs: dict[float, ByCell] = {}
+
         def run(log_gate: float) -> ByCell:
-            return _exact(base, circuits, math.exp(log_gate), None, read=False)
+            if log_gate not in runs:
+                runs[log_gate] = _exact(base, circuits, math.exp(log_gate), None, read=False)
+            return runs[log_gate]
 
         low, high = run(nodes[0]), run(nodes[-1])
         if all(_tvd(low[part], high[part]) < 1e-9 for part in slices):
@@ -486,7 +500,7 @@ class _Surface:
             for per_circuit in pairs
             for pair in per_circuit
         )
-        return cls(nodes, before_readout, pairs, slices, gate, fine if scales else None)
+        return cls(nodes, before_readout, pairs, slices, gate, fine if scales else None, run)
 
     def axis(self, axis: Axis) -> np.ndarray | None:
         return self.gate if axis == "gate" else self.readout
@@ -513,8 +527,9 @@ class _Surface:
     ) -> ByPoint | ByPointByDraw:
         return _loglik(self.probs_at(log_gate, log_readout), counts)
 
-    def loglik(self, counts: ByCell | ByCellByDraw) -> ByGateByReadout:
-        gate, readout = _grid(self.gate), _grid(self.readout)
+    def loglik(self, counts: ByCell | ByCellByDraw, gate: ByPoint | None = None) -> ByGateByReadout:
+        gate = _grid(self.gate) if gate is None else gate
+        readout = _grid(self.readout)
         points_gate, points_readout = (a.ravel() for a in np.meshgrid(gate, readout, indexing="ij"))
         counts = np.asarray(counts, dtype=float)
         out = np.empty((len(points_gate), *counts.shape[1:]))
@@ -524,11 +539,65 @@ class _Surface:
             out[part] = self.loglik_at(points_gate[part], points_readout[part], counts)
         return out.reshape(len(gate), len(readout), *counts.shape[1:])
 
-    def maximum(self, counts: ByCell) -> tuple[float, float, float]:
+    def refined(
+        self, counts: ByCell, cutoff: float, values: ByGateByReadout | None = None
+    ) -> tuple[_Surface, ByGateByReadout]:
+        surface = self
+        values = self.loglik(counts) if values is None else values
+        if self.gate is None:
+            return surface, values
+        sizes = [part.stop - part.start for part in self.slices]
+        weights = np.repeat([counts[part].sum() for part in self.slices], sizes)
+        while True:
+            near = _runs(2 * (values.max() - values.max(axis=1)) <= REGION * cutoff)
+            finer = surface._split([(self.gate[a], self.gate[b - 1]) for a, b in near], weights)
+            if finer is surface:
+                return surface, values
+            moved = np.any(
+                finer._before_readout_at(self.gate) != surface._before_readout_at(self.gate), axis=1
+            )
+            values = values.copy()
+            values[moved] = finer.loglik(counts, self.gate[moved])
+            surface = finer
+
+    def _split(self, region: Sequence[tuple[float, float]], weights: ByCell) -> _Surface:
+        nodes, unread = list(self.gate_nodes), list(self.before_readout)
+        k = 0
+        while k < len(nodes) - 1:
+            a, b = nodes[k], nodes[k + 1]
+            if b - a > 2 * _MIN_GAP and any(a <= hi and b >= lo for lo, hi in region):
+                middle = (a + b) / 2
+                exact = self.run(middle)
+                if _distance(exact, (unread[k] + unread[k + 1]) / 2, weights) > REFINE_TOL:
+                    nodes.insert(k + 1, middle)
+                    unread.insert(k + 1, exact)
+                    continue
+            k += 1
+        if len(nodes) == len(self.gate_nodes):
+            return self
+        finer = copy.copy(self)
+        finer.gate_nodes, finer.before_readout = np.array(nodes), np.array(unread)
+        return finer
+
+    def maximum(self, counts: ByCell, values: ByGateByReadout) -> tuple[float, float, float]:
         gate, readout = _grid(self.gate), _grid(self.readout)
-        values = self.loglik(counts)
-        i, j = _nearest_one(values, gate[:, None], readout[None, :])
-        best_gate, best_readout, best = float(gate[i]), float(readout[j]), float(values[i, j])
+        profile = values.max(axis=1)
+        padded = np.concatenate([[-np.inf], profile, [-np.inf]])
+        local = (profile >= padded[:-2]) & (profile >= padded[2:])
+        peaks = []
+        for a, b in _runs(local & (2 * (profile.max() - profile) <= CHI2_95)):
+            i, j = _nearest_one(values[a:b], gate[a:b, None], readout[None, :])
+            start = float(gate[a + i]), float(readout[j]), float(values[a + i, j])
+            peaks.append(self._climb(counts, *start))
+        top = max(peak[2] for peak in peaks)
+        return min(
+            (peak for peak in peaks if peak[2] >= top - TIE),
+            key=lambda peak: abs(peak[0]) + abs(peak[1]),
+        )
+
+    def _climb(
+        self, counts: ByCell, best_gate: float, best_readout: float, best: float
+    ) -> tuple[float, float, float]:
         for span in (_STEP, _STEP / 8):
             near_gate = _around(self.gate, best_gate, span)
             near_readout = _around(self.readout, best_readout, span)
@@ -558,6 +627,7 @@ class _Fit:
     def __init__(
         self,
         surface: _Surface,
+        values: ByGateByReadout,
         observed: np.ndarray,
         estimate: tuple[float, float, float],
         shots: np.ndarray,
@@ -565,6 +635,7 @@ class _Fit:
         seed: int,
     ) -> None:
         self.surface = surface
+        self.values = values
         self.observed = observed
         self.at: dict[Axis, float] = {"gate": estimate[0], "readout": estimate[1]}
         self.best = estimate[2]
@@ -573,6 +644,7 @@ class _Fit:
         self.cutoff = CHI2_95 * dispersion
         self.seed = seed
         self._wilks: dict[Axis, dict[int, float | None]] = {}
+        self._peak_ends: dict[Axis, dict[int, float | None]] = {}
         self._window: _Window | None = None
 
     def interval(self, axis: Axis) -> FactorResult:
@@ -593,7 +665,8 @@ class _Fit:
         )
 
     def _end(self, axis: Axis, wilks: float, side: int, edge: float) -> float | None:
-        half = max(abs(wilks - self.at[axis]), 1e-6)
+        near = self._peak_ends[axis][side]
+        half = max(abs((wilks if near is None else near) - self.at[axis]), 1e-6)
         tol = max(END_TOL * half, 1e-6)
 
         def beyond(x: float) -> bool:
@@ -626,9 +699,26 @@ class _Fit:
             def within_cutoff(held: float) -> bool:
                 return self.lr(axis, held) <= self.cutoff
 
+            line = _grid(self.surface.axis(axis))
+            profile = self.values.max(axis=1 if axis == "gate" else 0)
+            accepted = line[2 * (self.best - profile) <= self.cutoff]
+            peak_ends: dict[int, float | None] = {}
             for side, edge in ((-1, _LO), (1, _HI)):
-                ends[side] = None if within_cutoff(edge) else _bisect(at, edge, within_cutoff, 1e-6)
-            self._wilks[axis] = ends
+                if within_cutoff(edge):
+                    ends[side] = peak_ends[side] = None
+                    continue
+                end = peak_ends[side] = _bisect(at, edge, within_cutoff, 1e-6)
+                farther = accepted[(accepted - end) * side > 0]
+                if len(farther):
+                    inside = float(farther.max() if side > 0 else farther.min())
+                    outward = line[(line - inside) * side > 0][::side]
+                    for outside in outward:
+                        if not within_cutoff(outside):
+                            end = _bisect(inside, float(outside), within_cutoff, 1e-6)
+                            break
+                        inside = float(outside)
+                ends[side] = end
+            self._wilks[axis], self._peak_ends[axis] = ends, peak_ends
         return self._wilks[axis]
 
     def lr(self, axis: Axis, held: float) -> float:
@@ -693,12 +783,17 @@ class _Fit:
                 if self.surface.axis(axis) is None:
                     spans[axis] = np.zeros(1)
                     continue
-                at = self.at[axis]
-                ends = [e for e in self.wilks(axis).values() if e is not None]
+                at, outer, near = self.at[axis], self.wilks(axis), self._peak_ends[axis]
+                ends = [e for e in near.values() if e is not None]
                 half = max(max((abs(e - at) for e in ends), default=(_HI - _LO) / 4), _MIN_WINDOW)
-                spans[axis] = np.linspace(
-                    max(at - 4 * half, _LO), min(at + 4 * half, _HI), WINDOW_POINTS
-                )
+                low, high = at - 4 * half, at + 4 * half
+                if outer[-1] != near[-1]:
+                    low = min(low, outer[-1] - 3 * half)
+                if outer[1] != near[1]:
+                    high = max(high, outer[1] + 3 * half)
+                low, high = max(low, _LO), min(high, _HI)
+                points = max(WINDOW_POINTS, math.ceil((high - low) / (half / 4)) + 1)
+                spans[axis] = np.linspace(low, high, points)
             g, r = (a.ravel() for a in np.meshgrid(spans["gate"], spans["readout"], indexing="ij"))
             self._window = _Window(spans["gate"], spans["readout"], self.surface.probs_at(g, r))
         return self._window
@@ -802,12 +897,12 @@ def _calibrated_gates(
 
 def _fisher(
     base: Profile,
-    counts: MeasuredCounts,
+    circuits: Sequence[PlannedCircuit],
+    shots: np.ndarray,
     center: np.ndarray,
     gate: float | None,
     readout: float | None,
 ) -> np.ndarray:
-    circuits = counts.circuits
     step = math.exp(FD_STEP)
     slopes = []
     for i, value in enumerate((gate, readout)):
@@ -818,7 +913,7 @@ def _fisher(
         up[i], down[i] = value * step, value / step
         slopes.append((_exact(base, circuits, *up) - _exact(base, circuits, *down)) / (2 * FD_STEP))
     jacobian = np.stack(slopes)
-    weights = np.concatenate([np.full(2 ** len(c.qubits), c.shots) for c in circuits])
+    weights = np.repeat(shots, [2 ** len(c.qubits) for c in circuits])
     keep = center > IMPOSSIBLE
     return (jacobian[:, keep] * (weights[keep] / center[keep])) @ jacobian[:, keep].T
 
@@ -993,6 +1088,17 @@ def _saturated(counts: ByCellByDraw, slices: Sequence[slice]) -> ByColumn:
         with np.errstate(divide="ignore", invalid="ignore"):
             total += np.where(n > 0, n * np.log(n / n.sum(axis=0)), 0.0).sum(axis=0)
     return total
+
+
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], mask.astype(int), [0]])))
+    return [(int(a), int(b)) for a, b in zip(edges[::2], edges[1::2], strict=True)]
+
+
+def _distance(exact: ByCell, line: ByCell, weights: ByCell) -> float:
+    total = exact + line
+    seen = total > 0
+    return float((weights[seen] * (exact - line)[seen] ** 2 / (total[seen] / 2)).sum())
 
 
 def _nearest_one(values: np.ndarray, gate: np.ndarray, readout: np.ndarray) -> tuple[int, int]:
