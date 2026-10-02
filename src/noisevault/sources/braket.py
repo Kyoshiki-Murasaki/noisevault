@@ -13,7 +13,7 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
@@ -73,14 +73,16 @@ _SAVE = "save AwsDevice(arn).properties.json() and pass that file"
 
 class _Time(BaseModel):
     value: Any
-
-
-class _Fidelity(BaseModel):
-    fidelity: Any
+    unit: Literal["ns", "us", "ms", "s"]
 
 
 class _FidelityType(BaseModel):
     name: Any
+
+
+class _Fidelity(BaseModel):
+    fidelity: Any
+    fidelityType: _FidelityType | None = None
 
 
 class _TypedFidelity(_Fidelity):
@@ -92,7 +94,7 @@ class _Direction(BaseModel):
     target: Any
 
 
-class _GateFidelity(_Fidelity):
+class _GateFidelity(_TypedFidelity):
     gateName: Any
     direction: _Direction | None = None
 
@@ -410,7 +412,8 @@ def _preferred(
     ranked = []
     order = list(_RB_TYPES[arity])
     for entry in entries:
-        kind = (entry.get("fidelityType") or {}).get("name", "RANDOMIZED_BENCHMARKING")
+        fidelity_type = entry.get("fidelityType")
+        kind = fidelity_type["name"] if fidelity_type else "RANDOMIZED_BENCHMARKING"
         if kind == _READOUT:
             continue
         if kind not in order:
@@ -468,10 +471,7 @@ def _canonical(name: str) -> str:
 
 
 def _us(time: Mapping[str, Any]) -> float:
-    unit = time.get("unit", "s")
-    if unit not in ("ns", "us", "ms", "s"):
-        raise SourceDataError(f"unknown Braket time unit {unit!r}; expected ns, us, ms or s")
-    return units.convert(float(time["value"]), unit, "us")
+    return units.convert(float(time["value"]), time["unit"], "us")
 
 
 def _json(raw: bytes, source: str) -> Any:
@@ -493,11 +493,16 @@ def _json(raw: bytes, source: str) -> Any:
 
 
 def _shape_error(exc: ValidationError, prefix: tuple[str, ...], source: str) -> SourceDataError:
-    """The first key the file lacks, or the first value that is not an object or array."""
+    """The first key the file lacks, the first value outside its allowed set, or the first value
+    that is not an object or array.
+    """
     error = exc.errors()[0]
     *parents, last = (*prefix, *error["loc"])
     if error["type"] == "missing":
         problem = f"{_json_path(parents)} has no {last!r}"
+    elif error["type"] == "literal_error":
+        where, expected = _json_path([*parents, last]), error["ctx"]["expected"]
+        problem = f"{where} is {error['input']!r}, not {expected}"
     else:
         kind = "array" if error["type"] == "list_type" else "object"
         problem = f"{_json_path([*parents, last])} is not a JSON {kind}"

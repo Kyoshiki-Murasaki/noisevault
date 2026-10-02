@@ -245,6 +245,9 @@ def test_errors_say_what_to_save(tmp_path: Path) -> None:
     )
 
 
+_SAVE = "save AwsDevice(arn).properties.json() and pass that file"
+
+
 def test_values_it_cannot_read_are_named() -> None:
     data = json.loads(RIGETTI.read_text())
     newer = {**data, "braketSchemaHeader": {**data["braketSchemaHeader"], "version": "4"}}
@@ -256,10 +259,10 @@ def test_values_it_cannot_read_are_named() -> None:
     data["oneQubitProperties"]["0"]["T1"]["unit"] = "min"
     with pytest.raises(nv.SourceDataError) as info:
         from_braket(data)
-    assert str(info.value) == "unknown Braket time unit 'min'; expected ns, us, ms or s"
-
-
-_SAVE = "save AwsDevice(arn).properties.json() and pass that file"
+    assert str(info.value) == (
+        "the dict passed in: oneQubitProperties['0'].T1.unit is 'min', not 'ns', 'us', 'ms'"
+        f" or 's'; {_SAVE}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -339,6 +342,24 @@ def _parent(doc: Any, path: tuple[str | int, ...]) -> Any:
             "standardized.twoQubitGateDuration has no 'value'",
         ),
         (
+            RIGETTI,
+            ("oneQubitProperties", "0", "T1", "unit"),
+            _DELETE,
+            "oneQubitProperties['0'].T1 has no 'unit'",
+        ),
+        (
+            IONQ,
+            ("standardized", "twoQubitGateDuration", "unit"),
+            _DELETE,
+            "standardized.twoQubitGateDuration has no 'unit'",
+        ),
+        (
+            RIGETTI,
+            ("twoQubitProperties", "0-1", "twoQubitGateFidelity", 0, "fidelityType"),
+            _DELETE,
+            "twoQubitProperties['0-1'].twoQubitGateFidelity[0] has no 'fidelityType'",
+        ),
+        (
             IQM,
             ("standardized", "oneQubitProperties"),
             [{"T1": {"value": 4.1e-05, "unit": "s"}}],
@@ -358,6 +379,9 @@ def _parent(doc: Any, path: tuple[str | int, ...]) -> Any:
         "direction-target",
         "v3-readout-fidelity",
         "v3-duration-value",
+        "T1-unit",
+        "v3-duration-unit",
+        "two-qubit-fidelity-type",
         "object",
         "array",
     ],
@@ -404,6 +428,16 @@ def test_a_file_missing_any_key_imports_or_raises_source_data_error(
     damaged.write_text(json.dumps(doc))
     with contextlib.suppress(nv.SourceDataError):
         from_braket(damaged)
+
+
+def test_v3_fidelity_with_no_type_is_read_as_randomized_benchmarking() -> None:
+    data = json.loads(IONQ.read_text())
+    del data["standardized"]["singleQubitFidelity"][0]["fidelityType"]
+    data["standardized"]["twoQubitGateFidelity"][0]["fidelityType"] = None
+    profile = from_braket(data, device="untyped")
+    one, two = profile.gates["r"], profile.gates["ms"]
+    assert (one.avg_infidelity, one.method) == (0.0004, "rb")
+    assert (two.avg_infidelity, two.method) == (0.0079, "rb")
 
 
 def test_public_api() -> None:
