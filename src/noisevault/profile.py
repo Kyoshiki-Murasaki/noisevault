@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import statistics
 import struct
 import warnings
@@ -948,14 +949,19 @@ _NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
 def write_atomically(path: Path, data: bytes) -> None:
     """Replace ``path`` with ``data``: a failed write leaves the old file whole.
 
-    Python can read the umask only by setting it, and all threads share one umask, so this
-    function never touches the umask.
+    The temporary file gets the mode of the file it replaces, so nobody who cannot read the
+    old file can read the new contents. Python can read the umask only by setting it, and all
+    threads share one umask, so this function never touches the umask.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        mode = 0o666
     while True:
         hidden_tmp = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
         try:
-            fd = os.open(hidden_tmp, _NEW_FILE, 0o666)
+            fd = os.open(hidden_tmp, _NEW_FILE, mode)
         except FileExistsError:
             continue
         break

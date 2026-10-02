@@ -261,6 +261,45 @@ def test_replacing_a_file_keeps_its_mode(tmp_path: Path, umask: int, mode: int) 
     assert oct(stat.S_IMODE(shared.stat().st_mode)) == oct(mode)
 
 
+@pytest.mark.parametrize(
+    ("umask", "mode"),
+    [(0o022, 0o600), (0o022, 0o640)],
+    indirect=["umask"],
+    ids=["600-under-022", "640-under-022"],
+)
+def test_a_replacement_in_progress_is_never_more_open_than_the_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, umask: int, mode: int
+) -> None:
+    profile = Profile.model_validate(toy())
+    private = profile.save(tmp_path / "private.json")
+    private.chmod(mode)
+    seen: list[tuple[int, int]] = []
+
+    def look(fd: int) -> None:
+        info = os.fstat(fd)
+        seen.append((stat.S_IMODE(info.st_mode), info.st_size))
+
+    def open_and_look(fd: int, *args, **kwargs):
+        handle = open(fd, *args, **kwargs)
+        write = handle.write
+
+        def write_and_look(data: bytes) -> int:
+            count = write(data)
+            handle.flush()
+            look(fd)
+            return count
+
+        look(fd)
+        handle.write = write_and_look
+        return handle
+
+    with monkeypatch.context() as patch:
+        patch.setattr(nv.profile, "open", open_and_look, raising=False)
+        profile.save(private)
+    assert seen and seen[-1][1] == private.stat().st_size
+    assert [oct(bits) for bits, _ in seen if bits & ~mode] == []
+
+
 @pytest.mark.parametrize("umask", [0o077], indirect=True, ids=["077"])
 @pytest.mark.parametrize("savers", [1, 4], ids=["1-saver", "4-savers"])
 def test_saving_leaves_the_process_umask_alone(
