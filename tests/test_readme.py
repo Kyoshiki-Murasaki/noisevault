@@ -440,10 +440,7 @@ def compare_output(command: str, url: str) -> str:
         finally:
             os.chdir(cwd)
     assert result.exit_code == 0, result.output
-    lines = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()
-    fit = next(i for i, line in enumerate(lines) if line.startswith("fit "))
-    end = lines.index("", fit) if "" in lines[fit:] else len(lines)
-    return "\n".join([f"$ nv {command}", *lines[:end]])
+    return f"$ nv {command}\n" + re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).rstrip("\n")
 
 
 def test_compare_output_matches_a_run_on_the_downloaded_example() -> None:

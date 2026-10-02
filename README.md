@@ -21,7 +21,8 @@
 
 Load a device by name and simulate your circuits under the noise it had on a given day. Pin the
 profile's fingerprint, and anyone can rerun your results with the same noise. Each export reports
-what it reproduces exactly, what it approximates and what it leaves out.
+what it reproduces exactly, what it approximates and what it leaves out. With counts measured on
+the device, `nv compare` fits how far the profile's errors must scale to match them.
 
 Try it without installing, using [uv](https://docs.astral.sh/uv/):
 
@@ -61,7 +62,8 @@ ghz.cx(0, 1)
 ghz.cx(1, 2)
 ghz.measure_all()
 
-counts = sim.run(transpile(ghz, sim, seed_transpiler=1), seed_simulator=1).result().get_counts()
+compiled = transpile(ghz, sim, seed_transpiler=1)
+counts = sim.run(compiled, seed_simulator=1).result().get_counts()
 print(counts)
 # {'111': 510, '011': 8, '101': 6, '100': 4, '001': 1, '110': 6, '010': 2, '000': 487}
 print(sim.report.summary())
@@ -70,15 +72,19 @@ print(sim.report.summary())
 # exact: gate noise: channels per exported native and physical locus (Aer QuantumError), ...
 # approximated: cz error: the stated error already includes single-qubit gate error ...
 # approximated: T2 of qubit 87: clamped to 2*T1 (the stated T2 exceeds 2*T1)
-# omitted: idle time outside explicit delays (insert delays with transpile(circuit, sim, scheduling_method='alap'))
-# unknown (no noise applied): preparation (reset) error of qubits [0, 1, 2, 3, 4, 5, 6, 7, ...] (156 qubits)
-# clamped: 82 gates noisier than stated because relaxation alone exceeds the stated error; largest cz[91, 98] 0.00308 -> 0.0039
+# omitted: idle time outside explicit delays ...
+# unknown (no noise applied): preparation (reset) error of qubits [0, 1, 2, ...
+# clamped: 82 gates noisier than stated because relaxation alone exceeds the stated error ...
 # used: cz took the calibration recorded for the opposite qubit order once
 # Calibration-derived models approximate the hardware; they are not a digital twin.
 ```
 
+The report says what this model reproduces, approximates, clamps or leaves out. Save
+`sim.report.to_dict()` next to your results.
+
 `transpile` compiles to Fez's native gates and places the circuit by noise, because the
-simulator carries the device's gates, connectivity and errors.
+simulator carries the device's gates, connectivity and errors. To add the idle noise the report
+lists as omitted, also pass `scheduling_method='alap'`.
 
 `to_cirq()`, `to_pennylane()` and `to_stim(circuit)` give the same noise to the other three
 frameworks, each as the framework's own type with its own report.
@@ -87,10 +93,11 @@ frameworks, each as the framework's own type with its own report.
 ## Pin a calibration
 
 A bundled profile is one calibration. `nv pull` fetches others from IBM's public endpoint or
-from IonQ, with no account, and saves them to your vault in `~/.noisevault/profiles`:
+from IonQ, with no account, and saves them to your vault in `~/.noisevault/profiles`. With `--at`,
+it fetches the calibration in effect at that date:
 
 ```bash
-nv pull ibm_fez --at 2025-06-01   # saves ibm_fez@2025-05-31T22:01:04Z, the newest before then
+nv pull ibm_fez --at 2025-06-01   # saves ibm_fez@2025-05-31T22:01:04Z
 nv cite ibm_fez@2025-05-31        # cite it by the date the pull printed
 nv diff ibm_fez@2025-02-26 ibm_fez@2025-05-31
 ```
@@ -98,8 +105,9 @@ nv diff ibm_fez@2025-02-26 ibm_fez@2025-05-31
 `nv diff` compares the device medians, lists the qubits and pairs that changed most, and names
 the gates that were disabled or re-enabled.
 
-A bare id such as `ibm_fez` loads the newest calibration you have, so after a pull it no longer
-loads the bundled one. Add the date, as in `ibm_fez@2025-02-26`, to load a particular calibration.
+A bare id such as `ibm_fez` loads the newest calibration you have. After this pull, the
+quickstart's `nv.load("ibm_fez")` loads 2025-05-31 instead of the bundled 2025-02-26. Add the
+date, as in `ibm_fez@2025-02-26`, to load a particular calibration.
 
 The fingerprint is a SHA-256 hash of a profile's physics. Pass it when you load a profile, and
 the load fails if the numbers ever differ:
@@ -128,13 +136,18 @@ them with their qubit counts and processors.
 | Quantinuum (5) | trapped ion | `quantinuum_h1-1`, `quantinuum_h1-2`, `quantinuum_h2-1`, `quantinuum_h2-2`, `quantinuum_reimei` | 2023-08-21 to 2025-08-28 | [hardware-specifications](https://github.com/Quantinuum/quantinuum-hardware-specifications) repository, Apache-2.0 |
 | Google (2) | superconducting | `google_rainbow`, `google_weber` | 2021-11-03 to 2021-11-16 | [cirq-google](https://github.com/quantumlib/Cirq/tree/main/cirq-google) calibrations, Apache-2.0 |
 
-For more devices and dates, pull from an IBM Quantum account with `nv pull --source ibm-account`,
-or import a Qiskit backend, an IBM calibration CSV, saved Amazon Braket device properties, a
-cirq-google calibration or a dataset from Quantinuum's repository. The account pull and IBM's
-fake backends need the `ibm` extra, and a cirq-google calibration needs the `google` extra.
-[Data sources](docs/data-sources.md) gives each source's fields and license. To describe a device
-that does not exist, use `nv.Profile.uniform(...)`, as in
-[Describe a hypothetical device](docs/recipes.md#describe-a-hypothetical-device).
+For more devices and dates:
+
+- Pull from an IBM Quantum account with `nv pull --source ibm-account`, which needs the `ibm`
+  extra.
+- Import a Qiskit backend, an IBM calibration CSV, saved Amazon Braket device properties, a
+  cirq-google calibration, a Hugging Face archive of IBM calibrations or a dataset from
+  Quantinuum's repository. IBM's fake backends need the `ibm` extra, a cirq-google calibration
+  needs the `google` extra, and the archive needs the `hf` extra.
+- Describe a device that does not exist with `nv.Profile.uniform(...)`, as in
+  [Describe a hypothetical device](docs/recipes.md#describe-a-hypothetical-device).
+
+[Data sources](docs/data-sources.md) gives each source's fields and license.
 
 ## Check a conversion
 
@@ -157,17 +170,21 @@ circuits. It is not a measure of how well the model matches the hardware. Calibr
 models approximate the hardware. They are not a digital twin. [Limitations](docs/limitations.md)
 lists what no export models.
 
-To run the check with uv and no install:
+To run the check on all four frameworks with uv and no install:
 
 ```bash
-uvx --from "noisevault[qiskit] @ git+https://github.com/Kyoshiki-Murasaki/noisevault" nv check ibm_fez
+uvx --from "noisevault[qiskit,cirq,pennylane,stim] @ git+https://github.com/Kyoshiki-Murasaki/noisevault" nv check ibm_fez
 ```
 
 ## Compare with hardware
 
 `nv check` shows that the exports agree with the reference. `nv compare` measures how far the
-reference is from the device. Run the check circuits on the device, save the counts, and score
-the profile on them. To try it on the example counts, download them first:
+reference is from the device. It scores a profile on counts measured on the device and fits how
+far the profile's gate and readout errors must scale to match them.
+
+NoiseVault has not yet been compared with counts from a real device. To see the output, score the
+bundled Kingston profile on example counts simulated with gate errors x1.8 and readout errors
+x1.3. Download the counts first:
 
 ```bash
 curl -O https://raw.githubusercontent.com/Kyoshiki-Murasaki/noisevault/main/examples/kingston-simulated.counts.json
@@ -188,18 +205,22 @@ readout        4000       0.0096      0.0036         0.0047
 gate errors     x2.16 (95% interval 1.76 to 2.58)
 readout errors  x1.34 (95% interval 1.16 to 1.53)
 fit             within shot noise on every circuit (p = 0.66)
+
+Factors multiply the profile's error rates, so x2 means about twice the errors.
+Fitted on these qubits, they absorb crosstalk, leakage, coherent error and
+idle error beyond T1 and T2. Saved with -o, they apply to every qubit.
 ```
 
-NoiseVault has not yet been compared with counts from a real device. The example counts come
-from a simulation with gate errors x1.8 and readout errors x1.3, and the fitted intervals contain
-both. With the `ibm` extra and a saved IBM Quantum account,
+Both fitted intervals contain the factors the counts were simulated with. `nv compare` needs no
+framework, so it also runs with no install. Put
+`uvx --from git+https://github.com/Kyoshiki-Murasaki/noisevault` in front of it.
+
+`nv compare ... -o fitted.json` saves the profile with the fitted factors, and every export then
+applies them. With the `ibm` extra and a saved IBM Quantum account,
 `python scripts/run_on_ibm.py ibm_kingston -o kingston.counts.json` runs the circuits on that
 device and prints the `nv compare` command for its counts.
-
-A factor multiplies the profile's error rates, so x2 means about twice the stated errors.
-`nv compare ... -o fitted.json` saves the profile with the fitted factors, and every export then
-applies them. [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware)
-shows how to plan and record a run. [Counts format](docs/counts-format.md) describes the file, and
+[Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware) shows how
+to plan and record a run. [Counts format](docs/counts-format.md) describes the file, and
 [Limitations](docs/limitations.md#what-the-unmodeled-error-factors-absorb) lists what the factors
 cannot express.
 
