@@ -34,7 +34,7 @@ from typing import Any
 import numpy as np
 
 from .. import __version__
-from ..errors import SourceDataError, SourceUnavailable
+from ..errors import SourceDataError, SourceUnavailable, parse_json
 from ..profile import Profile
 from . import OFFLINE_HINT
 
@@ -209,7 +209,7 @@ def _date(date: str) -> str:
 
 def _json(raw: bytes, where: str) -> dict[str, Any]:
     try:
-        doc = json.loads(raw)
+        doc = parse_json(raw)
     except UnicodeDecodeError as exc:
         raise _not_utf8(exc, where) from None
     except json.JSONDecodeError as exc:

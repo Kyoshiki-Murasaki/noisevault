@@ -1,9 +1,12 @@
-"""Exceptions and warnings raised by NoiseVault."""
+"""Exceptions and warnings raised by NoiseVault, and helpers for raising and wording them."""
 
 from __future__ import annotations
 
 import difflib
+import json
+import re
 from collections.abc import Iterable
+from typing import Any
 
 
 class NoiseVaultError(Exception):
@@ -66,6 +69,29 @@ class CountsError(NoiseVaultError, ValueError):
 
     The message is one line that starts with the file or the field, and ``hint`` says what to do.
     """
+
+
+def parse_json(raw: bytes) -> Any:
+    """``json.loads``, except that JSON nested deeper than it can parse is a JSONDecodeError too.
+
+    That error gives the depth and points at the innermost bracket.
+    """
+    try:
+        return json.loads(raw)
+    except RecursionError:
+        text = raw.decode(json.detect_encoding(raw), "surrogatepass")
+    depth = deepest = at = 0
+    for token in _STRING_OR_BRACKET.finditer(text):
+        if token[0] in ("[", "{"):
+            depth += 1
+            if depth > deepest:
+                deepest, at = depth, token.start()
+        elif token[0] in ("]", "}"):
+            depth -= 1
+    raise json.JSONDecodeError(f"nested {deepest} levels deep", text, at)
+
+
+_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
 
 
 def did_you_mean(given: str, choices: Iterable[str]) -> str:

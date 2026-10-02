@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from conftest import deeper_than_the_parser_takes
 
 from noisevault import Profile
 from noisevault.errors import SourceDataError, SourceUnavailable
@@ -301,6 +302,17 @@ def test_dataset_file_that_is_not_a_json_object_names_the_file(
     with pytest.raises(SourceDataError) as info:
         quantinuum.from_data("H2-2", "2024_12_06", {**_files(), name: raw})
     assert str(info.value) == message
+
+
+def test_dataset_file_nested_deeper_than_the_parser_takes_names_the_file() -> None:
+    nested = deeper_than_the_parser_takes()
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_data("H2-2", "2024_12_06", {**_files(), "SQ_RB": nested.encode()})
+    depth = len(nested) // 2
+    assert str(info.value) == (
+        f"{_DATA}/SQ_RB.json is not valid JSON: nested {depth} levels deep at line 1,"
+        f" column {depth}"
+    )
 
 
 @pytest.mark.parametrize(

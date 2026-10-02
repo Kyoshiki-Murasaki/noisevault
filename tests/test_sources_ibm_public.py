@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from conftest import deeper_than_the_parser_takes
 
 import noisevault as nv
 from noisevault.sources import ibm_public
@@ -127,6 +128,48 @@ def test_an_http_error_says_to_try_again(monkeypatch: pytest.MonkeyPatch) -> Non
     assert info.value.message == f"IBM's public endpoint answered HTTP 503 for {url}"
     assert info.value.hint == (
         "try again later, or pull through your IBM account with source='ibm-account'"
+    )
+
+
+_NOT_JSON = {
+    "html": b"<!DOCTYPE html><html><body>502 Bad Gateway</body></html>",
+    "cut short": PROPERTIES[:300],
+    "latin-1": "<html>Accès refusé</html>".encode("latin-1"),
+}
+
+
+@pytest.mark.parametrize("body", [*_NOT_JSON, "too deep"])
+def test_a_reply_that_is_not_json_says_to_try_again(
+    monkeypatch: pytest.MonkeyPatch, body: str
+) -> None:
+    raw = deeper_than_the_parser_takes().encode() if body == "too deep" else _NOT_JSON[body]
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: raw)
+    with pytest.raises(nv.SourceUnavailable) as info:
+        ibm_public.pull("ibm_fez")
+    url = f"{ibm_public.BASE_URL}/ibm_fez/properties"
+    assert (info.value.message, info.value.hint) == (
+        f"IBM's public endpoint answered {url} with something other than JSON",
+        "try again later, or pull through your IBM account with source='ibm-account'",
+    )
+
+
+def test_a_listing_or_configuration_too_deep_to_read_only_loses_its_detail(
+    served: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep = deeper_than_the_parser_takes().encode()
+    serve = ibm_public.fetch
+
+    def fetch(url: str) -> bytes:
+        if url == ibm_public.BASE_URL or url.endswith("/configuration"):
+            return deep
+        return serve(url)
+
+    monkeypatch.setattr(ibm_public, "fetch", fetch)
+    assert ibm_public.pull("ibm_manila").device.processor is None
+    with pytest.raises(nv.SourceUnavailable) as info:
+        ibm_public.pull("ibm_torino")
+    assert (
+        info.value.message == "ibm_torino is not listed on the public endpoint; it may be retired"
     )
 
 

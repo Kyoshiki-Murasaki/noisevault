@@ -18,7 +18,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ValidationError
 
 from .. import __version__, gates, units
-from ..errors import SourceDataError
+from ..errors import SourceDataError, parse_json
 from ..profile import Profile
 
 _STANDARDIZED = "braket.device_schema.standardized_gate_model_qpu_device_properties"
@@ -476,7 +476,7 @@ def _us(time: Mapping[str, Any]) -> float:
 
 def _json(raw: bytes, source: str) -> Any:
     try:
-        return json.loads(raw)
+        return parse_json(raw)
     except UnicodeDecodeError as exc:
         line = exc.object.count(b"\n", 0, exc.start) + 1
         raise SourceDataError(

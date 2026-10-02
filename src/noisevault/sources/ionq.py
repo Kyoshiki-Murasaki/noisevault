@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import itertools
-import json
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,7 +19,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from .. import __version__
-from ..errors import SourceUnavailable, did_you_mean
+from ..errors import SourceUnavailable, did_you_mean, parse_json
 from ..profile import Profile
 from . import OFFLINE_HINT
 
@@ -253,7 +252,8 @@ def _connectivity(pairs: Any, num_qubits: int) -> str | dict[str, Any]:
 
 
 def _listing(backend: str) -> Mapping[str, Any]:
-    entries = json.loads(_get(f"{API}/backends"))
+    url = f"{API}/backends"
+    entries = _json(_get(url), url)
     for entry in entries:
         if entry.get("backend") == backend:
             return entry
@@ -278,7 +278,8 @@ def _newest_usable(
     probes = 0
     page = 1
     while True:
-        body = json.loads(_get(_page_url(backend, limit=_PAGE, end=end, page=page)))
+        page_url = _page_url(backend, limit=_PAGE, end=end, page=page)
+        body = _json(_get(page_url), page_url)
         records = body.get("characterizations") or []
         for listed in records:
             # a record rejected on the filled page is rejected alone too, so skip it unprobed
@@ -287,7 +288,7 @@ def _newest_usable(
                 probes += 1
                 url = _page_url(backend, limit=1, end=listed["date"])
                 raw = _get(url)
-                alone = (json.loads(raw).get("characterizations") or [{}])[0]
+                alone = (_json(raw, url).get("characterizations") or [{}])[0]
                 reason = _rejection(alone) if alone.get("id") == listed["id"] else _NO_FIDELITIES
                 if reason is None:
                     return alone, raw, url, skipped
@@ -343,4 +344,13 @@ def _get(url: str) -> bytes:
         reason = getattr(exc, "reason", exc)
         raise SourceUnavailable(
             f"could not reach IonQ's API ({reason})", hint=OFFLINE_HINT
+        ) from None
+
+
+def _json(raw: bytes, url: str) -> Any:
+    try:
+        return parse_json(raw)
+    except ValueError:
+        raise SourceUnavailable(
+            f"IonQ's API answered {url} with something other than JSON", hint="try again later"
         ) from None

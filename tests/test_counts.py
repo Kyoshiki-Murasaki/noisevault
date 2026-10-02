@@ -298,6 +298,8 @@ def test_each_refusal_is_one_counts_error_line_that_starts_with_the_path(
 def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) -> None:
     damaged = tmp_path / "run.counts.json"
     damaged.write_text("{not json")
+    cut = tmp_path / "cut.counts.json"
+    cut.write_text('{"nv_counts": "1.0", "source": "hardw')
     notes = tmp_path / "notes.txt"
     notes.write_text("not counts\n")
     profile = tmp_path / "toy.json"
@@ -306,13 +308,16 @@ def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) ->
     wrong.write_bytes(b"\x1f\x8b\x08\x00 cut")
 
     errors = {}
-    for path in (damaged, notes, profile, wrong):
+    for path in (damaged, cut, notes, profile, wrong):
         with pytest.raises(CountsError) as caught:
             load_counts(path)
         errors[path] = caught.value
 
     assert errors[damaged].message.startswith(f"{damaged} is not JSON (Expecting property name")
     assert errors[damaged].hint == "the file is damaged or cut short; save the counts again"
+    assert errors[cut].message == (
+        f"{cut} is not JSON (Unterminated string starting at line 1, column 32)"
+    )
     assert errors[notes].message == f"{notes} is not JSON (Expecting value at line 1, column 1)"
     assert errors[notes].hint == "give a counts file (.json or .json.gz)"
     assert errors[profile].message == f"{profile} is a profile, not a counts file"
@@ -324,15 +329,32 @@ def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) ->
 def test_a_file_nested_deeper_than_the_parser_takes_is_one_counts_error_line(
     tmp_path: Path,
 ) -> None:
+    nested = deeper_than_the_parser_takes()
     deep = tmp_path / "deep.counts.json"
-    deep.write_text(deeper_than_the_parser_takes())
+    deep.write_text(nested)
 
     with pytest.raises(CountsError) as caught:
         load_counts(deep)
 
-    assert caught.value.message.startswith(f"{deep} is not JSON (")
+    depth = len(nested) // 2
+    assert caught.value.message == (
+        f"{deep} is not JSON (nested {depth} levels deep at line 1, column {depth})"
+    )
     assert caught.value.hint == "the file is damaged or cut short; save the counts again"
-    assert "\n" not in str(caught.value)
+
+
+def test_options_nested_past_64_levels_is_one_counts_error_line(tmp_path: Path) -> None:
+    nested: Any = 0
+    for _ in range(599):
+        nested = [nested]
+    data = _run()
+    data["execution"]["options"] = {"deep": nested}
+    path = _write(tmp_path / "run.counts.json", data)
+
+    with pytest.raises(CountsError) as caught:
+        load_counts(path)
+
+    assert caught.value.message == f"{path}: execution.options: nested more than 64 levels deep"
 
 
 def test_a_file_with_several_problems_names_the_first_and_counts_them(tmp_path: Path) -> None:

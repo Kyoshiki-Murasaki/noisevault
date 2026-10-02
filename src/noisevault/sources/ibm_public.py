@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import replace
 from datetime import date, datetime
+from typing import Any
 
 from .. import __version__
-from ..errors import SourceUnavailable, did_you_mean
+from ..errors import SourceUnavailable, did_you_mean, parse_json
 from ..profile import Profile
 from . import OFFLINE_HINT
 from .qiskit_backend import (
@@ -24,6 +24,7 @@ from .qiskit_backend import (
 
 BASE_URL = "https://quantum.cloud.ibm.com/api/v1/public/backends"
 TIMEOUT_S = 30.0
+_TRY_LATER = "try again later, or pull through your IBM account with source='ibm-account'"
 
 
 def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
@@ -37,7 +38,7 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
         raw = fetch(url)
     except _NotFound:
         raise _not_found(name, at) from None
-    props = json.loads(raw)
+    props = _json(raw, url)
     if not props.get("qubits"):
         raise SourceUnavailable(f"IBM's public endpoint returned no qubit data for {name} ({url})")
     cal = replace(calibration_from_properties(props), name=name, processor=_processor(name))
@@ -80,8 +81,7 @@ def fetch(url: str) -> bytes:
         if exc.code == 404:
             raise _NotFound(url) from None
         raise SourceUnavailable(
-            f"IBM's public endpoint answered HTTP {exc.code} for {url}",
-            hint="try again later, or pull through your IBM account with source='ibm-account'",
+            f"IBM's public endpoint answered HTTP {exc.code} for {url}", hint=_TRY_LATER
         ) from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
@@ -90,16 +90,27 @@ def fetch(url: str) -> bytes:
         ) from None
 
 
+def _json(raw: bytes, url: str) -> Any:
+    try:
+        return parse_json(raw)
+    except ValueError:
+        raise SourceUnavailable(
+            f"IBM's public endpoint answered {url} with something other than JSON",
+            hint=_TRY_LATER,
+        ) from None
+
+
 def listed_devices() -> list[str]:
     """Names of the devices the public endpoint lists right now."""
-    return sorted(entry["name"] for entry in json.loads(fetch(BASE_URL)))
+    return sorted(entry["name"] for entry in _json(fetch(BASE_URL), BASE_URL))
 
 
 def _processor(name: str) -> str | None:
     """The processor type from the public configuration; None when it cannot be read."""
+    url = f"{BASE_URL}/{urllib.parse.quote(name)}/configuration"
     try:
-        config = json.loads(fetch(f"{BASE_URL}/{urllib.parse.quote(name)}/configuration"))
-    except (_NotFound, SourceUnavailable, ValueError):
+        config = _json(fetch(url), url)
+    except (_NotFound, SourceUnavailable):
         return None
     return processor_name(config.get("processor_type"))
 
@@ -107,7 +118,7 @@ def _processor(name: str) -> str | None:
 def _not_found(name: str, at: str | date | datetime | None) -> SourceUnavailable:
     try:
         listed = listed_devices()
-    except (_NotFound, SourceUnavailable, ValueError, KeyError, TypeError):
+    except (_NotFound, SourceUnavailable, KeyError, TypeError):
         listed = None
     if at is not None and listed is not None and name in listed:
         return SourceUnavailable(

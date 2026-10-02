@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from conftest import require
+from conftest import deeper_than_the_parser_takes, require
 
 import noisevault as nv
 from noisevault.reference import Op, probabilities
@@ -291,6 +291,19 @@ def test_a_file_that_is_not_braket_json_names_the_file(
     with pytest.raises(nv.SourceDataError) as info:
         from_braket(path)
     assert str(info.value) == f"saved.json {message}; {_SAVE}"
+
+
+def test_a_file_nested_deeper_than_the_parser_takes_names_the_file(tmp_path: Path) -> None:
+    nested = deeper_than_the_parser_takes()
+    path = tmp_path / "saved.json"
+    path.write_text(nested)
+    with pytest.raises(nv.SourceDataError) as info:
+        from_braket(path)
+    depth = len(nested) // 2
+    assert str(info.value) == (
+        f"saved.json is not valid JSON: nested {depth} levels deep at line 1, column {depth};"
+        f" {_SAVE}"
+    )
 
 
 _DELETE = object()

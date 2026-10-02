@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import deeper_than_the_parser_takes, toy
@@ -533,6 +534,38 @@ def test_free_form_data_must_be_json_data(where: str, free: dict, message: str) 
     data = toy(**{section: {key: free} if key else free})
     with pytest.raises(ValidationError, match=message):
         Profile.from_dict(data)
+
+
+def _nested(levels: int, shape: str) -> Any:
+    """``levels`` objects or arrays, each inside the last."""
+    value: Any = 0
+    for _ in range(levels):
+        value = {"a": value} if shape == "object" else [value]
+    return value
+
+
+@pytest.mark.parametrize(("levels", "shape"), [(65, "array"), (65, "object"), (600, "array")])
+@pytest.mark.parametrize("where", ["benchmarks", "extensions", "provenance.extra"])
+def test_free_form_data_nested_past_64_levels_is_refused(
+    where: str, levels: int, shape: str
+) -> None:
+    section, _, key = where.partition(".")
+    free = {"deep": _nested(levels - 1, shape)}
+    data = toy()
+    data[section] = {key: free} if key else free
+    with pytest.raises(ValidationError) as caught:
+        Profile.from_dict(data)
+    assert [(e["loc"], e["msg"]) for e in caught.value.errors()] == [
+        (tuple(where.split(".")), "Value error, nested more than 64 levels deep")
+    ]
+
+
+@pytest.mark.parametrize("shape", ["array", "object"])
+def test_free_form_data_64_levels_deep_saves_and_loads(tmp_path: Path, shape: str) -> None:
+    free = {"deep": _nested(63, shape)}
+    profile = Profile.from_dict(toy(extensions=free))
+    loaded = load_file(profile.save(tmp_path / "deep.json"))
+    assert loaded.to_dict()["extensions"] == free
 
 
 def test_a_gate_key_must_be_a_string() -> None:

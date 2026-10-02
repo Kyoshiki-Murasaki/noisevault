@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from conftest import deeper_than_the_parser_takes
 
 from noisevault.errors import SourceUnavailable
 from noisevault.reference import Op, probabilities
@@ -232,6 +233,34 @@ def test_a_failed_request_says_what_to_do(
     with pytest.raises(SourceUnavailable) as info:
         ionq.pull("forte-1")
     assert (info.value.message, info.value.hint) == (message, hint)
+
+
+_NOT_JSON = {
+    "html": b"<!DOCTYPE html><html><body>502 Bad Gateway</body></html>",
+    "cut short": json.dumps(RESPONSES[f"{ionq.API}/backends"]).encode()[:100],
+    "latin-1": "<html>Accès refusé</html>".encode("latin-1"),
+}
+
+
+@pytest.mark.parametrize("body", [*_NOT_JSON, "too deep"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"{ionq.API}/backends",
+        ionq._page_url("qpu.forte-1", limit=10),
+        ionq._page_url("qpu.forte-1", limit=1, end="2026-09-28T00:00:00Z"),
+    ],
+    ids=["listing", "page", "record"],
+)
+def test_a_reply_that_is_not_json_says_to_try_again(served, url: str, body: str) -> None:
+    raw = deeper_than_the_parser_takes().encode() if body == "too deep" else _NOT_JSON[body]
+    served[url] = raw
+    with pytest.raises(SourceUnavailable) as info:
+        ionq.pull("forte-1")
+    assert (info.value.message, info.value.hint) == (
+        f"IonQ's API answered {url} with something other than JSON",
+        "try again later",
+    )
 
 
 def test_nothing_is_bundled() -> None:

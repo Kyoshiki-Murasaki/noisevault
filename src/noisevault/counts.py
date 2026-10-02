@@ -36,7 +36,7 @@ from pydantic import (
 )
 
 from . import __version__, check, gates
-from .errors import CountsError, NoiseVaultError, did_you_mean
+from .errors import CountsError, NoiseVaultError, did_you_mean, parse_json
 from .profile import (
     Count,
     CountsSource,
@@ -470,15 +470,15 @@ def load_counts(path: str | Path) -> MeasuredCounts:
             f"{path} is a damaged gzip file ({exc})", hint="copy or save it again"
         ) from None
     try:
-        data = json.loads(raw)
+        data = parse_json(raw)
     except json.JSONDecodeError as exc:
-        where = f"{exc.msg} at line {exc.lineno}, column {exc.colno}"
+        where = f"{exc.msg.removesuffix(' at')} at line {exc.lineno}, column {exc.colno}"
         raise CountsError(f"{path} is not JSON ({where})", hint=_not_json_hint(path)) from None
     except UnicodeDecodeError:
         raise CountsError(
             f"{path} is not JSON (not UTF-8 text)", hint=_not_json_hint(path)
         ) from None
-    except (ValueError, RecursionError) as exc:
+    except ValueError as exc:
         raise CountsError(f"{path} is not JSON ({exc})", hint=_not_json_hint(path)) from None
     if not isinstance(data, dict) or "nv_counts" not in data:
         if isinstance(data, dict) and "noisevault" in data:

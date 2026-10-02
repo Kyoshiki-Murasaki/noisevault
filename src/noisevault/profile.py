@@ -39,7 +39,7 @@ from pydantic import (
 )
 
 from . import __version__, compat, gates, metrics
-from .errors import MigrationWarning
+from .errors import MigrationWarning, parse_json
 from .units import DURATION, T1, T2, normalize_times
 
 if TYPE_CHECKING:
@@ -109,22 +109,28 @@ class FrozenDict(dict):
         return FrozenDict, (dict(self),)
 
 
-def _freeze(value: Any, where: str = "") -> Any:
+_MAX_NESTING = 64
+
+
+def _freeze(value: Any, where: str = "", depth: int = 1) -> Any:
     """Read-only copy of JSON data: mappings become FrozenDict, lists and tuples become tuples.
 
     Anything that would not survive a save unchanged is refused: a non-string key (``0`` and
-    ``"0"`` would collide), a set or other object, and a nonfinite number, which JSON would
-    write as null (``allow_inf_nan=False`` does not reach values typed ``Any``).
+    ``"0"`` would collide), a set or other object, a nonfinite number, which JSON would write as
+    null (``allow_inf_nan=False`` does not reach values typed ``Any``), and nesting deeper than
+    ``_MAX_NESTING`` levels (pydantic cannot save nesting deeper than 255 levels).
     """
+    if isinstance(value, Mapping | list | tuple) and depth > _MAX_NESTING:
+        raise ValueError(f"nested more than {_MAX_NESTING} levels deep")
     if isinstance(value, Mapping):
         frozen = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise ValueError(f"{where}: the key {key!r} is not a string")
-            frozen[key] = _freeze(item, f"{where}.{key}" if where else key)
+            frozen[key] = _freeze(item, f"{where}.{key}" if where else key, depth + 1)
         return FrozenDict(frozen)
     if isinstance(value, list | tuple):
-        return tuple(_freeze(item, f"{where}[{i}]") for i, item in enumerate(value))
+        return tuple(_freeze(item, f"{where}[{i}]", depth + 1) for i, item in enumerate(value))
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{where}: {value} is not a finite number")
     if value is not None and not isinstance(value, str | int | float):
@@ -1203,27 +1209,7 @@ def load_file(path: str | Path) -> Profile:
 def load_bytes(raw: bytes) -> Profile:
     if raw[:2] == b"\x1f\x8b":
         raw = gzip.decompress(raw)
-    try:
-        data = json.loads(raw)
-    except RecursionError:
-        raise _too_deep(raw.decode(json.detect_encoding(raw), "surrogatepass")) from None
-    return Profile.from_dict(data)
-
-
-_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
-
-
-def _too_deep(text: str) -> json.JSONDecodeError:
-    """The parse error for JSON nested deeper than ``json.loads`` takes, at its deepest point."""
-    depth = deepest = at = 0
-    for token in _STRING_OR_BRACKET.finditer(text):
-        if token[0] in ("[", "{"):
-            depth += 1
-            if depth > deepest:
-                deepest, at = depth, token.start()
-        elif token[0] in ("]", "}"):
-            depth -= 1
-    return json.JSONDecodeError(f"nested {deepest} levels deep", text, at)
+    return Profile.from_dict(parse_json(raw))
 
 
 def json_schema() -> dict[str, Any]:
