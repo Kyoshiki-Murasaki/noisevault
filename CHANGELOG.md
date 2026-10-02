@@ -43,29 +43,29 @@ profile files still load.
 - **One rule for fixed-angle gates in every export.** A gate such as `s`, `sx` or `ms` takes
   its own native's noise if the profile has it, else the noise of the rotation it equals.
 - **No typical noise for gates that need a decomposition.** A gate that needs several native
-  entanglers, such as `swap` or `ccx`, or acts on more than two qubits, never takes the typical
-  native gate's noise. If the profile does not calibrate it, the export raises
+  entanglers, such as `swap` or `ccx`, never takes the typical native gate's noise. Neither
+  does a gate on more than two qubits. If the profile does not calibrate it, the export raises
   `MissingCalibrationError` with either `unknown_gates` value and asks you to decompose it.
 - **Readable reports.** Approximation warnings point at your own line of code.
   `report.summary()` states the usage counts as sentences on one line that starts with `used:`,
   such as "cx took the typical native gate's noise 40 times". It names each `includes` item in
   plain words, such as "single-qubit gate error".
-- **Live pulls without an account**: IBM's public calibration endpoint, with history through
-  `--at`, and IonQ's published characterizations. Pulls through an IBM account are also
-  supported. Pulled profiles are saved to `~/.noisevault/profiles`.
-- **Importers**: `from_qiskit_backend`, `from_ibm_csv`, `from_braket`, `from_cirq_google`, and
-  Quantinuum's dated datasets. `from_braket` maps each native to the gate with the same
-  matrix. `from_qiskit_backend` allows a gate only on the qubits its `Target` lists, takes the
-  technology from the backend, and labels a fake whose snapshot is a model, such as
-  `FakeNighthawk`, as `vendor_model`. An IBM gate error missing from a CSV or a pull takes the
-  device median, and `provenance.notes` names those qubits and pairs. `from_ibm_csv` reads
-  IBM's CSV formats from 2023 to 2026 and treats a cell that says `undefined` as blank. It
-  refuses a file in an older format, a copy in which a spreadsheet turned `partner:value` cells
-  into times, and a file with two columns for the same value. Each refusal is a one-line error
-  that says why. Importers raise `SourceDataError` for calibration data they cannot read.
-  `SourceDataError` is both a `NoiseVaultError` and a `ValueError`. Its `hint` holds the next
-  step, if there is one. `from_qiskit_backend` also raises `SourceDataError` for a backend with
-  no fixed qubit count.
+- **Live pulls without an account.** `nv pull` reads IBM's public calibration endpoint, with
+  history through `--at`, and IonQ's published characterizations. Pulls through an IBM account
+  also work. `nv pull` saves pulled profiles to `~/.noisevault/profiles`.
+- **Importers.** Five importers read vendor data: `from_qiskit_backend`, `from_ibm_csv`,
+  `from_braket`, `from_cirq_google`, and Quantinuum's dated datasets. `from_braket` maps each
+  native to the gate with the same matrix. `from_qiskit_backend` allows a gate only on the
+  qubits its `Target` lists, takes the technology from the backend, and labels a fake whose
+  snapshot is a model, such as `FakeNighthawk`, as `vendor_model`. An IBM gate error missing
+  from a CSV or a pull takes the device median, and `provenance.notes` names those qubits and
+  pairs. `from_ibm_csv` reads IBM's CSV formats from 2023 to 2026 and treats a cell that says
+  `undefined` as blank. It refuses a file in an older format, a copy in which a spreadsheet
+  turned `partner:value` cells into times, and a file with two columns for the same value. Each
+  refusal is a one-line error that says why. Importers raise `SourceDataError` for calibration
+  data they cannot read. `SourceDataError` is both a `NoiseVaultError` and a `ValueError`. Its
+  `hint` holds the next step, if there is one. `from_qiskit_backend` also raises
+  `SourceDataError` for a backend with no fixed qubit count.
 - **Hypothetical devices** with `Profile.uniform`, and `profile.suggest_layout(n)` to pick a
   well-calibrated chain of qubits that each have every one-qubit native the device has.
 - **Command line** `nv` (also `noisevault`): `list`, `show`, `pull`, `diff`, `check`, `cite`,
