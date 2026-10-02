@@ -133,6 +133,61 @@ def test_pair_directions_collapse_only_when_they_agree() -> None:
     assert cz[(2, 1)].avg_infidelity == 0.006
 
 
+def _stale(profile: nv.Profile) -> list[str]:
+    return [n for n in profile.provenance.notes if n.startswith("These values were calibrated")]
+
+
+def _rewritten(tmp_path: Path, rows: list[dict]) -> Path:
+    path = tmp_path / FIXTURE.name
+    pq.write_table(pa.Table.from_pylist(rows, schema=pq.read_schema(FIXTURE)), path)
+    return path
+
+
+def test_a_note_names_values_calibrated_more_than_7_days_before_at() -> None:
+    exactly = nv.from_calibration_archive(FIXTURE, "ibm_torino", at="2026-04-08T12:56:01Z")
+    later = nv.from_calibration_archive(FIXTURE, "ibm_torino", at="2026-04-08T12:56:02Z")
+    assert _stale(exactly) == []
+    assert _stale(later) == [
+        "These values were calibrated more than 7 days before 2026-04-08T12:56:02Z, the oldest on"
+        " 2026-04-01: T1 on qubits 0 and 1; T2 on qubits 0 and 1; cz on qubits 0-1; also readout"
+        " and sx."
+    ]
+    assert later.fingerprint == exactly.fingerprint
+
+
+def test_the_note_lists_the_oldest_values_first() -> None:
+    assert _stale(_fez(at="2026-03-01")) == [
+        "These values were calibrated more than 7 days before 2026-03-01T00:00:00Z, the oldest on"
+        " 2026-01-29: cz on qubits 0-1, 1-2 and 2-3; readout on qubits 0, 1, 2 and 3; sx on qubits"
+        " 0, 1, 2 and 3; also x, T1 and T2."
+    ]
+
+
+def test_without_at_the_note_counts_back_from_the_newest_calibration(tmp_path: Path) -> None:
+    rows = pq.read_table(FIXTURE).to_pylist()
+    june = datetime(2026, 6, 1, 8, tzinfo=UTC)
+    t1 = next(r for r in rows if r["property"] == "T1" and r["calibrated_time"] == june)
+    newest = max(rows, key=lambda r: r["calibrated_time"])
+    newest["calibrated_time"] = datetime(2026, 6, 8, 8, 0, 1, tzinfo=UTC)
+    rows += [{**t1, "qubit_a": q} for q in range(4, 40)]
+    assert _stale(_fez(path=_rewritten(tmp_path, rows))) == [
+        "These values were calibrated more than 7 days before the newest calibration, the oldest"
+        " on 2026-06-01: T1 on qubits 1, 2, 3 and 36 more; T2 on qubits 0, 1 and 3; cz on qubits"
+        " 0-1, 1-2 and 2-3; also id, prep, readout, rzz, sx and x."
+    ]
+
+
+def test_the_note_leaves_out_rows_the_profile_does_not_read(tmp_path: Path) -> None:
+    rows = pq.read_table(FIXTURE).to_pylist()
+    for row in rows:
+        unread = row["property"].startswith(("measure", "rz_"))
+        if row["calibrated_time"] == datetime(2026, 6, 1, 8, tzinfo=UTC) and not unread:
+            row["calibrated_time"] = datetime(2026, 6, 1, 12, tzinfo=UTC)
+    profile = _fez(at="2026-06-08T08:00:01Z", path=_rewritten(tmp_path, rows))
+    assert "Not converted: measure_2." in profile.provenance.notes
+    assert _stale(profile) == []
+
+
 def test_dynamic_circuit_variants_are_not_converted() -> None:
     profile = _fez()
     assert "measure_2" not in profile.gates

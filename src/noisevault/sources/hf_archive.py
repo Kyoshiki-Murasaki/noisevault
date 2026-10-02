@@ -12,13 +12,15 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..errors import SourceDataError, SourceUnavailable, did_you_mean, install_hint
+from ..gates import is_symmetric
 from ..profile import Profile
+from ..table import _qubits
 from .qiskit_backend import as_utc, calibration_from_properties, to_profile
 
 if TYPE_CHECKING:
@@ -48,6 +50,18 @@ _PROCESSORS = {
 }
 _READOUT_PAIR = {"p1_given_0": "prob_meas1_prep0", "p0_given_1": "prob_meas0_prep1"}
 _REVISION = re.compile(r"[0-9a-f]{40}")
+_STALE_AFTER = timedelta(days=7)
+_VALUE_NAMES: dict[str, str | None] = {
+    "T1": "T1",
+    "T2": "T2",
+    "init_error": "prep",
+    "readout_error": "readout",
+    "readout_length": "readout",
+    "prob_meas0_prep1": "readout",
+    "prob_meas1_prep0": "readout",
+    "measure": None,
+    "rz": None,
+}
 
 
 class ArchiveSpan(NamedTuple):
@@ -82,6 +96,7 @@ def from_calibration_archive(
 
     Each property takes its newest row calibrated at or before ``at``; by default, its newest
     row. ``at`` is a datetime, a date or an ISO 8601 string, read as UTC when it has no zone.
+    A provenance note names the values calibrated more than 7 days before ``at``.
     """
     path = Path(path)
     name = device.strip().lower()
@@ -120,6 +135,8 @@ def from_calibration_archive(
                 f"This profile has no {_listed(missing, 'or')} gate. The archive calibrates"
                 f" {_listed(missing, 'and')} on {name} only after {_iso(stamp)}."
             )
+    stale = _stale_note(picked, stamp, cal.skipped)
+    notes += [stale] if stale else []
     dead = {}
     for index, qubit in sorted(cal.qubits.items()):
         stuck = [label for field, label in _READOUT_PAIR.items() if getattr(qubit, field) == 1]
@@ -235,14 +252,16 @@ def _properties(device: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         name, unit = row["property"], row["unit"]
         if unit is None and name in _IN_SECONDS_WITHOUT_UNIT:
             unit = "s"
-        a, b = int(row["qubit_a"]), row["qubit_b"]
-        locus = (a,) if b is None else (a, int(b))
+        locus = _locus(row)
         top = max(top, *locus)
-        param = next((p for p in _GATE_PARAMETERS if name.endswith("_" + p)), None)
-        if param is None:
-            qubits.setdefault(a, []).append({"name": name, "value": row["value"], "unit": unit})
+        split = _gate_parameter(name)
+        if split is None:
+            qubits.setdefault(locus[0], []).append(
+                {"name": name, "value": row["value"], "unit": unit}
+            )
         else:
-            gates.setdefault((name.removesuffix("_" + param), locus), []).append(
+            gate, param = split
+            gates.setdefault((gate, locus), []).append(
                 {"name": param, "value": row["value"], "unit": unit}
             )
     return {
@@ -254,6 +273,56 @@ def _properties(device: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
             for (gate, locus), params in gates.items()
         ],
     }
+
+
+def _locus(row: dict[str, Any]) -> tuple[int, ...]:
+    a, b = int(row["qubit_a"]), row["qubit_b"]
+    return (a,) if b is None else (a, int(b))
+
+
+def _gate_parameter(name: str) -> tuple[str, str] | None:
+    """``("measure_2", "gate_length")`` for ``measure_2_gate_length``; None for a qubit property."""
+    param = next((p for p in _GATE_PARAMETERS if name.endswith("_" + p)), None)
+    return None if param is None else (name.removesuffix("_" + param), param)
+
+
+def _stale_note(
+    rows: list[dict[str, Any]], at: datetime | None, unconverted: tuple[str, ...]
+) -> str | None:
+    """Name the values calibrated more than 7 days before ``at``, or before the newest row.
+
+    A row goes by the profile value it feeds: T1, T2, readout, prep (``init_error``) or its gate.
+    Some rows feed none: the ``measure`` gate, because readout comes from the qubit rows; ``rz``,
+    which is virtual; and the gates the conversion skips.
+    """
+    before = at or max(row["calibrated_time"] for row in rows)
+    oldest: dict[str, datetime] = {}
+    loci: dict[str, set[tuple[int, ...]]] = {}
+    for row in rows:
+        calibrated = row["calibrated_time"]
+        if before - calibrated <= _STALE_AFTER:
+            continue
+        name = row["property"]
+        split = _gate_parameter(name)
+        label = _VALUE_NAMES.get(name) if split is None else _VALUE_NAMES.get(split[0], split[0])
+        if label is None or label in unconverted:
+            continue
+        locus = _locus(row)
+        if len(locus) == 2 and is_symmetric(label):
+            locus = tuple(sorted(locus))
+        loci.setdefault(label, set()).add(locus)
+        oldest[label] = min(oldest.get(label, calibrated), calibrated)
+    if not loci:
+        return None
+    stale = sorted((oldest[label], label, sorted(on)) for label, on in loci.items())
+    named = [f"{label} on {_qubits(on)}" for _, label, on in stale]
+    if len(named) > 4:
+        named = [*named[:3], f"also {_listed([label for _, label, _ in stale[3:]], 'and')}"]
+    when = "the newest calibration" if at is None else _iso(at)
+    return (
+        f"These values were calibrated more than {_STALE_AFTER.days} days before {when}, the"
+        f" oldest on {stale[0][0].date().isoformat()}: {'; '.join(named)}."
+    )
 
 
 def _revision(path: Path) -> tuple[str, str] | None:
