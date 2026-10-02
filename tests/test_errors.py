@@ -4,6 +4,7 @@ import pickle
 
 import pytest
 
+import noisevault as nv
 from noisevault.errors import FingerprintMismatch, LayoutError, NoiseVaultError
 
 
@@ -28,3 +29,9 @@ def test_a_hint_survives_pickling() -> None:
         "pull it again",
         "no source; pull it again",
     )
+
+
+def test_unreadable_source_data_is_caught_as_a_noisevault_error_or_a_value_error() -> None:
+    assert issubclass(nv.SourceDataError, NoiseVaultError)
+    assert issubclass(nv.SourceDataError, ValueError)
+    assert "SourceDataError" in nv.__all__

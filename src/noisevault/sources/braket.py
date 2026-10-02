@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__, gates, units
+from ..errors import SourceDataError
 from ..profile import Profile
 
 _STANDARDIZED = "braket.device_schema.standardized_gate_model_qpu_device_properties"
@@ -92,13 +93,13 @@ def from_braket(
     std = caps.get("standardized") or {}
     header = std.get("braketSchemaHeader") or {}
     if header.get("name") != _STANDARDIZED:
-        raise ValueError(
-            "this is not Braket standardized gate-model properties; save"
-            " AwsDevice(arn).properties.json(), or its standardized part, and pass that file"
+        raise SourceDataError(
+            "this is not Braket standardized gate-model properties",
+            hint="save AwsDevice(arn).properties.json() and pass that file",
         )
     version = str(header.get("version"))
     if version not in ("1", "2", "3"):
-        raise ValueError(f"Braket standardized properties version {version} is not supported")
+        raise SourceDataError(f"Braket standardized properties version {version} is not supported")
     vendor = _vendor(caps)
     paradigm = caps.get("paradigm") or {}
     notes = [
@@ -209,9 +210,10 @@ def _device_level(
     std: Mapping[str, Any], paradigm: Mapping[str, Any], notes: list[str]
 ) -> dict[str, Any]:
     if not paradigm.get("qubitCount") or not paradigm.get("nativeGateSet"):
-        raise ValueError(
-            "Braket v3 properties hold device-level values only; save the whole"
-            " AwsDevice(arn).properties.json() so the qubit count and native gates are known"
+        raise SourceDataError(
+            "Braket v3 standardized properties hold device-level values only, so the qubit count"
+            " and native gates are missing",
+            hint="pass the whole AwsDevice(arn).properties.json(), not only its standardized part",
         )
     one = std.get("oneQubitProperties") or {}
     index, num_qubits, connectivity = _layout(paradigm, set(one), [], notes)
@@ -395,7 +397,7 @@ def _canonical(name: str) -> str:
 def _us(time: Mapping[str, Any]) -> float:
     unit = time.get("unit", "s")
     if unit not in ("ns", "us", "ms", "s"):
-        raise ValueError(f"unknown Braket time unit {unit!r}; expected ns, us, ms or s")
+        raise SourceDataError(f"unknown Braket time unit {unit!r}; expected ns, us, ms or s")
     return units.convert(float(time["value"]), unit, "us")
 
 

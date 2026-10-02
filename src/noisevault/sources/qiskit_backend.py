@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from .. import __version__, gates, metrics, units
+from ..errors import SourceDataError
 from ..profile import FORMAT_VERSION, Profile, Technology
 
 RUNTIME_REPO = "https://github.com/Qiskit/qiskit-ibm-runtime"
@@ -137,9 +138,9 @@ def from_qiskit_backend(backend: Any) -> Profile:
     if target is None:
         raise TypeError(f"{backend!r} is not a Qiskit BackendV2: it has no target")
     if target.num_qubits is None:
-        raise TypeError(
-            f"{backend.name} has no fixed qubit count, so it has no device calibration; pass a"
-            " device backend, e.g. a qiskit-ibm-runtime fake or a live IBM backend"
+        raise SourceDataError(
+            f"{backend.name} has no fixed qubit count, so it has no device calibration",
+            hint="pass a device backend, such as a qiskit-ibm-runtime fake or a live IBM backend",
         )
     cal = calibration_from_target(target, name=_device_name(backend))
     if properties is not None:
@@ -493,9 +494,10 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
     When the source lists where a gate runs, a qubit or connected pair off that list gets
     ``disabled: true``. A working locus with no error of its own takes the device median, and a
     note names it.
-    Records of a symmetric gate that agree in both directions are stored once. A nonpositive or
-    nonfinite T1/T2 is treated as missing, and named in a note when a working qubit has a valid
-    one; when none does, an invalid T1 (or T2) on a working qubit is an error.
+    Records of a symmetric gate that agree in both directions are stored once. to_profile treats
+    a nonpositive or nonfinite T1 or T2 as missing. If a working qubit has a valid value, a note
+    names each invalid one. If none does, an invalid value on a working qubit raises
+    SourceDataError.
     """
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
@@ -547,7 +549,7 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any]) -> Profile:
             ]
         elif on_working := [r for r in invalid[key] if r.index not in disabled_qubits]:
             index, value = on_working[0]
-            raise ValueError(
+            raise SourceDataError(
                 f"{cal.name} reports no valid {label} on any working qubit (e.g. qubit {index}:"
                 f" {label} = {value:g} us); {label} must be a positive number of microseconds"
             )

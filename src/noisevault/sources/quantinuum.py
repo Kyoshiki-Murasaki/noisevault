@@ -34,7 +34,7 @@ from typing import Any
 import numpy as np
 
 from .. import __version__
-from ..errors import SourceUnavailable
+from ..errors import SourceDataError, SourceUnavailable
 from ..profile import Profile
 
 REPOSITORY = "https://github.com/Quantinuum/quantinuum-hardware-specifications"
@@ -151,14 +151,15 @@ def from_spec_csv(
     for position, header in enumerate(headers, start=1):
         first = headers.index(header) + 1
         if first != position:
-            raise ValueError(
-                f"{path}: columns {first} and {position} are both {header!r}; delete one of them"
+            raise SourceDataError(
+                f"{path}: columns {first} and {position} are both {header!r}",
+                hint="delete one of them",
             )
     rows = [row for row in reader if row["Machine"] == machine]
     dated = [row for row in rows if row["Date"] == date]
     if len(dated) != 1:
         known = ", ".join(sorted({row["Date"] for row in rows})) or "none"
-        raise ValueError(
+        raise SourceDataError(
             f"{path} has {len(dated)} rows for {machine} dated {date}; expected one."
             f" Dates (YYYY_MM_DD) it has for {machine}: {known}"
         )
@@ -276,7 +277,9 @@ def parse_cell(cell: str) -> Estimate | None:
         return None
     match = _CELL.match(cell)
     if match is None:
-        raise ValueError(f"cannot read spec-sheet cell {cell!r}; expected a form like 2.15(8)E-03")
+        raise SourceDataError(
+            f"cannot read spec-sheet cell {cell!r}; expected a form like 2.15(8)E-03"
+        )
     whole, frac, unc, exp = match.groups()
     scale = 10.0 ** int(exp)
     digits = len(frac or "")
@@ -289,11 +292,11 @@ def _csv_values(machine: str, date: str, row: Mapping[str, str]) -> SpecValues:
             found = parse_cell(row.get(column) or "")
             if found is not None:
                 return found
-        raise ValueError(f"{machine} {date}: the CSV row has none of {', '.join(columns)}")
+        raise SourceDataError(f"{machine} {date}: the CSV row has none of {', '.join(columns)}")
 
     spam = parse_cell(row.get("SPAM error") or "")
     if spam is None:
-        raise ValueError(f"{machine} {date}: the CSV row has no SPAM error")
+        raise SourceDataError(f"{machine} {date}: the CSV row has no SPAM error")
     # leakage is part of the error only in the leakage-corrected columns
     corrected = {n: parse_cell(row.get(f"{n} error") or "") is not None for n in ("1Q", "2Q")}
     return SpecValues(
@@ -324,7 +327,9 @@ def to_profile(
     machine, date = values.machine, values.date
     qubits = num_qubits or QUBITS.get((machine, date))
     if qubits is None:
-        raise ValueError(f"the qubit count of {machine} on {date} is unknown; pass num_qubits=")
+        raise SourceDataError(
+            f"the qubit count of {machine} on {date} is unknown", hint="pass num_qubits="
+        )
     leak1, leak2 = values.one_qubit_leakage, values.two_qubit_leakage
     gates = {
         "rz": {"virtual": True},

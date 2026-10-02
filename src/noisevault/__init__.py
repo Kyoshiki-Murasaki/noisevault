@@ -23,6 +23,7 @@ from .errors import (
     NoiseVaultError,
     NoiseVaultWarning,
     ProfileNotFound,
+    SourceDataError,
     SourceUnavailable,
     UnsupportedEffect,
 )
@@ -84,6 +85,7 @@ __all__ = [
     "ProfileInfo",
     "ProfileNotFound",
     "Report",
+    "SourceDataError",
     "SourceUnavailable",
     "UnsupportedEffect",
     "__version__",

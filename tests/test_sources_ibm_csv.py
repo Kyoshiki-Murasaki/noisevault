@@ -88,9 +88,12 @@ def test_provenance_hashes_the_file() -> None:
 def test_unknown_layout_names_the_columns_it_found(tmp_path: Path) -> None:
     path = tmp_path / "other.csv"
     path.write_text("Qubit,Coherence,Fidelity\n0,1,2\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="no 'T1 \\(us\\)'") as info:
+    with pytest.raises(nv.SourceDataError, match="no 'T1 \\(us\\)'") as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
-    assert "'Coherence'" in str(info.value) and "'Fidelity'" in str(info.value)
+    assert info.value.message.endswith("column (found: 'Qubit', 'Coherence', 'Fidelity')")
+    assert info.value.hint == (
+        "download the calibration CSV from the device's page on the IBM Quantum platform"
+    )
 
 
 @pytest.mark.parametrize("extra", ["SX error", "√x (sx) error"], ids=["alias", "repeated"])
@@ -99,9 +102,13 @@ def test_two_columns_for_one_value_name_both_and_import_nothing(tmp_path: Path, 
     path = tmp_path / "twice.csv"
     lines = [f'{header},"{extra}"', *(f'{row},"0.01"' for row in rows)]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    message = f"twice.csv: '√x (sx) error' (column 12) and '{extra}' (column 18) are the same"
-    with pytest.raises(ValueError, match=re.escape(message)):
+    with pytest.raises(nv.SourceDataError) as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert info.value.message == (
+        f"twice.csv: '√x (sx) error' (column 12) and '{extra}' (column 18) are two columns for"
+        " the same value"
+    )
+    assert info.value.hint == "delete one of them"
 
 
 def test_repeated_columns_the_reader_ignores_still_import(tmp_path: Path) -> None:
@@ -117,24 +124,29 @@ def test_bad_packed_cell_names_line_and_column(tmp_path: Path) -> None:
     text = HERON.read_text(encoding="utf-8").replace('"2:0.0016;0:0.0013"', '"2=0.0016"')
     path = tmp_path / "bad.csv"
     path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError, match="line 3, 'CZ error'"):
+    with pytest.raises(nv.SourceDataError, match="line 3, 'CZ error'"):
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
 
 
 def test_long_header_list_is_cut_short(tmp_path: Path) -> None:
     path = tmp_path / "wide.csv"
     path.write_text(",".join(f"col{i}" for i in range(500)) + "\n" + "1," * 499 + "1\n")
-    with pytest.raises(ValueError, match=r"'col11', \.\.\.\)") as info:
+    with pytest.raises(nv.SourceDataError, match=r"'col11', \.\.\.\)") as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
     assert "'col12'" not in str(info.value) and len(str(info.value)) < 1000
 
 
 def test_properties_json_passed_as_csv_points_to_the_right_reader() -> None:
-    with pytest.raises(ValueError, match="looks like IBM properties JSON.*nv.pull") as info:
+    with pytest.raises(nv.SourceDataError) as info:
         nv.from_ibm_csv(
             FIXTURES / "manila_properties.json", device="ibm_x", calibrated_at="2025-01-01"
         )
-    assert len(str(info.value)) < 300
+    assert info.value.message == (
+        "manila_properties.json looks like IBM properties JSON, not a calibration CSV"
+    )
+    assert info.value.hint == (
+        "use nv.pull(<name>) for a device, or from_qiskit_backend(<backend>) for a Qiskit backend"
+    )
 
 
 def test_bad_calibrated_at_names_the_parameter() -> None:
@@ -152,7 +164,7 @@ def _edited(tmp_path: Path, source: Path, old: str, new: str) -> Path:
 
 def test_conflicting_pair_in_one_cell_names_line_and_column(tmp_path: Path) -> None:
     path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', '"1:0.0013;1:0.009","1:68"')
-    with pytest.raises(ValueError, match=r"line 2, 'CZ error'.*0\.0013.*0\.009"):
+    with pytest.raises(nv.SourceDataError, match=r"line 2, 'CZ error'.*0\.0013.*0\.009"):
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
 
 
@@ -164,7 +176,7 @@ def test_a_pair_repeated_with_the_same_value_is_read_once(tmp_path: Path) -> Non
 
 def test_conflicting_pair_across_rows_names_both_lines(tmp_path: Path) -> None:
     path = _edited(tmp_path, EAGLE, "2_3:1,2_3:600", "2_3:1; 1_2:0.05,2_3:600; 1_2:560")
-    with pytest.raises(ValueError, match=r"line 5.*ecr on qubits \(1, 2\).*line 4"):
+    with pytest.raises(nv.SourceDataError, match=r"line 5.*ecr on qubits \(1, 2\).*line 4"):
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
 
 
@@ -178,7 +190,9 @@ def test_a_qubit_listed_twice_is_an_error(tmp_path: Path) -> None:
     row = "0,200.0,120.0,4.8,-0.30,0.015,0.02,0.01,1300,0.0002,0,0.009,0.0002,,,true,\n"
     path = tmp_path / "twice.csv"
     path.write_text(EAGLE.read_text(encoding="utf-8") + row, encoding="utf-8")
-    with pytest.raises(ValueError, match=r"line 6: qubit 0 is already listed on twice.csv line 3"):
+    with pytest.raises(
+        nv.SourceDataError, match=r"line 6: qubit 0 is already listed on twice.csv line 3"
+    ):
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
 
 
@@ -291,7 +305,9 @@ def test_a_device_with_no_valid_t1_is_a_one_line_error(tmp_path: Path) -> None:
         text = text.replace(f'"{qubit}","{t1}",', f'"{qubit}","0",')
     path = tmp_path / "dead.csv"
     path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError, match=r"ibm_x reports no valid T1.*qubit 0: T1 = 0 us") as info:
+    with pytest.raises(
+        nv.SourceDataError, match=r"ibm_x reports no valid T1.*qubit 0: T1 = 0 us"
+    ) as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
     assert "\n" not in str(info.value)
 
@@ -312,8 +328,37 @@ def test_an_invalid_t1_on_a_disabled_qubit_counts_as_missing(tmp_path: Path) -> 
 def test_a_qubit_that_is_not_a_whole_number_names_its_line(tmp_path: Path, qubit: str) -> None:
     path = _edited(tmp_path, HERON, '"0","300"', f'"{qubit}","300"')
     message = f"line 2, 'Qubit': {qubit!r} is not a qubit number"
-    with pytest.raises(ValueError, match=re.escape(message)):
+    with pytest.raises(nv.SourceDataError, match=re.escape(message)):
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ('"0","300","250"', '"0","300","n/a"', "line 2, 'T2 (us)': 'n/a' is not a number"),
+        (
+            '"0.012","Yes"',
+            '"0.012","Maybe"',
+            "line 2, 'Operational': 'Maybe' is not yes/no or true/false",
+        ),
+    ],
+    ids=["number", "flag"],
+)
+def test_a_cell_the_reader_cannot_read_names_its_line_and_column(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
+    path = _edited(tmp_path, HERON, old, new)
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert str(info.value) == f"{path.name} {message}"
+
+
+def test_a_header_with_no_qubit_rows_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "empty.csv"
+    path.write_text(HERON.read_text(encoding="utf-8").splitlines()[0] + "\n", encoding="utf-8")
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert str(info.value) == "empty.csv has a header but no qubit rows"
 
 
 def test_a_qubit_written_as_a_float_is_read_as_that_qubit(tmp_path: Path) -> None:
@@ -325,7 +370,7 @@ def test_a_qubit_written_as_a_float_is_read_as_that_qubit(tmp_path: Path) -> Non
 
 def test_a_negative_partner_names_its_line_and_column(tmp_path: Path) -> None:
     path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', '"-1:0.0013","1:68"')
-    with pytest.raises(ValueError, match=r"line 2, 'CZ error': '-1:0.0013' is not"):
+    with pytest.raises(nv.SourceDataError, match=r"line 2, 'CZ error': '-1:0.0013' is not"):
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2025-01-01")
 
 
@@ -355,12 +400,12 @@ def test_a_row_with_values_but_no_qubit_names_its_line(tmp_path: Path) -> None:
     averages = '"","250"' + "," * (header.count(",") - 1)
     path = tmp_path / "averages.csv"
     path.write_text("\n".join([header, *rows, averages]) + "\n", encoding="utf-8")
-    with pytest.raises(ValueError) as info:
+    with pytest.raises(nv.SourceDataError) as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
-    assert str(info.value) == (
-        "averages.csv line 6, 'Qubit' is blank in a row with calibration values; give the row"
-        " its qubit number or delete it"
+    assert info.value.message == (
+        "averages.csv line 6, 'Qubit' is blank in a row with calibration values"
     )
+    assert info.value.hint == "give the row its qubit number or delete it"
 
 
 @pytest.mark.parametrize(
@@ -389,9 +434,13 @@ def test_a_pair_a_spreadsheet_turned_into_a_time_is_refused(
 ) -> None:
     cells = {"CZ error": f'"{item}","1:68"', "Gate length (ns)": f'"1:0.0013","{item}"'}
     path = _edited(tmp_path, HERON, '"1:0.0013","1:68"', cells[column])
-    message = f"line 2, {column!r}: {item!r} looks like a time that a spreadsheet made"
-    with pytest.raises(ValueError, match=re.escape(message)):
+    with pytest.raises(nv.SourceDataError) as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert info.value.message == (
+        f"{path.name} line 2, {column!r}: {item!r} looks like a time that a spreadsheet made from"
+        " a 'partner:value' cell, so the value is lost"
+    )
+    assert info.value.hint == "import the CSV as you downloaded it, not a copy a spreadsheet saved"
 
 
 def test_a_gate_length_that_could_be_minutes_still_imports(tmp_path: Path) -> None:
@@ -436,6 +485,6 @@ def test_a_layout_from_before_2023_is_refused_in_one_line(
 ) -> None:
     path = tmp_path / "old.csv"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    with pytest.raises(ValueError) as info:
+    with pytest.raises(nv.SourceDataError) as info:
         nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2022-01-01")
     assert str(info.value) == message

@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import units
+from ..errors import SourceDataError
 from ..profile import Profile
 from .qiskit_backend import (
     Calibration,
@@ -91,9 +92,10 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: str | datetime
     raw = path.read_bytes()
     text = raw.decode("utf-8-sig")
     if text.lstrip().startswith(("{", "[")):
-        raise ValueError(
-            f"{path.name} looks like IBM properties JSON, not a calibration CSV; for a device use"
-            " nv.pull(<name>), or from_qiskit_backend(<backend>) for a Qiskit backend"
+        raise SourceDataError(
+            f"{path.name} looks like IBM properties JSON, not a calibration CSV",
+            hint="use nv.pull(<name>) for a device, or from_qiskit_backend(<backend>) for a Qiskit"
+            " backend",
         )
     reader = csv.DictReader(io.StringIO(text))
     columns, ignored = _columns(reader.fieldnames or [], path.name)
@@ -103,7 +105,7 @@ def from_ibm_csv(path: str | Path, *, device: str, calibrated_at: str | datetime
         if any(_cell(row, column) for column in columns.values())
     ]
     if not rows:
-        raise ValueError(f"{path.name} has a header but no qubit rows")
+        raise SourceDataError(f"{path.name} has a header but no qubit rows")
     cal = _calibration(rows, device, as_utc(calibrated_at, name="calibrated_at"))
     notes = [f"Ignored columns: {', '.join(ignored)}."] if ignored else []
     return to_profile(
@@ -134,7 +136,7 @@ def _columns(headers: list[str], name: str) -> tuple[dict[str, _Column], list[st
         elif stem == "qubit":
             column = _Column(header, "qubit", None)
         elif full == "single-qubit pauli-x error":
-            raise ValueError(
+            raise SourceDataError(
                 f"{name} is in IBM's CSV format from before 2023, which has a"
                 f" {header.strip()!r} column; {_SUPPORTED}"
             )
@@ -144,10 +146,10 @@ def _columns(headers: list[str], name: str) -> tuple[dict[str, _Column], list[st
             continue
         if column.key in columns:
             first = columns[column.key].header
-            raise ValueError(
+            raise SourceDataError(
                 f"{name}: {first.strip()!r} (column {headers.index(first) + 1}) and"
-                f" {header.strip()!r} (column {position}) are the same column to this reader;"
-                " delete one of them"
+                f" {header.strip()!r} (column {position}) are two columns for the same value",
+                hint="delete one of them",
             )
         columns[column.key] = column
     missing = [label for label, ok in _required(columns).items() if not ok]
@@ -155,10 +157,10 @@ def _columns(headers: list[str], name: str) -> tuple[dict[str, _Column], list[st
         shown = [repr(h.strip()) for h in headers[:_SHOWN_HEADERS]]
         more = ", ..." if len(headers) > _SHOWN_HEADERS else ""
         found = (", ".join(shown) + more) or "none"
-        raise ValueError(
+        raise SourceDataError(
             f"{name} is not an IBM calibration CSV this reader knows: it has no"
-            f" {' and no '.join(missing)} column (found: {found}); download the calibration CSV"
-            " from the device's page on the IBM Quantum platform"
+            f" {' and no '.join(missing)} column (found: {found})",
+            hint="download the calibration CSV from the device's page on the IBM Quantum platform",
         )
     return columns, ignored
 
@@ -194,19 +196,19 @@ def _row(
     text = _cell(row, columns["qubit"])
     qubit = columns["qubit"].header.strip()
     if not text and line == 2:
-        raise ValueError(
+        raise SourceDataError(
             f"{where}, {qubit!r} is blank; IBM's CSVs from before 2023 left qubit 0 blank, and"
             f" {_SUPPORTED}"
         )
     if not text:
-        raise ValueError(
-            f"{where}, {qubit!r} is blank in a row with calibration values; give the row its"
-            " qubit number or delete it"
+        raise SourceDataError(
+            f"{where}, {qubit!r} is blank in a row with calibration values",
+            hint="give the row its qubit number or delete it",
         )
     try:
         index = _qubit(text)
     except ValueError:
-        raise ValueError(f"{where}, {qubit!r}: {text!r} is not a qubit number") from None
+        raise SourceDataError(f"{where}, {qubit!r}: {text!r} is not a qubit number") from None
     values: dict[str, float | None] = {}
     packed: dict[str, dict[tuple[int, int], float]] = {}
     operational = True
@@ -244,7 +246,7 @@ def _number(text: str, where: str) -> float | None:
     try:
         return float(text)
     except ValueError:
-        raise ValueError(f"{where}: {text!r} is not a number") from None
+        raise SourceDataError(f"{where}: {text!r} is not a number") from None
 
 
 def _qubit(text: str) -> int:
@@ -260,7 +262,7 @@ def _flag(text: str, where: str) -> bool:
         return True
     if text.lower() in _FALSE:
         return False
-    raise ValueError(f"{where}: {text!r} is not yes/no or true/false")
+    raise SourceDataError(f"{where}: {text!r} is not yes/no or true/false")
 
 
 def _pairs(text: str, row_qubit: int, where: str) -> dict[tuple[int, int], float]:
@@ -268,10 +270,10 @@ def _pairs(text: str, row_qubit: int, where: str) -> dict[tuple[int, int], float
     found: dict[tuple[int, int], float] = {}
     for item in filter(None, (part.strip() for part in text.split(";"))):
         if _SPREADSHEET_TIME.fullmatch(item):
-            raise ValueError(
+            raise SourceDataError(
                 f"{where}: {item!r} looks like a time that a spreadsheet made from a"
-                " 'partner:value' cell, so the value is lost; import the CSV as you downloaded"
-                " it, not a copy a spreadsheet saved"
+                " 'partner:value' cell, so the value is lost",
+                hint="import the CSV as you downloaded it, not a copy a spreadsheet saved",
             )
         locus, sep, value = item.partition(":")
         try:
@@ -283,9 +285,13 @@ def _pairs(text: str, row_qubit: int, where: str) -> dict[tuple[int, int], float
                 raise ValueError
             number = float(value)
         except ValueError:
-            raise ValueError(f"{where}: {item!r} is not 'a_b:value' or 'partner:value'") from None
+            raise SourceDataError(
+                f"{where}: {item!r} is not 'a_b:value' or 'partner:value'"
+            ) from None
         if found.setdefault(pair, number) != number:
-            raise ValueError(f"{where}: pair {pair} is given twice, as {found[pair]} and {number}")
+            raise SourceDataError(
+                f"{where}: pair {pair} is given twice, as {found[pair]} and {number}"
+            )
     return found
 
 
@@ -295,7 +301,7 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
     def add(inst: Instruction, where: str) -> None:
         first, first_where = found.setdefault((inst.name, inst.qubits), (inst, where))
         if first != inst:
-            raise ValueError(
+            raise SourceDataError(
                 f"{where}: {inst.name} on qubits {inst.qubits} has error {inst.error} and"
                 f" duration {inst.duration_ns} ns, but {first_where} gives error {first.error}"
                 f" and duration {first.duration_ns} ns"
@@ -314,7 +320,7 @@ def _calibration(rows: list[_Row], device: str, calibrated_at: datetime) -> Cali
     seen_rz = False
     for row in rows:
         if row.index in lines:
-            raise ValueError(
+            raise SourceDataError(
                 f"{row.where}: qubit {row.index} is already listed on {lines[row.index]}"
             )
         lines[row.index] = row.where

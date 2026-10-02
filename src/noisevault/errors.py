@@ -57,6 +57,10 @@ class SourceUnavailable(NoiseVaultError):
     """A calibration source cannot be reached or is not installed."""
 
 
+class SourceDataError(NoiseVaultError, ValueError):
+    """A source importer cannot read the calibration data it was given."""
+
+
 def did_you_mean(given: str, choices: Iterable[str]) -> str:
     """``did you mean X? `` for the choice closest to a mistyped value, or '' when none is close."""
     close = difflib.get_close_matches(given, list(choices), n=1)

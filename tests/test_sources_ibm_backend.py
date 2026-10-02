@@ -317,8 +317,14 @@ def test_backend_with_no_qubit_count_says_what_to_pass() -> None:
     require("qiskit")
     from qiskit.providers.basic_provider import BasicSimulator
 
-    with pytest.raises(TypeError, match="has no fixed qubit count.*pass a device backend"):
+    with pytest.raises(nv.SourceDataError) as info:
         nv.from_qiskit_backend(BasicSimulator())
+    assert info.value.message == (
+        "basic_simulator has no fixed qubit count, so it has no device calibration"
+    )
+    assert info.value.hint == (
+        "pass a device backend, such as a qiskit-ibm-runtime fake or a live IBM backend"
+    )
 
 
 def test_gates_the_target_drops_as_non_operational_stay_disabled() -> None:

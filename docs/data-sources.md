@@ -157,8 +157,9 @@ Each importer turns its source's conventions into explicit fields, so no convers
 A source is one module in `src/noisevault/sources/`. To add one:
 
 1. Write `src/noisevault/sources/<name>.py`. Convert the source's data into a profile dict and
-   validate it with `Profile.from_dict`. Import optional packages inside functions, never at
-   module level, so a core install keeps working.
+   validate it with `Profile.from_dict`. Raise `SourceDataError` for data the module cannot
+   read. Import optional packages inside functions, never at module level, so a core install
+   keeps working.
 2. Fill `provenance`: `data_kind`, `source_kind`, `source`, `source_url`, `license`,
    `attribution`, `redistributable`, `retrieved_at` and the `source_hash` of the raw bytes.
    Set `redistributable: "yes"` only when the license allows redistribution.
@@ -169,10 +170,12 @@ A source is one module in `src/noisevault/sources/`. To add one:
 4. Expose `bundled_profiles() -> list[Profile]`. Return `[]` unless the data is openly
    licensed.
 5. For a live source, expose `pull(device, *, at=None) -> Profile`, register it in
-   `_PULL_SOURCES` in `src/noisevault/catalog.py`, and raise `SourceUnavailable` with the next
-   step for every network or lookup failure.
-6. For a bundled source, add the module to `SOURCES` in `scripts/build_catalog.py`, run
+   `_PULL_SOURCES` in `src/noisevault/catalog.py`, and raise `SourceUnavailable` for every
+   network or lookup failure.
+6. Pass an error's next step as `hint=`, not in the message. `nv` prints the hint on its own
+   `hint:` line.
+7. For a bundled source, add the module to `SOURCES` in `scripts/build_catalog.py`, run
    `python scripts/build_catalog.py`, and commit the regenerated profiles and NOTICE.
-7. Add tests in `tests/test_sources_<name>.py` that run on saved fixtures, not the network.
+8. Add tests in `tests/test_sources_<name>.py` that run on saved fixtures, not the network.
 
 [CONTRIBUTING](../CONTRIBUTING.md) covers the test commands.

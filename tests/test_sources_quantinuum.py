@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import urllib.error
 import urllib.request
 import warnings
@@ -13,7 +12,7 @@ import numpy as np
 import pytest
 
 from noisevault import Profile
-from noisevault.errors import SourceUnavailable
+from noisevault.errors import SourceDataError, SourceUnavailable
 from noisevault.reference import Op, probabilities
 from noisevault.sources import quantinuum
 
@@ -126,14 +125,14 @@ def test_spec_sheet_cells_parse_value_and_uncertainty(cell: str, value: float, s
 
 def test_bad_inputs_say_what_is_known() -> None:
     assert quantinuum.parse_cell(" ") is None
-    with pytest.raises(ValueError, match="2.15"):
+    with pytest.raises(SourceDataError, match="2.15"):
         quantinuum.parse_cell("0.002")
     with pytest.raises(ValueError, match="H1-1, H1-2, H2-1, H2-2, REIMEI"):
         quantinuum.from_repository("H3-1")
     with pytest.raises(ValueError, match="known: 2024_12_06, 2025_05_29, 2025_08_28"):
         quantinuum.from_repository("H2-2", "2025_01_01")
     with pytest.raises(
-        ValueError, match=r"Dates \(YYYY_MM_DD\) it has for H2-1: 2023_03_10, 2024_05_20$"
+        SourceDataError, match=r"Dates \(YYYY_MM_DD\) it has for H2-1: 2023_03_10, 2024_05_20$"
     ):
         quantinuum.from_spec_csv(CSV, machine="H2-1", date="2025_04_30")
 
@@ -149,9 +148,47 @@ def test_spec_csv_with_a_repeated_column_names_both(tmp_path: Path) -> None:
     path = tmp_path / "twice.csv"
     lines = [f"{header},2Q error", *(f"{row},9.9(1)E-02" for row in rows)]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    message = f"{path}: columns 6 and 13 are both '2Q error'; delete one of them"
-    with pytest.raises(ValueError, match=re.escape(message)):
+    with pytest.raises(SourceDataError) as info:
         quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
+    assert info.value.message == f"{path}: columns 6 and 13 are both '2Q error'"
+    assert info.value.hint == "delete one of them"
+
+
+def test_spec_csv_of_a_date_with_no_known_qubit_count_asks_for_it(tmp_path: Path) -> None:
+    header, *rows = CSV.read_text(encoding="utf-8").splitlines()
+    [row] = [r for r in rows if r.startswith("2024_12_06,H2-2,")]
+    path = tmp_path / "later.csv"
+    path.write_text(f"{header}\n{row.replace('2024_12_06', '2030_01_01')}\n", encoding="utf-8")
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_spec_csv(path, machine="H2-2", date="2030_01_01")
+    assert info.value.message == "the qubit count of H2-2 on 2030_01_01 is unknown"
+    assert info.value.hint == "pass num_qubits="
+    assert quantinuum.from_spec_csv(path, machine="H2-2", date="2030_01_01", num_qubits=56)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (",1.33(9)E-03", ",", "H2-2 2024_12_06: the CSV row has no SPAM error"),
+        (
+            ",8(2)E-05,7(2)E-05,",
+            ",,,",
+            "H2-2 2024_12_06: the CSV row has none of 1Q error, 1Q error (legacy)",
+        ),
+    ],
+    ids=["no-spam", "no-1q"],
+)
+def test_spec_csv_row_missing_a_value_names_it(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
+    header, *rows = CSV.read_text(encoding="utf-8").splitlines()
+    [row] = [r for r in rows if r.startswith("2024_12_06,H2-2,")]
+    assert old in row
+    path = tmp_path / "damaged.csv"
+    path.write_text(f"{header}\n{row.replace(old, new)}\n", encoding="utf-8")
+    with pytest.raises(SourceDataError) as info:
+        quantinuum.from_spec_csv(path, machine="H2-2", date="2024_12_06")
+    assert str(info.value) == message
 
 
 def test_a_failed_download_says_what_loads_offline(monkeypatch: pytest.MonkeyPatch) -> None:

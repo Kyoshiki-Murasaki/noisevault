@@ -226,19 +226,32 @@ def test_profiles_convert_on_their_natives(path: Path, layout: list[int], ops: l
 def test_errors_say_what_to_save(tmp_path: Path) -> None:
     other = tmp_path / "other.json"
     other.write_text(json.dumps({"braketSchemaHeader": {"name": "something.else", "version": "1"}}))
-    with pytest.raises(ValueError) as info:
+    with pytest.raises(nv.SourceDataError) as info:
         from_braket(other)
-    assert str(info.value) == (
-        "this is not Braket standardized gate-model properties; save"
-        " AwsDevice(arn).properties.json(), or its standardized part, and pass that file"
-    )
+    assert info.value.message == "this is not Braket standardized gate-model properties"
+    assert info.value.hint == "save AwsDevice(arn).properties.json() and pass that file"
     v3_alone = json.loads(IONQ.read_text())["standardized"]
-    with pytest.raises(ValueError) as info:
+    with pytest.raises(nv.SourceDataError) as info:
         from_braket(v3_alone)
-    assert str(info.value) == (
-        "Braket v3 properties hold device-level values only; save the whole"
-        " AwsDevice(arn).properties.json() so the qubit count and native gates are known"
+    assert info.value.message == (
+        "Braket v3 standardized properties hold device-level values only, so the qubit count"
+        " and native gates are missing"
     )
+    assert info.value.hint == (
+        "pass the whole AwsDevice(arn).properties.json(), not only its standardized part"
+    )
+
+
+def test_values_it_cannot_read_are_named() -> None:
+    data = json.loads(RIGETTI.read_text())
+    newer = {**data, "braketSchemaHeader": {**data["braketSchemaHeader"], "version": "4"}}
+    with pytest.raises(nv.SourceDataError) as info:
+        from_braket(newer)
+    assert str(info.value) == "Braket standardized properties version 4 is not supported"
+    data["oneQubitProperties"]["0"]["T1"]["unit"] = "min"
+    with pytest.raises(nv.SourceDataError) as info:
+        from_braket(data)
+    assert str(info.value) == "unknown Braket time unit 'min'; expected ns, us, ms or s"
 
 
 def test_public_api() -> None:
