@@ -263,6 +263,73 @@
       "title": "Connectivity",
       "type": "object"
     },
+    "CountsFit": {
+      "additionalProperties": false,
+      "description": "The counts the factors were fitted to. Every field is required, ``p_value`` included.",
+      "properties": {
+        "counts": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Counts",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "hardware",
+            "simulated"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "qubits": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Qubits",
+          "type": "array"
+        },
+        "run_at": {
+          "format": "date-time",
+          "title": "Run At",
+          "type": "string"
+        },
+        "calibration": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Calibration",
+          "type": "string"
+        },
+        "p_value": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "P Value"
+        },
+        "impossible_shots": {
+          "minimum": 0,
+          "title": "Impossible Shots",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "counts",
+        "source",
+        "qubits",
+        "run_at",
+        "calibration",
+        "p_value",
+        "impossible_shots"
+      ],
+      "title": "CountsFit",
+      "type": "object"
+    },
     "Device": {
       "additionalProperties": false,
       "properties": {
@@ -471,6 +538,64 @@
         "type"
       ],
       "title": "Effect",
+      "type": "object"
+    },
+    "ErrorFactor": {
+      "additionalProperties": false,
+      "description": "One factor on the profile's own error rates, with its 95% interval when fitted.\n\n``bound`` says the interval reached an end of the fit's domain, so only one side is a\nconfidence limit: \"lower\" keeps ``high`` only (printed \"at most\"), \"upper\" keeps ``low``\nonly (printed \"at least\"). A hand-written factor has no interval and no bound.",
+      "properties": {
+        "factor": {
+          "minimum": 0,
+          "title": "Factor",
+          "type": "number"
+        },
+        "low": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Low"
+        },
+        "high": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "High"
+        },
+        "bound": {
+          "anyOf": [
+            {
+              "enum": [
+                "lower",
+                "upper"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bound"
+        }
+      },
+      "required": [
+        "factor"
+      ],
+      "title": "ErrorFactor",
       "type": "object"
     },
     "GateSpec": {
@@ -1146,6 +1271,47 @@
       },
       "title": "Readout",
       "type": "object"
+    },
+    "UnmodeledError": {
+      "additionalProperties": false,
+      "description": "Error the calibration leaves out, as factors on the profile's own error rates.\n\n``gates`` scales every calibrated gate error, ``readout`` scales P(1|0) and P(0|1)\ntogether. T1, T2, dephasing, preparation error, durations and effects are never scaled.",
+      "properties": {
+        "gates": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorFactor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "readout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorFactor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CountsFit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "UnmodeledError",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -1233,6 +1399,17 @@
       },
       "title": "Effects",
       "type": "array"
+    },
+    "unmodeled_error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UnmodeledError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "benchmarks": {
       "additionalProperties": true,

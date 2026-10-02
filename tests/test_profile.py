@@ -16,7 +16,19 @@ from conftest import toy
 from pydantic import ValidationError
 
 import noisevault as nv
-from noisevault.profile import Profile, Ref, json_schema, load_file, parse_ref, profile_id
+from noisevault.catalog import bundled_profiles
+from noisevault.profile import (
+    ErrorFactor,
+    Profile,
+    Ref,
+    UnmodeledError,
+    _calibration_fingerprint,
+    json_schema,
+    load_file,
+    parse_ref,
+    profile_id,
+    unmodeled_note,
+)
 
 TWO_EDGES = {"edges": [[0, 1], [1, 2]]}
 
@@ -853,3 +865,285 @@ def test_summary_medians_leave_out_a_disabled_qubit(qubits: list, lines: list) -
     data["device"]["num_qubits"] = 4
     summary = Profile.from_dict(data).summary().splitlines()
     assert [line.strip() for line in summary if "T1" in line or "readout" in line] == lines
+
+
+# unmodeled error ----------------------------------------------------------------------------
+
+COUNTS = "sha256:3fa1c2d4e5b6" + "0" * 52
+FITTED = {
+    "gates": {"factor": 1.84, "low": 1.54, "high": 2.12},
+    "readout": {"factor": 1.58, "low": 1.32, "high": 1.84},
+    "fit": {
+        "counts": COUNTS,
+        "source": "hardware",
+        "qubits": [148, 149, 150, 151],
+        "run_at": "2026-04-16T09:30:02Z",
+        "calibration": "609c845ed934" + "0" * 52,
+        "p_value": 0.41,
+        "impossible_shots": 0,
+    },
+}
+FITTED_LINES = (
+    "gate errors x1.84 (95% interval 1.54 to 2.12)",
+    "readout errors x1.58 (95% interval 1.32 to 1.84)",
+    "fitted to hardware counts sha256:3fa1c2d4e5b6",
+    "on qubits 148-149-150-151, run 2026-04-16 (p = 0.41)",
+    "T1, T2 and preparation error are not scaled",
+)
+
+
+def _block(base: Profile, **fit) -> dict:
+    """FITTED, bound to ``base`` and its qubits, with ``fit`` changed."""
+    bound = {"qubits": [0, 1, 2], "calibration": base.fingerprint}
+    return {**FITTED, "fit": {**FITTED["fit"], **bound, **fit}}
+
+
+def _fitted(**fit) -> tuple[Profile, Profile]:
+    base = Profile.model_validate(toy(readout={"error": 0.01}))
+    return base, base.model_copy(update={"unmodeled_error": _block(base, **fit)})
+
+
+def _first_error(data: dict) -> str:
+    with pytest.raises(ValidationError) as caught:
+        Profile.model_validate(data)
+    return caught.value.errors()[0]["msg"]
+
+
+def test_no_bundled_profile_sets_unmodeled_error() -> None:
+    for info in bundled_profiles():
+        assert "unmodeled_error" not in info.load().to_dict(), info.ref
+
+
+def test_a_factor_is_fingerprinted_and_uncorrected_gives_back_the_calibration() -> None:
+    base = Profile.model_validate(toy())
+    what_if = base.model_copy(update={"unmodeled_error": {"gates": {"factor": 2.3}}})
+    assert what_if.to_dict()["unmodeled_error"] == {"gates": {"factor": 2.3}}
+    assert what_if.fingerprint != base.fingerprint
+    assert what_if.uncorrected().fingerprint == base.fingerprint
+    assert _calibration_fingerprint(what_if) == _calibration_fingerprint(base) == base.fingerprint
+    assert what_if.uncorrected().to_dict() == base.to_dict()
+    assert base.uncorrected() is base
+
+
+@pytest.mark.parametrize("p_value", [0.41, None])
+def test_a_fitted_profile_saves_its_block_between_effects_and_benchmarks(
+    tmp_path: Path, p_value: float | None
+) -> None:
+    base = Profile.model_validate(
+        toy(
+            readout={"error": 0.01},
+            effects=[{"type": "leakage", "gate": "cz", "prob": 1e-4}],
+            benchmarks={"eplg": 3e-3},
+        )
+    )
+    block = _block(base, p_value=p_value)
+    fitted = base.model_copy(update={"unmodeled_error": block})
+    saved = json.loads(fitted.save(tmp_path / "fitted.json").read_text())
+    assert list(saved)[-4:] == ["effects", "unmodeled_error", "benchmarks", "provenance"]
+    assert saved["unmodeled_error"] == block
+    loaded = load_file(tmp_path / "fitted.json")
+    assert loaded == fitted and loaded.fingerprint == fitted.fingerprint
+
+
+def test_a_calibration_edit_under_a_fit_is_refused_in_one_line() -> None:
+    base, fitted = _fitted()
+    data = fitted.to_dict()
+    data["gates"]["sx"]["avg_infidelity"] = 2e-3
+    edited = Profile.model_validate({k: v for k, v in data.items() if k != "unmodeled_error"})
+    assert _first_error(data) == (
+        f"Value error, unmodeled_error.fit.calibration: fitted to calibration"
+        f" {base.short_fingerprint}, but this profile's calibration is"
+        f" {edited.short_fingerprint}; drop unmodeled_error or refit with nv compare"
+    )
+    relabeled = {**fitted.to_dict(), "provenance": {"source": "elsewhere"}, "extensions": {"a": 1}}
+    assert Profile.model_validate(relabeled).unmodeled_error == fitted.unmodeled_error
+
+
+@pytest.mark.parametrize(
+    "factor",
+    [
+        {"factor": 2.3},
+        {"factor": 0},
+        {"factor": 1.84, "low": 1.54, "high": 2.12},
+        {"factor": 0.096, "high": 0.311, "bound": "lower"},
+        {"factor": 20.0, "low": 11.2, "bound": "upper"},
+    ],
+)
+def test_an_error_factor_may_be_alone_or_carry_its_interval(factor: dict) -> None:
+    assert ErrorFactor.model_validate(factor).model_dump(exclude_none=True) == factor
+
+
+@pytest.mark.parametrize(
+    ("factor", "message"),
+    [
+        ({"factor": 1.5, "low": 1.2}, 'give low and high together, or set bound "lower"'),
+        ({"factor": 1.5, "high": 2.0}, 'give low and high together, or set bound "lower"'),
+        ({"factor": 0.1, "low": 0.05, "high": 0.3, "bound": "lower"}, 'bound "lower" needs high'),
+        ({"factor": 0.1, "bound": "lower"}, 'bound "lower" needs high and no low'),
+        ({"factor": 20.0, "low": 11.2, "high": 20.0, "bound": "upper"}, 'bound "upper" needs low'),
+        ({"factor": 2.5, "low": 1.54, "high": 2.12}, "factor 2.5 is above high 2.12"),
+        ({"factor": 1.0, "low": 1.54, "high": 2.12}, "factor 1.0 is below low 1.54"),
+        ({"factor": 0.5, "high": 0.311, "bound": "lower"}, "factor 0.5 is above high 0.311"),
+        ({"factor": 5.0, "low": 11.2, "bound": "upper"}, "factor 5.0 is below low 11.2"),
+        ({"factor": -1.0}, "greater than or equal to 0"),
+        ({"factor": "2"}, "valid number"),
+    ],
+)
+def test_an_error_factor_with_an_illegal_interval_is_refused(factor: dict, message: str) -> None:
+    _invalid(toy(unmodeled_error={"gates": factor}), re.escape(message))
+
+
+@pytest.mark.parametrize(
+    ("factors", "fitted", "message"),
+    [
+        ({}, False, "give a gates factor, a readout factor or both"),
+        ({}, True, "give a gates factor, a readout factor or both"),
+        ({"gates": {"factor": 2.0}}, True, "gates: a fitted factor states its interval"),
+        (
+            {"readout": {"factor": 1.58, "low": 1.32, "high": 1.84}},
+            False,
+            "readout: an interval needs the fit it came from; add fit, or drop low, high and bound",
+        ),
+    ],
+)
+def test_an_unmodeled_block_holds_a_factor_and_a_fit_holds_intervals(
+    factors: dict, fitted: bool, message: str
+) -> None:
+    base = Profile.model_validate(toy(readout={"error": 0.01}))
+    block = {**factors, "fit": _block(base)["fit"]} if fitted else factors
+    _invalid(toy(readout={"error": 0.01}, unmodeled_error=block), re.escape(message))
+
+
+@pytest.mark.parametrize("field", list(FITTED["fit"]))
+def test_a_fit_states_every_field(field: str) -> None:
+    block = _block(Profile.model_validate(toy(readout={"error": 0.01})))
+    del block["fit"][field]
+    _invalid(
+        toy(readout={"error": 0.01}, unmodeled_error=block), f"fit\\.{field}\n.*Field required"
+    )
+
+
+@pytest.mark.parametrize(
+    ("fit", "message"),
+    [
+        ({"impossible_shots": 9}, "impossible_shots is 9, so p_value must be 0"),
+        ({"impossible_shots": 9, "p_value": None}, "impossible_shots is 9, so p_value must be 0"),
+        ({"qubits": [0, 1, 1]}, "qubit 1 is listed twice"),
+        ({"qubits": []}, "at least 1 item"),
+        ({"qubits": [0, 3]}, "unmodeled_error.fit.qubits: qubit 3 is outside 0..2"),
+        ({"counts": "sha256:3fa1"}, "pattern"),
+        ({"calibration": "nv:609c845ed934"}, "pattern"),
+        ({"source": "measured"}, "'hardware' or 'simulated'"),
+        ({"run_at": "2026-04-16T09:30:02"}, "timezone"),
+        ({"p_value": 1.5}, "less than or equal to 1"),
+        ({"impossible_shots": -1}, "greater than or equal to 0"),
+    ],
+)
+def test_a_fit_that_contradicts_itself_or_the_device_is_refused(fit: dict, message: str) -> None:
+    block = _block(Profile.model_validate(toy(readout={"error": 0.01})), **fit)
+    _invalid(toy(readout={"error": 0.01}, unmodeled_error=block), re.escape(message))
+
+
+@pytest.mark.parametrize("fit", [{"p_value": None}, {"p_value": 0, "impossible_shots": 9}])
+def test_a_fit_may_be_untestable_or_ruled_out(fit: dict) -> None:
+    _, fitted = _fitted(**fit)
+    assert fitted.unmodeled_error.fit.p_value == fit["p_value"]
+
+
+def test_a_readout_factor_needs_readout_data() -> None:
+    block = {"readout": {"factor": 1.5}}
+    assert _first_error(toy(unmodeled_error=block)) == (
+        "Value error, unmodeled_error.readout: the profile states no readout error,"
+        " so the factor scales nothing"
+    )
+    qubit = [{"index": 1, "readout": {"p1_given_0": 0.01, "p0_given_1": 0.02}}]
+    Profile.model_validate(toy(qubits=qubit, unmodeled_error=block))
+
+
+def test_unmodeled_lines_read_as_the_show_row() -> None:
+    assert UnmodeledError.model_validate(FITTED).lines() == FITTED_LINES
+
+
+@pytest.mark.parametrize(
+    ("change", "line"),
+    [
+        (
+            {"gates": {"factor": 0.096, "high": 0.311, "bound": "lower"}},
+            (0, "gate errors x0.096 (95% interval, at most 0.311)"),
+        ),
+        (
+            {"readout": {"factor": 20.0, "low": 11.2, "bound": "upper"}},
+            (1, "readout errors x20 (95% interval, at least 11.2)"),
+        ),
+        ({"source": "simulated"}, (2, "fitted to simulated counts sha256:3fa1c2d4e5b6")),
+        (
+            {"p_value": 0.003},
+            (3, "on qubits 148-149-150-151, run 2026-04-16 (p = 0.003, a poor fit)"),
+        ),
+        ({"p_value": 0.01}, (3, "on qubits 148-149-150-151, run 2026-04-16 (p = 0.01)")),
+        ({"p_value": None}, (3, "on qubits 148-149-150-151, run 2026-04-16 (fit not testable)")),
+        ({"qubits": [0]}, (3, "on qubit 0, run 2026-04-16 (p = 0.41)")),
+        (
+            {"run_at": "2026-04-16T23:30:00-02:00"},
+            (3, "on qubits 148-149-150-151, run 2026-04-17 (p = 0.41)"),
+        ),
+    ],
+)
+def test_unmodeled_lines_name_the_bound_the_source_and_the_fit(
+    change: dict, line: tuple[int, str]
+) -> None:
+    axes = {k: v for k, v in change.items() if k in ("gates", "readout")}
+    fit = {k: v for k, v in change.items() if k not in axes}
+    block = {**FITTED, **axes, "fit": {**FITTED["fit"], **fit}}
+    expected = list(FITTED_LINES)
+    expected[line[0]] = line[1]
+    assert UnmodeledError.model_validate(block).lines() == tuple(expected)
+
+
+def test_unmodeled_lines_count_the_shots_the_profile_rules_out() -> None:
+    block = {**FITTED, "fit": {**FITTED["fit"], "p_value": 0, "impossible_shots": 9}}
+    assert UnmodeledError.model_validate(block).lines()[3:] == (
+        "on qubits 148-149-150-151, run 2026-04-16 (p = 0, a poor fit)",
+        "the profile ruled out 9 shots",
+        "T1, T2 and preparation error are not scaled",
+    )
+    block["fit"]["impossible_shots"] = 1
+    assert "the profile ruled out 1 shot" in UnmodeledError.model_validate(block).lines()
+
+
+def test_a_hand_written_factor_reads_alone() -> None:
+    assert UnmodeledError(gates={"factor": 2.3}).lines() == (
+        "gate errors x2.3",
+        "T1, T2 and preparation error are not scaled",
+    )
+
+
+def test_summary_states_the_calibration_and_adds_one_line_for_the_factors() -> None:
+    base = Profile.model_validate(toy(readout={"error": 0.01}, idle={"t1_us": 100}))
+    what_if = base.model_copy(
+        update={"unmodeled_error": {"gates": {"factor": 2.3}, "readout": {"factor": 1.5}}}
+    )
+    assert unmodeled_note(base) == ()
+    assert what_if.summary() == (
+        base.summary().replace(base.short_fingerprint, what_if.short_fingerprint)
+        + "\n  unmodeled error: gate errors x2.3; readout errors x1.5;"
+        " T1, T2 and preparation error are not scaled"
+    )
+
+
+@pytest.mark.parametrize("source", ["hardware", "simulated"])
+def test_citation_states_the_factors_and_the_counts_they_were_fitted_to(source: str) -> None:
+    _, fitted = _fitted(source=source)
+    clause = (
+        "; unmodeled-error factors (gate error rates x1.84, readout error rates x1.58)"
+        f" fitted to {source} counts {COUNTS}"
+    )
+    assert fitted.citation().endswith(f"fingerprint sha256:{fitted.fingerprint}{clause}.")
+    assert f", sha256:{fitted.fingerprint}{clause}}},\n" in fitted.citation("bibtex")
+
+
+def test_citation_of_a_hand_written_factor_states_the_factor() -> None:
+    what_if = Profile.model_validate(toy(unmodeled_error={"gates": {"factor": 2.3}}))
+    assert what_if.citation().endswith(
+        f"sha256:{what_if.fingerprint}; unmodeled-error factors (gate error rates x2.3)."
+    )

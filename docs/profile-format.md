@@ -98,6 +98,7 @@ below.
 | `qubits` | no | Per-qubit records that override `readout`, `prep` and `idle`. |
 | `calibrations` | no | Per-gate records that override a definition on specific qubits. |
 | `effects` | no | Physics the format records but no export models yet. |
+| `unmodeled_error` | no | Factors on the profile's error rates, for error the calibration leaves out. |
 | `benchmarks` | no | Free-form benchmark values, such as layer fidelity. |
 | `provenance` | no | Source, license, attribution and retrieval details. |
 | `extensions` | no | Free-form vendor data that is not part of the physics. |
@@ -333,6 +334,110 @@ carry `qubits`, `prob`, `rate_per_s`, `strength_hz`, `angle_rad` and `heralded`.
 its report, and an effect with `allow` set to `approximate` or `exact` makes the export raise
 `UnsupportedEffect`. The format carries effects now so profiles do not need to change when
 exports start modeling them.
+
+## Unmodeled error
+
+`unmodeled_error` states how far the device's errors exceed the calibration, as factors on the
+profile's own error rates. A profile without it gives the noise the calibration states.
+
+```json
+"unmodeled_error": {"gates": {"factor": 2.3}}
+```
+
+This hand-written factor makes every calibrated gate err about 2.3 times as often. A fitted
+block also carries the 95% interval of each factor and a record of the counts it was fitted to:
+
+```json
+"unmodeled_error": {
+  "gates": {"factor": 1.84, "low": 1.54, "high": 2.12},
+  "readout": {"factor": 1.58, "low": 1.32, "high": 1.84},
+  "fit": {"counts": "sha256:3fa1c2d4e5b6...", "source": "hardware", "qubits": [148, 149, 150, 151],
+          "run_at": "2026-04-16T09:30:02Z", "calibration": "609c845ed934...",
+          "p_value": 0.41, "impossible_shots": 0}
+}
+```
+
+This example shortens the two hashes. A file holds all 64 hex digits of each.
+
+| Field | Content |
+| --- | --- |
+| `gates` | The factor on every calibrated gate error, of any arity, `pauli` specs included. |
+| `readout` | The factor on `p1_given_0` and `p0_given_1` of every qubit. The profile must state a readout error. |
+| `fit` | The counts the factors were fitted to. A hand-written factor has no `fit`. |
+
+The block needs `gates`, `readout` or both. T1, T2, `dephasing_rate_per_s`, preparation error,
+durations and effects are never scaled.
+
+### Error factors
+
+| Field | Content |
+| --- | --- |
+| `factor` | The factor, 0 or more. 1 keeps the stated errors. |
+| `low`, `high` | The 95% interval of a fitted factor. |
+| `bound` | `"lower"` or `"upper"` when the interval reached that end of the range the fit searched. Only the other side is a confidence limit. |
+
+An interval has one of three shapes:
+
+| Shape | Fields | Printed as |
+| --- | --- | --- |
+| Two-sided | `low` and `high` | `x1.84 (95% interval 1.54 to 2.12)` |
+| Open below | `high`, and `bound` set to `"lower"` | `x0.096 (95% interval, at most 0.311)` |
+| Open above | `low`, and `bound` set to `"upper"` | `x20 (95% interval, at least 11.2)` |
+
+The factor lies inside its interval. Every factor in a block with `fit` has an interval, and a
+factor in a block without `fit` has none.
+
+### How a factor scales an error
+
+A factor s raises each error channel to the power s. Factor 1 keeps the stated error, and
+factor 0 removes it. Powers compose, so scaling by 1.5 and then by 2 equals scaling by 3. For
+small errors, x2 means about twice the error. Multiplying a large error by the factor could leave
+the physical range, so NoiseVault takes the power instead.
+
+- A `pauli` spec scales through its Pauli fidelities. Each fidelity f becomes f^s. NoiseVault
+  reads any other metric as a depolarizing channel, which scales the same way.
+- A readout pair scales through its confusion matrix M, which becomes M^s. The ratio of
+  `p1_given_0` to `p0_given_1` stays the same.
+
+A few errors have no valid power at some factors. NoiseVault leaves them as stated at every
+factor, and `nv show` and every export's report name them:
+
+- A gate error at or past full depolarization.
+- A `pauli` spec with a negative Pauli-Lindblad rate.
+- A readout pair whose `p1_given_0` and `p0_given_1` sum to 1 or more, which is no better than
+  chance.
+
+A scaled gate error below what the gate's relaxation alone causes keeps the relaxation, as a
+stated error does (see [Channel construction](conventions.md#channel-construction)).
+
+### The fit record
+
+| Field | Content |
+| --- | --- |
+| `counts` | The SHA-256 of the counts file, as `sha256:` and 64 hex digits. |
+| `source` | `hardware`, or `simulated` for counts drawn from a model. |
+| `qubits` | The measured qubits, in the order the circuits first use them. |
+| `run_at` | When the device started the first circuit, an ISO 8601 time with a timezone. Stored in UTC. |
+| `calibration` | The fingerprint of this profile without `unmodeled_error`, as 64 hex digits. |
+| `p_value` | The p-value of the goodness-of-fit test, from 0 to 1. Below 0.01, every printout calls it a poor fit. `null` when the fit left no degrees of freedom to test it. |
+| `impossible_shots` | Shots on outcomes the profile gives probability 0. When it is above 0, `p_value` is 0. |
+
+Every field is required, `p_value` included. The qubits are distinct and inside the device.
+
+`calibration` binds the factors to the calibration they were fitted on. A change to any physics
+outside `unmodeled_error`, such as a gate error or a T1, fails validation with "drop
+unmodeled_error or refit with nv compare". Provenance and extensions can change.
+
+### Fingerprint, display and compatibility
+
+`unmodeled_error` is part of the fingerprint, so one fingerprint pins a calibration and its
+factors. `profile.uncorrected()` returns the profile without the block, and its fingerprint is
+`fit.calibration`. `nv cite` names the factors and the counts.
+
+`nv show` and `profile.summary()` print the calibration as stated, then the factors on a row of
+their own. Every export applies the factors, and its report states them in one line.
+
+NoiseVault 0.2.0 does not know this field and refuses a file that sets it.
 
 ## Benchmarks and extensions
 

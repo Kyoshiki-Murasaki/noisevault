@@ -6,13 +6,14 @@ import warnings
 import pytest
 from conftest import require, toy
 
+import noisevault as nv
 from noisevault.errors import NoiseApproximationWarning, UnsupportedEffect
 from noisevault.profile import Profile
 from noisevault.report import HONESTY, Clamp, Report
 
 
-def _report(**effects) -> tuple[Profile, Report]:
-    profile = Profile.model_validate(toy(**effects))
+def _report(**sections) -> tuple[Profile, Report]:
+    profile = Profile.model_validate(toy(**sections))
     report = Report.start(profile, "qiskit", "2.5.2", layout={"a": 0}, unknown_gates="typical")
     return profile, report
 
@@ -139,6 +140,28 @@ def test_included_errors_are_named_in_plain_words() -> None:
         " measurement error (readout and preparation noise, where applied, add their own error"
         " on top)",
     ]
+
+
+def test_a_report_states_unmodeled_error_on_its_second_line_only_when_the_profile_has_it() -> None:
+    readout = {"error": 0.02}
+    base, plain = _report(readout=readout)
+    fitted, report = _report(
+        readout=readout, unmodeled_error={"gates": {"factor": 2.3}, "readout": {"factor": 1.5}}
+    )
+    note = "gate errors x2.3; readout errors x1.5; T1, T2 and preparation error are not scaled"
+    lines = report.summary().splitlines()
+    assert lines[1] == f"unmodeled error: {note}"
+    assert report.to_dict()["unmodeled_error"] == note
+    assert "unmodeled_error" not in plain.to_dict()
+    assert plain.summary() == "\n".join(lines[:1] + lines[2:]).replace(
+        fitted.fingerprint[:12], base.fingerprint[:12]
+    )
+    kingston = nv.load("ibm_kingston@2026-04-15")
+    scaled = kingston.model_copy(update={"unmodeled_error": {"readout": {"factor": 1.58}}})
+    assert Report.start(scaled, "stim", None).unmodeled_error == (
+        "readout errors x1.58; T1, T2 and preparation error are not scaled;"
+        " readout of qubit 146 is not scaled (no better than chance)"
+    )
 
 
 def _options(**options) -> dict:

@@ -31,6 +31,32 @@ phase. `u1` follows the same order, and `p` itself falls back to `rz`. Cirq, Pen
 this rule. Qiskit circuits are compiled to the profile's natives first, so there the Qiskit
 transpiler picks the gate.
 
+## Scale the errors a calibration leaves out
+
+A profile can set `unmodeled_error`, which holds factors on its gate and readout error rates.
+[Profile format](profile-format.md#unmodeled-error) describes the field. Every export applies
+the factors, and so does the reference that `nv check` compares with. To see what twice the
+gate error does, copy a profile with a factor of 2:
+
+```python
+import stim
+
+import noisevault as nv
+
+fez = nv.load("ibm_fez")
+doubled = fez.model_copy(update={"unmodeled_error": {"gates": {"factor": 2.0}}})
+code = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=3)
+noisy = doubled.to_stim(code, layout=doubled.suggest_layout(code.num_qubits))
+print(noisy.report.summary().splitlines()[1])
+# unmodeled error: gate errors x2; T1, T2 and preparation error are not scaled
+```
+
+The report states the factors on its second line, and `report.to_dict()` holds the same text
+under `unmodeled_error`. The line also names each error that the factors leave as stated. T1,
+T2 and preparation error never scale. Neither does an error with no valid power, such as a
+readout pair that is no better than chance. The report of a profile without `unmodeled_error`
+has no such line.
+
 ## Choose qubits
 
 Profiles number physical qubits from 0. Integer circuit qubits map to the same physical qubit

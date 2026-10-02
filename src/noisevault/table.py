@@ -79,6 +79,9 @@ class NoiseTable:
         self._with_metric = {name for name, spec in profile.gates.items() if spec.metric}
         self._with_metric |= {r.gate for r in profile.calibrations if r.metric}
         self._qubit_records = {q.index: q for q in profile.qubits}
+        unmodeled = profile.unmodeled_error
+        self._gate_factor = unmodeled.gates.factor if unmodeled and unmodeled.gates else None
+        self._readout_factor = unmodeled.readout.factor if unmodeled and unmodeled.readout else None
         self._qubits: dict[int, QubitNoise] = {}
         self._gates: dict[tuple[str, tuple[int, ...]], GateNoise | Unavailable] = {}
 
@@ -123,17 +126,24 @@ class NoiseTable:
         dephasing = idle.dephasing_rate_per_s
         if record and record.dephasing_rate_per_s is not None:
             dephasing = record.dephasing_rate_per_s
-        readout = record.readout if record and record.readout is not None else self.profile.readout
+        pair = self._stated_readout(index)
+        if pair is not None and self._readout_factor is not None:
+            pair = metrics.scale_readout(pair, self._readout_factor)
         prep = record.prep if record and record.prep is not None else self.profile.prep
         return QubitNoise(
             index=index,
             t1_ns=None if t1 is None else t1 * 1000,
             t2_ns=None if t2 is None else t2 * 1000,
             dephasing_rate_per_s=dephasing,
-            readout=readout.pair if readout else None,
+            readout=pair,
             prep_error=prep.error if prep else None,
             disabled=bool(record and record.disabled),
         )
+
+    def _stated_readout(self, index: int) -> tuple[float, float] | None:
+        record = self._qubit_records.get(index)
+        readout = record.readout if record and record.readout is not None else self.profile.readout
+        return readout.pair if readout else None
 
     # gates ---------------------------------------------------------------------------------
 
@@ -192,6 +202,44 @@ class NoiseTable:
         """
         recorded = (qubits for _, qubits in self._records if len(qubits) == 2)
         return sorted({(min(p), max(p)) for p in (*self._edges, *recorded)})
+
+    # unmodeled error -----------------------------------------------------------------------
+
+    def unscaled(self) -> tuple[str, ...]:
+        """What the profile's unmodeled-error factors leave as stated, one phrase each.
+
+        Read from the gate definitions, the calibration records and the qubits, never from gate
+        loci, so all-to-all connectivity costs nothing extra.
+        """
+        phrases = []
+        if self._gate_factor is not None:
+            for name, spec in self.profile.gates.items():
+                reason = _no_power(spec, self.arity(name))
+                if reason:
+                    phrases.append(f"default {name} error is not scaled ({reason})")
+            loci: dict[tuple[str, str], list[tuple[int, ...]]] = {}
+            for record in self.profile.calibrations:
+                if record.metric is None or self._target_problem(record.gate, record.qubits):
+                    continue
+                spec = merge_spec(self.profile.gates[record.gate], record)
+                reason = _no_power(spec, len(record.qubits))
+                if reason:
+                    loci.setdefault((record.gate, reason), []).append(record.qubits)
+            phrases += [
+                f"{name} on {_qubits(on)} is not scaled ({reason})"
+                for (name, reason), on in loci.items()
+            ]
+        if self._readout_factor is not None:
+            chance = [
+                (q,)
+                for q in range(self.num_qubits)
+                if sum(self._stated_readout(q) or (0, 0)) >= 1 and not self.qubit(q).disabled
+            ]
+            if chance:
+                phrases.append(
+                    f"readout of {_qubits(chance)} is not scaled (no better than chance)"
+                )
+        return tuple(phrases)
 
     def _resolve_gate(self, name: str, qubits: tuple[int, ...]) -> GateNoise | Unavailable:
         spec = self.profile.gates.get(name)
@@ -265,10 +313,41 @@ class NoiseTable:
                 if origin == "reversed_record":
                     pauli = metrics.swap_pauli_2q(pauli)
                     spec = spec.model_copy(update={"pauli": pauli})
+                if self._gate_factor is not None:
+                    pauli = metrics.scale_pauli(pauli, self._gate_factor)
                 r = metrics.avg_from_pauli(pauli)
             else:
                 r = metrics.to_avg_infidelity(kind, value, len(qubits))
+                if self._gate_factor is not None:
+                    r = metrics.scale_avg_infidelity(r, len(qubits), self._gate_factor)
         return GateNoise(name, qubits, state, r, pauli, spec.duration_ns, origin, spec)
+
+
+def _no_power(spec: GateSpec, num_qubits: int) -> str | None:
+    """Why a factor leaves this gate error as stated, or None when every factor scales it."""
+    if spec.metric is None or _state(spec) != "calibrated":
+        return None
+    kind, value = spec.metric
+    if kind == "pauli":
+        pauli = tuple(value)
+        if metrics.pauli_embeddable(pauli):
+            return None
+        if metrics.pauli_rates(pauli) is not None:
+            return "it has a negative Pauli-Lindblad rate"
+    else:
+        r = metrics.to_avg_infidelity(kind, value, num_qubits)
+        if metrics.depolarizing_from_avg(r, num_qubits) < 1:
+            return None
+    return "at or past full depolarization"
+
+
+def _qubits(loci: list[tuple[int, ...]]) -> str:
+    """Qubits or loci in words, such as "qubit 146" or "qubits 0, 14, 18 and 24 more"."""
+    labels = ["-".join(map(str, locus)) for locus in loci]
+    if len(labels) > 4:
+        labels = [*labels[:3], f"{len(labels) - 3} more"]
+    listed = labels[0] if len(labels) == 1 else f"{', '.join(labels[:-1])} and {labels[-1]}"
+    return f"qubit {listed}" if len(loci) == 1 and len(loci[0]) == 1 else f"qubits {listed}"
 
 
 def _without_own_noise(found: GateNoise | Unavailable) -> bool:

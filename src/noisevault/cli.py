@@ -57,6 +57,7 @@ from .profile import (
     json_schema,
     load_file,
     qubit_medians,
+    unmodeled_note,
 )
 from .table import GateNoise
 
@@ -218,6 +219,7 @@ _WORDS = {
     "crosstalk_zz": "ZZ crosstalk",
     "crosstalk_measurement": "measurement crosstalk",
 }
+_POOR_FIT = 0.01
 _REDISTRIBUTION = {
     "yes": "may be redistributed",
     "no": "may not be redistributed",
@@ -434,7 +436,8 @@ def show(
         data = card(profile)
         indices = _parse_qubits(qubits, profile) if qubits is not None else None
         if indices is not None:
-            data["qubits"] = [_qubit_row(profile, q) for q in indices]
+            stated = profile.uncorrected()
+            data["qubits"] = [_qubit_row(stated, q) for q in indices]
         if as_json:
             _echo_json(data)
             return
@@ -465,9 +468,11 @@ def _on_hand(ref: str, profile: Profile) -> _OnHand | None:
 
 
 def card(profile: Profile) -> dict[str, Any]:
-    """The facts ``nv show`` prints, as JSON-ready data."""
+    """The facts ``nv show`` prints, as JSON-ready data: the calibration as stated, then the
+    unmodeled-error factors that simulations apply to it."""
     dev, prov, table = profile.device, profile.provenance, profile.table
-    medians = qubit_medians(profile)
+    stated, unmodeled = profile.uncorrected(), profile.unmodeled_error
+    medians = qubit_medians(stated)
     return {
         "ref": _ref(profile),
         "id": profile.id,
@@ -477,7 +482,7 @@ def card(profile: Profile) -> dict[str, Any]:
         "technology": dev.technology,
         "num_qubits": dev.num_qubits,
         "connectivity": _connectivity(profile),
-        "natives": [_native(profile, name) for name in _native_order(profile)],
+        "natives": [_native(stated, name) for name in _native_order(profile)],
         "median_t1_us": medians.t1_us,
         "median_t2_us": medians.t2_us,
         "median_readout_error": medians.readout_error,
@@ -490,6 +495,8 @@ def card(profile: Profile) -> dict[str, Any]:
         "assumptions": _assumptions(profile),
         "notes": list(prov.notes),
         "effects": _effects(profile),
+        "unmodeled_error": unmodeled and unmodeled.model_dump(mode="json"),
+        "unmodeled_note": list(unmodeled_note(profile)),
     }
 
 
@@ -597,6 +604,7 @@ def _print_card(
     grid.add_row("readout", _readout(data))
     if data["disabled_qubits"]:
         grid.add_row("disabled", "qubits " + ", ".join(map(str, data["disabled_qubits"])))
+    _add_lines(grid, "unmodeled", data["unmodeled_note"])
     if not brief:
         _add_lines(grid, "not modeled", [_plain_effect(line) for line in data["effects"]])
     prov = data["provenance"]
@@ -610,6 +618,13 @@ def _print_card(
         _add_lines(grid, "assumptions", data["assumptions"])
         _add_lines(grid, "notes", data["notes"])
     _emit(grid)
+    fit = data["unmodeled_error"] and data["unmodeled_error"]["fit"]
+    if fit and fit["p_value"] is not None and fit["p_value"] < _POOR_FIT:
+        err.print(
+            "warning: the unmodeled-error factors are a poor fit to their counts"
+            f" (p = {fit['p_value']:.2g}); no one pair of factors fits every circuit",
+            markup=False,
+        )
 
 
 def _add_lines(grid: Table, label: str, items: list[str]) -> None:

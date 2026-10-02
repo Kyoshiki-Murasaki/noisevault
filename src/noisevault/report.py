@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .errors import NoiseApproximationWarning, UnsupportedEffect
+from .profile import unmodeled_note
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable
@@ -67,6 +68,7 @@ class Report:
     framework: str
     framework_version: str | None
     noisevault_version: str
+    unmodeled_error: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
     exact: list[str] = field(default_factory=list)
     approximated: list[Approximation] = field(default_factory=list)
@@ -88,6 +90,7 @@ class Report:
             framework=framework,
             framework_version=framework_version,
             noisevault_version=__version__,
+            unmodeled_error="; ".join(unmodeled_note(profile)) or None,
             options=options,
         )
 
@@ -163,12 +166,14 @@ class Report:
     # output ---------------------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        unmodeled = {"unmodeled_error": self.unmodeled_error} if self.unmodeled_error else {}
         return {
             "profile_id": self.profile_id,
             "fingerprint": self.fingerprint,
             "framework": self.framework,
             "framework_version": self.framework_version,
             "noisevault_version": self.noisevault_version,
+            **unmodeled,
             "options": _jsonable(self.options),
             "exact": list(self.exact),
             "approximated": [a.__dict__.copy() for a in self.approximated],
@@ -192,6 +197,8 @@ class Report:
             f"NoiseVault {self.noisevault_version} -> {self.framework}{version}:"
             f" {self.profile_id} (nv:{self.fingerprint[:12]})"
         ]
+        if self.unmodeled_error:
+            lines.append(f"unmodeled error: {self.unmodeled_error}")
         if self.options:
             lines.append("options: " + ", ".join(f"{k}={v!r}" for k, v in self.options.items()))
         if self.exact:

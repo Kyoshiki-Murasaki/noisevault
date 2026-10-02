@@ -31,9 +31,11 @@ from pydantic import (
     ConfigDict,
     Field,
     PlainSerializer,
+    SerializerFunctionWrapHandler,
     Strict,
     ValidationInfo,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -70,6 +72,10 @@ QubitIndex = Annotated[int, Strict(), Field(ge=0)]
 Probability = Annotated[float, Strict(), Field(ge=0, le=1)]
 NonNegative = Annotated[float, Strict(), Field(ge=0)]
 Positive = Annotated[float, Strict(), Field(gt=0)]
+Sha256 = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+Fingerprint = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+CountsSource = Literal["hardware", "simulated"]
+Bound = Literal["lower", "upper"]
 Technology = Literal["superconducting", "trapped_ion", "neutral_atom", "spin", "photonic", "other"]
 GateState = Literal["ideal", "calibrated", "uncalibrated", "disabled"]
 EffectType = Literal[
@@ -340,11 +346,149 @@ class Provenance(_Model):
     attribution: str | None = None
     redistributable: Literal["yes", "no", "unknown"] = "unknown"
     retrieved_at: UtcDatetime | None = None
-    source_hash: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")] | None = None
+    source_hash: Sha256 | None = None
     tool: str | None = None
     derived_from: str | None = None
     notes: tuple[str, ...] = ()
     extra: JsonObject = Field(default_factory=FrozenDict)
+
+
+class ErrorFactor(_Model):
+    """One factor on the profile's own error rates, with its 95% interval when fitted.
+
+    ``bound`` says the interval reached an end of the fit's domain, so only one side is a
+    confidence limit: "lower" keeps ``high`` only (printed "at most"), "upper" keeps ``low``
+    only (printed "at least"). A hand-written factor has no interval and no bound.
+    """
+
+    factor: NonNegative
+    low: NonNegative | None = None
+    high: NonNegative | None = None
+    bound: Bound | None = None
+
+    @model_validator(mode="after")
+    def _interval(self) -> ErrorFactor:
+        if self.bound == "lower" and (self.low is not None or self.high is None):
+            raise ValueError('bound "lower" needs high and no low')
+        if self.bound == "upper" and (self.high is not None or self.low is None):
+            raise ValueError('bound "upper" needs low and no high')
+        if self.bound is None and (self.low is None) != (self.high is None):
+            raise ValueError(
+                'give low and high together, or set bound "lower" (high only) or "upper" (low only)'
+            )
+        if self.low is not None and self.factor < self.low:
+            raise ValueError(f"factor {self.factor} is below low {self.low}")
+        if self.high is not None and self.factor > self.high:
+            raise ValueError(f"factor {self.factor} is above high {self.high}")
+        return self
+
+
+class CountsFit(_Model):
+    """The counts the factors were fitted to. Every field is required, ``p_value`` included."""
+
+    counts: Sha256
+    source: CountsSource
+    qubits: Annotated[tuple[QubitIndex, ...], Field(min_length=1)]
+    run_at: UtcDatetime
+    calibration: Fingerprint
+    p_value: Probability | None
+    impossible_shots: Annotated[int, Strict(), Field(ge=0)]
+
+    @model_validator(mode="after")
+    def _consistent(self) -> CountsFit:
+        repeated = [q for q, times in Counter(self.qubits).items() if times > 1]
+        if repeated:
+            raise ValueError(f"qubit {repeated[0]} is listed twice")
+        if self.impossible_shots and self.p_value != 0:
+            raise ValueError(f"impossible_shots is {self.impossible_shots}, so p_value must be 0")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _every_field(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Keep a null p_value, which a profile's exclude_none dump would otherwise drop."""
+        data = handler(self)
+        return {name: data.get(name) for name in type(self).model_fields}
+
+
+class UnmodeledError(_Model):
+    """Error the calibration leaves out, as factors on the profile's own error rates.
+
+    ``gates`` scales every calibrated gate error, ``readout`` scales P(1|0) and P(0|1)
+    together. T1, T2, dephasing, preparation error, durations and effects are never scaled.
+    """
+
+    gates: ErrorFactor | None = None
+    readout: ErrorFactor | None = None
+    fit: CountsFit | None = None
+
+    @model_validator(mode="after")
+    def _shape(self) -> UnmodeledError:
+        if self.gates is None and self.readout is None:
+            raise ValueError("give a gates factor, a readout factor or both")
+        for name, factor in (("gates", self.gates), ("readout", self.readout)):
+            if factor is None:
+                continue
+            interval = factor.low is not None or factor.high is not None
+            if self.fit is not None and not interval:
+                raise ValueError(
+                    f"{name}: a fitted factor states its interval; give low and high,"
+                    " or one of them with bound"
+                )
+            if self.fit is None and interval:
+                raise ValueError(
+                    f"{name}: an interval needs the fit it came from;"
+                    " add fit, or drop low, high and bound"
+                )
+        return self
+
+    def lines(self) -> tuple[str, ...]:
+        """The phrases ``nv show`` prints one per line and reports join with "; "."""
+        phrases = [f"{axis} errors {_describe_factor(f)}" for axis, f in self._factors()]
+        fit = self.fit
+        if fit is not None:
+            short = fit.counts.removeprefix("sha256:")[:12]
+            phrases.append(f"fitted to {fit.source} counts sha256:{short}")
+            qubits = "-".join(map(str, fit.qubits))
+            on = f"on qubit {qubits}" if len(fit.qubits) == 1 else f"on qubits {qubits}"
+            run = fit.run_at.date().isoformat()
+            phrases.append(f"{on}, run {run} ({_describe_p(fit.p_value)})")
+            if fit.impossible_shots:
+                shots = "shot" if fit.impossible_shots == 1 else "shots"
+                phrases.append(f"the profile ruled out {fit.impossible_shots} {shots}")
+        phrases.append("T1, T2 and preparation error are not scaled")
+        return tuple(phrases)
+
+    def _factors(self) -> tuple[tuple[str, ErrorFactor], ...]:
+        named = (("gate", self.gates), ("readout", self.readout))
+        return tuple((axis, factor) for axis, factor in named if factor is not None)
+
+
+def _describe_factor(factor: ErrorFactor) -> str:
+    """The factor and its interval in words, such as "x0.096 (95% interval, at most 0.311)"."""
+    text = f"x{factor.factor:.3g}"
+    if factor.bound == "lower":
+        return f"{text} (95% interval, at most {factor.high:.3g})"
+    if factor.bound == "upper":
+        return f"{text} (95% interval, at least {factor.low:.3g})"
+    if factor.low is not None:
+        return f"{text} (95% interval {factor.low:.3g} to {factor.high:.3g})"
+    return text
+
+
+def _describe_p(p_value: float | None) -> str:
+    if p_value is None:
+        return "fit not testable"
+    return f"p = {p_value:.2g}" + (", a poor fit" if p_value < 0.01 else "")
+
+
+def _unmodeled_clause(unmodeled: UnmodeledError | None) -> str:
+    """What a citation adds after the fingerprint for a profile with unmodeled-error factors."""
+    if unmodeled is None:
+        return ""
+    rates = ", ".join(f"{axis} error rates x{f.factor:.3g}" for axis, f in unmodeled._factors())
+    fit = unmodeled.fit
+    fitted = "" if fit is None else f" fitted to {fit.source} counts {fit.counts}"
+    return f"; unmodeled-error factors ({rates}){fitted}"
 
 
 # "IBM Quantum, via qiskit-ibm-runtime", "X (via Y)", "X via Y"
@@ -412,6 +556,7 @@ class Profile(_Model):
     qubits: tuple[QubitRecord, ...] = ()
     calibrations: tuple[CalibrationRecord, ...] = ()
     effects: tuple[Effect, ...] = ()
+    unmodeled_error: UnmodeledError | None = None
     benchmarks: JsonObject = Field(default_factory=FrozenDict)
     provenance: Provenance = Field(default_factory=Provenance)
     extensions: JsonObject = Field(default_factory=FrozenDict)
@@ -461,7 +606,7 @@ class Profile(_Model):
     @cached_property
     def fingerprint(self) -> str:
         """sha256 of the canonical physics: everything except provenance and extensions."""
-        physics = {k: v for k, v in self.to_dict().items() if k not in ("provenance", "extensions")}
+        physics = {k: v for k, v in self.to_dict().items() if k not in _NOT_PHYSICS}
         return _sha256(physics)
 
     @cached_property
@@ -486,6 +631,12 @@ class Profile(_Model):
         copy = super().model_copy(deep=deep)
         copy.__dict__.pop("table", None)  # the cached table points at the original
         return copy
+
+    def uncorrected(self) -> Profile:
+        """This profile without ``unmodeled_error``: the calibration as stated."""
+        if self.unmodeled_error is None:
+            return self
+        return self.model_copy(update={"unmodeled_error": None})
 
     # serialization -------------------------------------------------------------------------
 
@@ -593,7 +744,7 @@ class Profile(_Model):
     __str__ = __repr__
 
     def summary(self) -> str:
-        dev, table, prov = self.device, self.table, self.provenance
+        dev, prov, stated = self.device, self.provenance, self.uncorrected()
         when = dev.calibrated_at.date().isoformat() if dev.calibrated_at else "undated"
         lines = [
             f"{self.id}@{when}  {dev.technology}, {dev.num_qubits} qubits,"
@@ -603,9 +754,10 @@ class Profile(_Model):
         ]
         for name in self.gates:
             lines.append(
-                f"  {name:<10} {table.arity(name)}q  {_describe_loci(gate_stats(self, name))}"
+                f"  {name:<10} {stated.table.arity(name)}q"
+                f"  {_describe_loci(gate_stats(stated, name))}"
             )
-        medians = qubit_medians(self)
+        medians = qubit_medians(stated)
         if medians.t1_us is not None:
             lines.append(f"  median T1 {medians.t1_us:.4g} us")
         lines.append(
@@ -613,6 +765,9 @@ class Profile(_Model):
             if medians.readout_error is None
             else f"  median readout error {medians.readout_error:.3g}"
         )
+        note = unmodeled_note(self)
+        if note:
+            lines.append(f"  unmodeled error: {'; '.join(note)}")
         return "\n".join(lines)
 
     def citation(self, style: Literal["text", "bibtex"] = "text") -> str:
@@ -621,10 +776,11 @@ class Profile(_Model):
         who = prov.attribution or dev.vendor or "unknown source"
         ref = f"{self.id}@{when}" if dev.calibrated_at else self.id
         profile = f"NoiseVault {__version__} profile {ref}"
+        pinned = f"sha256:{self.fingerprint}{_unmodeled_clause(self.unmodeled_error)}"
         if style == "text":
             return (
                 f"{who}. Calibration of {dev.name}, {when}. {prov.source or 'source unknown'}. "
-                f"{profile}, fingerprint sha256:{self.fingerprint}."
+                f"{profile}, fingerprint {pinned}."
             )
         dated = dev.calibrated_at is not None
         key = re.sub(r"[^a-z0-9]+", "_", f"{self.id}_{when[:10]}" if dated else self.id)
@@ -632,7 +788,7 @@ class Profile(_Model):
         year = f"  year = {{{when[:4]}}},\n" if dated else ""
         via = _VIA.fullmatch(who)
         retrieved = f"Retrieved via {via['via']}. " if via else ""
-        published = f"{profile}, sha256:{self.fingerprint}"
+        published = f"{profile}, {pinned}"
         note = f"{retrieved}Source: {prov.source or 'unknown'}; license {prov.license or 'unknown'}"
         # Double braces: BibTeX would lowercase the title and split an organization into
         # first and last names.
@@ -883,7 +1039,48 @@ def _profile_issues(profile: Profile) -> list[str]:
             issues.append(f"{where}: gate {effect.gate!r} is not defined in gates")
         if effect.qubits and max(effect.qubits) >= n:
             issues.append(f"{where}: qubit outside 0..{n - 1}")
+
+    unmodeled = profile.unmodeled_error
+    if unmodeled is None:
+        return issues
+    stated_readout = profile.readout is not None or any(
+        q.readout is not None for q in profile.qubits
+    )
+    if unmodeled.readout is not None and not stated_readout:
+        issues.append(
+            "unmodeled_error.readout: the profile states no readout error,"
+            " so the factor scales nothing"
+        )
+    fit = unmodeled.fit
+    if fit is None:
+        return issues
+    issues += [
+        f"unmodeled_error.fit.qubits: qubit {q} is outside 0..{n - 1}" for q in fit.qubits if q >= n
+    ]
+    calibration = _calibration_fingerprint(profile)
+    if fit.calibration != calibration:
+        issues.append(
+            f"unmodeled_error.fit.calibration: fitted to calibration nv:{fit.calibration[:12]},"
+            f" but this profile's calibration is nv:{calibration[:12]};"
+            " drop unmodeled_error or refit with nv compare"
+        )
     return issues
+
+
+_NOT_PHYSICS = ("provenance", "extensions")
+
+
+def _calibration_fingerprint(profile: Profile) -> str:
+    """``profile.uncorrected().fingerprint``, computed without building a second profile."""
+    skip = (*_NOT_PHYSICS, "unmodeled_error")
+    return _sha256({k: v for k, v in profile.to_dict().items() if k not in skip})
+
+
+def unmodeled_note(profile: Profile) -> tuple[str, ...]:
+    """The unmodeled-error phrases ``nv show``, reports and ``summary()`` print; () without it."""
+    if profile.unmodeled_error is None:
+        return ()
+    return (*profile.unmodeled_error.lines(), *profile.table.unscaled())
 
 
 # helpers ----------------------------------------------------------------------------------

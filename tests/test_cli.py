@@ -12,7 +12,7 @@ from typing import NamedTuple
 
 import pytest
 from conftest import MANILA_V01, migrated, require, toy
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 import noisevault as nv
 from noisevault.cli import app
@@ -586,6 +586,69 @@ def test_show_lists_natives_one_qubit_then_two_qubit_then_reset(tmp_path: Path) 
     out = runner.invoke(app, ["show", str(path)], env={"COLUMNS": "80"}).stdout
     shown = [line.split()[0] for line in out.splitlines() if "(1q)" in line or "(2q)" in line]
     assert shown == ["id", "rx", "rz", "sx", "x", "cz", "rzz", "reset"]
+
+
+def test_show_states_the_calibration_and_adds_a_row_for_unmodeled_error(tmp_path: Path) -> None:
+    kingston = nv.load("ibm_kingston@2026-04-15")
+
+    def fitted(p_value: float) -> tuple[Profile, str]:
+        fit = {
+            "counts": "sha256:3fa1c2d4e5b6" + "0" * 52,
+            "source": "hardware",
+            "qubits": [148, 149, 150, 151],
+            "run_at": "2026-04-16T09:30:02Z",
+            "calibration": kingston.fingerprint,
+            "p_value": p_value,
+            "impossible_shots": 0,
+        }
+        block = {
+            "gates": {"factor": 1.84, "low": 1.54, "high": 2.12},
+            "readout": {"factor": 1.58, "low": 1.32, "high": 1.84},
+            "fit": fit,
+        }
+        profile = kingston.model_copy(update={"unmodeled_error": block})
+        return profile, str(profile.save(tmp_path / f"fitted-{p_value}.json"))
+
+    def show(*args: str) -> Result:
+        return runner.invoke(app, ["show", *args], env={"COLUMNS": "80"})
+
+    profile, path = fitted(0.41)
+    result = show(path)
+    lines = _unstyled(result.stdout).splitlines()
+    row = lines.index("unmodeled     gate errors x1.84 (95% interval 1.54 to 2.12)")
+    assert lines[row - 1].startswith("readout       median error")
+    assert lines[row : row + 6] == [
+        "unmodeled     gate errors x1.84 (95% interval 1.54 to 2.12)",
+        "              readout errors x1.58 (95% interval 1.32 to 1.84)",
+        "              fitted to hardware counts sha256:3fa1c2d4e5b6",
+        "              on qubits 148-149-150-151, run 2026-04-16 (p = 0.41)",
+        "              T1, T2 and preparation error are not scaled",
+        "              readout of qubit 146 is not scaled (no better than chance)",
+    ]
+    stated = (
+        _unstyled(show("ibm_kingston@2026-04-15").stdout)
+        .replace(kingston.fingerprint, profile.fingerprint)
+        .replace(kingston.short_fingerprint, profile.short_fingerprint)
+    )
+    assert lines[:row] + lines[row + 6 :] == stated.splitlines()
+    assert result.stderr == ""
+    qubits = ["--qubits", "146,149"]
+    assert (
+        show(path, *qubits).stdout.splitlines()[-3:]
+        == (show("ibm_kingston@2026-04-15", *qubits).stdout.splitlines()[-3:])
+    )
+    data = json.loads(show(path, "--json").stdout)
+    assert data["unmodeled_error"] == profile.unmodeled_error.model_dump(mode="json")
+    assert data["unmodeled_note"] == [line[14:] for line in lines[row : row + 6]]
+    plain = json.loads(show("ibm_kingston@2026-04-15", "--json").stdout)
+    assert (plain["unmodeled_error"], plain["unmodeled_note"]) == (None, [])
+    assert show(fitted(0.01)[1]).stderr == ""
+    poor = show(fitted(0.003)[1])
+    assert "on qubits 148-149-150-151, run 2026-04-16 (p = 0.003, a poor fit)" in poor.stdout
+    assert poor.stderr == (
+        "warning: the unmodeled-error factors are a poor fit to their counts (p = 0.003);"
+        " no one pair of factors fits every circuit\n"
+    )
 
 
 def test_show_qubits_prints_microseconds_with_one_decimal() -> None:
