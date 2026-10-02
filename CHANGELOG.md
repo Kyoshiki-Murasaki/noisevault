@@ -16,9 +16,12 @@ All notable changes to NoiseVault. Versions follow [Semantic Versioning](https:/
     `unmodeled error:` and names each error left as stated. `report.to_dict()` holds the same
     text under `unmodeled_error`.
   - `nv show` prints the calibration as stated, then the factors on an `unmodeled` row.
+  - A factor and its interval print with three significant digits, or with more when three
+    would print two different values alike, as in `x1.008 (95% interval 1.001 to 1.015)`.
   - The field is part of the fingerprint, and `nv cite` names the factors.
     `profile.uncorrected()` returns the profile without the field, with the calibration's
-    fingerprint. Profiles without the field keep their fingerprints.
+    fingerprint. `profile.calibration_fingerprint` is that fingerprint, the one a counts file
+    names. Profiles without the field keep their fingerprints.
   - NoiseVault 0.2.0 refuses a profile that sets the field.
 
   See [Unmodeled error](docs/profile-format.md#unmodeled-error).
@@ -37,10 +40,16 @@ All notable changes to NoiseVault. Versions follow [Semantic Versioning](https:/
   fitted factors in `unmodeled_error`, and `--json` prints the result as JSON. Before the fit,
   `-o` refuses the counts file, the profile file and any path in the vault or among the bundled
   profiles. In Python, `profile.compare(counts)` returns the same result, and
-  `result.fitted_profile()` returns the profile with the factors.
+  `result.fitted_profile()` returns the profile with the factors. `result.summary()` returns the
+  text that `nv compare` prints. `result.summary_lines()` returns the same lines, each with the
+  number of leading characters that `nv compare` prints in bold, for a program that styles the
+  output itself.
   - `noisevault.counts` reads and writes counts files. `load_counts(path)` reads one as a
     `MeasuredCounts`. `plan(profile)` returns the circuits to run, with every wait written as a
     `delay`. `simulate(profile, circuits, shots=..., seed=...)` draws counts from a profile.
+    `SAMPLER_V2_OPTIONS` maps each Qiskit Runtime `SamplerV2` option that `load_counts` checks,
+    such as `twirling.enable_gates`, to the value it requires, for code that runs the circuits
+    through `SamplerV2` itself.
   - `load_counts` raises `nv.CountsError` for a file it refuses. The message names the file and
     the field, and `hint` says how to fix it.
   - A command given a counts file where it takes a profile says so. With the two arguments
@@ -48,8 +57,9 @@ All notable changes to NoiseVault. Versions follow [Semantic Versioning](https:/
   - `scripts/run_on_ibm.py` runs the `nv compare` circuits on an IBM device through your IBM
     Quantum account. It writes a counts file bound to the calibration in effect when the job ran.
 
-  See [Counts format](docs/counts-format.md) and
-  [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware).
+  See [Counts format](docs/counts-format.md),
+  [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware) and
+  [How nv compare fits the factors](docs/limitations.md#how-nv-compare-fits-the-factors).
 
 ### Fixed
 

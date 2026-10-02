@@ -89,11 +89,114 @@ These checks show the exports implement the model consistently. None of them com
 with outcomes measured on hardware. `nv compare` makes that comparison for counts you measure.
 It scores a profile on them and fits how far its gate and readout error rates must scale to
 match the device. [Measure a profile against hardware](recipes.md#measure-a-profile-against-hardware)
-shows how. The test suite checks the fit on simulated counts. On ibm_kingston, each 95% interval
-covers the factor the counts were simulated with in at least 88 of 100 runs.
+shows how. [How nv compare fits the factors](#how-nv-compare-fits-the-factors) explains the fit and
+how its intervals were tested.
 
 NoiseVault has not yet been validated against hardware runs. No counts from a real device have
 been compared, so treat its predictions as estimates whose error against the device is unknown.
+
+## How nv compare fits the factors
+
+`nv compare` reports a gate factor and a readout factor, each with a 95% interval, and a p-value
+for the fit. How far to trust those numbers depends on how the fit computes them and on what the
+tests have shown.
+
+### Which counts it accepts
+
+`nv compare` refuses counts that name another device or another calibration fingerprint, that
+ran before the calibration, or that use an op the profile does not calibrate on the measured
+qubits. The fit starts from the calibration without `unmodeled_error`. The factors it reports
+therefore multiply the stated error rates, even when the profile already carries factors.
+
+### The likelihood
+
+The fit is a multinomial maximum likelihood over all circuits at once, with one factor on every
+gate error rate and one on every readout error rate. It searches each factor from 0.05 to 20.
+NoiseVault's reference simulator computes the outcome probabilities on the profile with the
+candidate factors set in `unmodeled_error`. That is the model every export applies, and
+`nv check` tests each export against the same reference. A factor therefore means the same thing
+in the fit as in a saved profile.
+
+The reference runs exactly at 25 gate factors, evenly spaced in log factor, and at each factor
+where a measured gate's scaled error equals its relaxation floor. Between those runs, the
+probabilities are linear in log factor, so they stay between 0 and 1. The fit applies readout
+error exactly at every point. The deviance, the fitted TVDs and the counts drawn for the p-value all
+come from an exact run at the fitted factors.
+
+### Which factors the counts identify
+
+Gate error and readout error can move counts the same way. The `readout` circuit from `plan()` has
+no gates, so only readout error moves it, and that circuit separates the two factors.
+
+`nv compare` reports a factor as not identified when no circuit moves with it, when fewer than
+100 shots fall in circuits that move with it, or when its interval reaches both ends of the
+search range. It reports both factors as not identified when they move the counts in the same
+direction, that is, when the smallest eigenvalue of the Fisher information is below 1e-6 of the
+largest. A factor whose interval reaches one end of the range keeps a one-sided interval, printed
+with "at most" or "at least".
+
+### The goodness-of-fit test
+
+The deviance is twice the gap between the log-likelihood of the counts' own frequencies and
+that of the fitted model. The test compares the deviance with its degrees of freedom. Those are
+the outcomes the profile can produce at some factor in the range, minus one for each circuit,
+minus the rank of the Fisher information. That rank is 2 when the counts determine both factors,
+and less when they do not.
+
+The p-value ranks the deviance among the deviances of 400 sets of counts drawn from the fitted
+model, so the smallest p it can report is 1/401, about 0.0025. Below 0.01, `nv compare` reports
+the fit as beyond shot noise, which means that no one pair of factors fits every circuit. With no
+degrees of freedom left, it reports the fit as not testable and gives no p-value.
+
+The `noise TVD 95%` column comes from the same draws. It is the 95th percentile of the TVD
+between each drawn set and the model refitted to it, and `nv compare` flags each circuit whose
+fitted TVD exceeds it. The draws are seeded from the SHA-256 of the counts, so the same profile
+and counts always give the same output.
+
+### The intervals
+
+Each 95% interval holds the factor values that a likelihood-ratio test does not reject at the 5%
+level, with the other factor refitted at each value. The starting cutoff is the chi-square value
+3.84. When the deviance exceeds its degrees of freedom, the cutoff is multiplied by their ratio,
+the dispersion, so a fit that misses by more than shot noise gets wider intervals.
+
+The chi-square cutoff is a large-sample approximation, and it covers too little when a factor
+rests on a few error shots. On one qubit with a readout error of 0.00055 and 4000 shots, about
+two shots read wrong, and intervals from the chi-square cutoff alone contain the true factor with
+probability 0.86. NoiseVault therefore checks each end of an interval again by simulation. It
+draws 400 sets of counts from the model at that end, with the same shots per circuit, and
+computes the likelihood-ratio statistic on each. The end passes when at least 5% of the drawn
+statistics are as large as the observed one. The end moves outward while it passes, and
+NoiseVault locates the outermost passing end to within 2% of the chi-square half-width. A value
+inside the chi-square cutoff always passes, so this step can only widen an interval. In the
+one-qubit case, the probability rises to 0.975.
+
+### Outcomes the profile rules out
+
+An outcome can have probability 0 at every factor, as when the profile states a readout error of
+exactly 0 for a measured qubit. No pair of factors explains a shot on such an outcome, so those
+shots leave the likelihood, and the fit uses the other shots. The shots still count in the TVDs,
+and they set p to 0, so the fit reads `ruled out`. When the profile rules out every shot, neither
+factor is identified.
+
+### What the tests show, and what they do not
+
+A CI job simulates 100 runs of the ibm_kingston plan at 4000 shots per circuit, with gate errors
+x1.8 and readout errors x1.3. It requires each interval to contain its true factor in 88 to 100
+of the runs. The gate interval contains the true gate factor in 93 runs, and the readout
+interval contains the true readout factor in 95. To run the job locally, set
+`NOISEVAULT_SLOW=1` and run `pytest tests/test_compare.py -k each_interval_covers`.
+
+Two faster tests run with the rest of the suite. In the one-qubit case above, the probability
+must be at least 0.95. On one qubit with a readout error of 0.1 and a million shots, the interval
+must contain the true factor in 180 to 199 of 200 runs.
+
+Each of these tests draws its counts from the model it fits, and the two-factor test covers one
+device at one pair of true factors. The tests show that the intervals cover factors the model can
+express. They do not show how the factors behave when the device differs from the model in a way
+that no pair of factors captures. On such counts, the goodness-of-fit test is the check, and an
+interval describes the best pair of factors, not the device. No counts from a real device have
+been compared yet.
 
 ## What the unmodeled-error factors absorb
 

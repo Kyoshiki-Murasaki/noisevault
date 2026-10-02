@@ -290,6 +290,8 @@ close that model is to the device. To measure that, run circuits on the device a
 profile on their counts. `nv compare` fits two factors, one on every gate error rate and one on
 every readout error rate. Each factor has a 95% interval, and a goodness-of-fit test says whether
 one pair of factors explains every circuit.
+[How nv compare fits the factors](limitations.md#how-nv-compare-fits-the-factors) explains the
+fit and how its intervals were tested.
 
 On an IBM device, `scripts/run_on_ibm.py` runs the circuits and saves the counts file. It needs a
 clone of this repository with the `ibm` extra installed, and an IBM Quantum account that you

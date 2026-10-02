@@ -71,8 +71,9 @@ Unknown keys are errors everywhere except inside `execution.options`. Values are
 of `"4000"` or `4000.0`, or a flag of `1`, is an error rather than a coercion.
 
 `profile.fingerprint` is the fingerprint of the planning profile without `unmodeled_error`, as 64
-hex digits. It equals `profile.uncorrected().fingerprint` in Python. `nv compare` scores the counts
-only against a profile with this calibration fingerprint and this `backend`.
+hex digits. In Python, it is `profile.calibration_fingerprint`, the fingerprint of
+`profile.uncorrected()`. `nv compare` scores the counts only against a profile with this
+calibration fingerprint and this `backend`.
 
 ## Execution
 
@@ -103,7 +104,8 @@ value shown, or `load_counts` refuses the file:
 | `execution.meas_type` | `"classified"` |
 
 These are the `SamplerV2` defaults in qiskit-ibm-runtime 0.40 and 0.49, so a run with the default
-options passes.
+options passes. `SAMPLER_V2_OPTIONS` in `noisevault.counts` holds this table as a mapping from
+each option's path to its required value.
 
 A job id links to the IBM Quantum account that ran the job, so share a counts file only where you
 would share its job ids. NoiseVault reads counts files from your disk and never uploads them. A

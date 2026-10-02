@@ -230,10 +230,14 @@ Each importer turns its source's conventions into explicit fields, so no convers
 
 A source is one module in `src/noisevault/sources/`. To add one:
 
-1. Write `src/noisevault/sources/<name>.py`. Convert the source's data into a profile dict and
-   validate it with `Profile.from_dict`. Raise `SourceDataError` for data the module cannot
-   read. Import optional packages inside functions, never at module level, so a core install
-   keeps working.
+1. Write `src/noisevault/sources/<name>.py`. Convert the source's data into a profile dict, and
+   build the profile with `Origin(name, hint).profile(data)` from `noisevault.sources`. `name`
+   says where the data came from, such as the file name or the URL. `hint` is the next step a
+   user can take, such as `f"correct that value in {path.name}"`, or `OLDER_HINT` for a source
+   that takes a date. A value the profile format refuses then raises `SourceDataError` with one
+   line that names the source, the field and the value. For data the module cannot read, raise
+   `origin.refuse(problem)`. Import optional packages inside functions, never at module level,
+   so a core install keeps working.
 2. Fill `provenance`: `data_kind`, `source_kind`, `source`, `source_url`, `license`,
    `attribution`, `redistributable`, `retrieved_at` and the `source_hash` of the raw bytes.
    Set `redistributable: "yes"` only when the license allows redistribution.
@@ -245,7 +249,9 @@ A source is one module in `src/noisevault/sources/`. To add one:
    licensed.
 5. For a live source, expose `pull(device, *, at=None) -> Profile`, register it in
    `_PULL_SOURCES` in `src/noisevault/catalog.py`, and raise `SourceUnavailable` for every
-   network or lookup failure.
+   network or lookup failure. Read each reply with `read_reply` from `noisevault.sources`.
+   `read_reply(raw, url, shape, sender=..., hint=...)` raises `SourceUnavailable` that names the
+   URL when the reply is not JSON or does not match `shape`, a pydantic `TypeAdapter`.
 6. Pass an error's next step as `hint=`, not in the message. `nv` prints the hint on its own
    `hint:` line.
 7. For a bundled source, add the module to `SOURCES` in `scripts/build_catalog.py`, run

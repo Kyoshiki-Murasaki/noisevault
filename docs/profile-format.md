@@ -384,6 +384,9 @@ An interval has one of three shapes:
 | Open below | `high`, and `bound` set to `"lower"` | `x0.096 (95% interval, at most 0.311)` |
 | Open above | `low`, and `bound` set to `"upper"` | `x20 (95% interval, at least 11.2)` |
 
+Each value prints with three significant digits, or with more when three would print two
+different values alike, as in `x1.008 (95% interval 1.001 to 1.015)`.
+
 The factor lies inside its interval. Every factor in a block with `fit` has an interval, and a
 factor in a block without `fit` has none.
 
