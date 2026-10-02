@@ -7,12 +7,17 @@ T1/T2 and readout. The upgrade keeps every number and turns conventions into exp
 ``virtual`` (its disabled records stay), a missing value stays missing (so an ``rz`` without
 that evidence stays a calibrated or uncalibrated native), and the per-qubit readout pair wins
 over the averaged ``readout_error``. A ``qiskit_fake`` file keeps the package's Apache-2.0
-license only when its ``raw_hash`` is a verified package snapshot.
+license only when its ``raw_hash`` is a verified package snapshot. The 0.1 reader parsed
+``operational`` with pydantic's lax booleans, so ``"false"``, ``"no"``, ``"off"`` and ``0``
+disable as ``false`` does. The upgrade refuses any other value.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, NoReturn
+
+from pydantic import TypeAdapter, ValidationError
 
 from . import gates
 from .errors import NoiseVaultError
@@ -42,7 +47,7 @@ _FIELDS: dict[str, type | None] = {
     "provider": str,
     "backend_name": str,
     "num_qubits": None,
-    "captured_at": None,
+    "captured_at": str,
     "basis_gates": list,
     "coupling_map": list,
     "gates": list,
@@ -53,7 +58,7 @@ _JSON_TYPES = {dict: "an object", list: "a list", str: "a string"}
 
 
 def upgrade_v01(old: dict[str, Any]) -> dict[str, Any]:
-    _check_shape(old)
+    old = _parse(old)
     provider = old["provider"]
     by_name: dict[str, list[dict[str, Any]]] = {}
     for gate in old["gates"]:
@@ -91,13 +96,18 @@ def upgrade_v01(old: dict[str, Any]) -> dict[str, Any]:
         extra["v01_harvester_version"] = prov["harvester_version"]
     extensions = dict(old.get("extensions") or {})
     frequencies = {
-        str(q["index"]): q["frequency_ghz"] for q in old["qubits"] if q.get("frequency_ghz")
+        str(q["index"]): q["frequency_ghz"]
+        for q in old["qubits"]
+        if q.get("frequency_ghz") is not None
     }
     if frequencies:
         extensions["v01_qubit_frequency_ghz"] = frequencies
     metadata = {str(q["index"]): q["metadata"] for q in old["qubits"] if q.get("metadata")}
     if metadata:
         extensions["v01_qubit_metadata"] = metadata
+    calibrated_at = prov.get("source_timestamp")
+    if calibrated_at is None:
+        calibrated_at = old["captured_at"]
 
     return {
         "noisevault": "1.0",
@@ -106,7 +116,7 @@ def upgrade_v01(old: dict[str, Any]) -> dict[str, Any]:
             "vendor": "ibm" if provider in _IBM_PROVIDERS else provider,
             "technology": "superconducting",
             "num_qubits": old["num_qubits"],
-            "calibrated_at": prov.get("source_timestamp") or old["captured_at"],
+            "calibrated_at": calibrated_at,
         },
         "connectivity": {"edges": [list(e) for e in old["coupling_map"]], "directed": True},
         "gates": definitions,
@@ -131,41 +141,79 @@ def upgrade_v01(old: dict[str, Any]) -> dict[str, Any]:
 class _InvalidV01(NoiseVaultError, ValueError): ...
 
 
-def _check_shape(old: dict[str, Any]) -> None:
-    """Raise ValueError naming the first field the upgrade cannot read."""
+def _fail(problem: str) -> NoReturn:
+    raise _InvalidV01(
+        f"not a valid NoiseVault 0.1 file: {problem}",
+        hint="fix that field or pull the device again",
+    )
 
-    def fail(problem: str) -> None:
-        raise _InvalidV01(
-            f"not a valid NoiseVault 0.1 file: {problem}",
-            hint="fix that field or pull the device again",
-        )
 
+def _parse(old: dict[str, Any]) -> dict[str, Any]:
+    """Return the 0.1 dict with its flags parsed. ValueError names the first unreadable field."""
     for key, kind in _FIELDS.items():
         if key not in old:
-            fail(f"{key} is missing")
+            _fail(f"{key} is missing")
         if kind is not None and not isinstance(old[key], kind):
-            fail(f"{key} should be {_JSON_TYPES[kind]}, not {_json_type(old[key])}")
+            _fail(f"{key} should be {_JSON_TYPES[kind]}, not {_json_type(old[key])}")
+    gate_entries = []
     for i, gate in enumerate(old["gates"]):
         if not (
             isinstance(gate, dict)
             and isinstance(gate.get("name"), str)
             and isinstance(gate.get("qubits"), list)
         ):
-            fail(f"gates[{i}] needs a name and a list of qubits")
+            _fail(f"gates[{i}] needs a name and a list of qubits")
         if not isinstance(gate.get("error"), int | float | None):
-            fail(f"gates[{i}]: error should be a number, not {_json_type(gate['error'])}")
+            _fail(f"gates[{i}]: error should be a number, not {_json_type(gate['error'])}")
+        gate_entries.append({**gate, "operational": _flag(gate, f"gates[{i}]")})
+    qubit_entries = []
     for i, qubit in enumerate(old["qubits"]):
         if not (isinstance(qubit, dict) and isinstance(qubit.get("index"), int)):
-            fail(f"qubits[{i}] needs an integer index")
+            _fail(f"qubits[{i}] needs an integer index")
+        if not isinstance(qubit.get("frequency_ghz"), int | float | None):
+            _fail(
+                f"qubits[{i}]: frequency_ghz should be a number,"
+                f" not {_json_type(qubit['frequency_ghz'])}"
+            )
+        if not isinstance(qubit.get("metadata", {}), dict):
+            _fail(f"qubits[{i}]: metadata should be an object, not {_json_type(qubit['metadata'])}")
+        qubit_entries.append({**qubit, "operational": _flag(qubit, f"qubits[{i}]")})
     for i, edge in enumerate(old["coupling_map"]):
         if not isinstance(edge, list):
-            fail(f"coupling_map[{i}] should be a list of two qubits, not {_json_type(edge)}")
-    if not isinstance(old["provenance"].get("notes", []), list):
-        fail("provenance.notes should be a list")
-    if not isinstance(old["provenance"].get("raw_hash"), str | None):
-        fail("provenance.raw_hash should be a string")
+            _fail(f"coupling_map[{i}] should be a list of two qubits, not {_json_type(edge)}")
+    prov = old["provenance"]
+    if not isinstance(prov.get("notes", []), list):
+        _fail("provenance.notes should be a list")
+    if not isinstance(prov.get("raw_hash"), str | None):
+        _fail("provenance.raw_hash should be a string")
+    if not isinstance(prov.get("harvester_version", ""), str):
+        _fail(
+            "provenance.harvester_version should be a string,"
+            f" not {_json_type(prov['harvester_version'])}"
+        )
+    if not isinstance(prov.get("source_timestamp"), str | None):
+        _fail(
+            "provenance.source_timestamp should be a string,"
+            f" not {_json_type(prov['source_timestamp'])}"
+        )
     if not isinstance(old.get("extensions"), dict | None):
-        fail("extensions should be an object")
+        _fail("extensions should be an object")
+    return {**old, "gates": gate_entries, "qubits": qubit_entries}
+
+
+_BOOL = TypeAdapter(bool)
+
+
+def _flag(entry: dict[str, Any], where: str) -> bool:
+    value = entry.get("operational", True)
+    try:
+        return _BOOL.validate_python(value)
+    except ValidationError:
+        _fail(f"{where}: operational should be true or false, not {_shown(value)}")
+
+
+def _shown(value: Any) -> str:
+    return json.dumps(value) if isinstance(value, str | int | float) else _json_type(value)
 
 
 def _json_type(value: Any) -> str:
@@ -205,7 +253,7 @@ def _explicitly_free(entry: dict[str, Any]) -> bool:
 def _record(entry: dict[str, Any]) -> dict[str, Any]:
     record: dict[str, Any] = {"gate": entry["name"], "qubits": entry["qubits"]}
     error = entry.get("error")
-    if not entry.get("operational", True) or (error is not None and error >= 1):
+    if not entry["operational"] or (error is not None and error >= 1):
         record["disabled"] = True
     elif error is not None:
         record["avg_infidelity"] = error
@@ -224,6 +272,6 @@ def _qubit(q: dict[str, Any]) -> dict[str, Any]:
         out["readout"] = {"p1_given_0": a, "p0_given_1": b}
     elif q.get("readout_error") is not None:
         out["readout"] = {"error": q["readout_error"]}
-    if not q.get("operational", True):
+    if not q["operational"]:
         out["disabled"] = True
     return out

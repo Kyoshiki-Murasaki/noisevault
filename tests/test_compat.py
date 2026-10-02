@@ -125,9 +125,60 @@ def test_missing_values_stay_missing() -> None:
     assert table.qubit(2).readout is None
 
 
+LEGACY_FLAGS = [
+    ("false", "disabled"),
+    ("no", "disabled"),
+    ("off", "disabled"),
+    ("0", "disabled"),
+    (0, "disabled"),
+    (0.0, "disabled"),
+    ("true", "calibrated"),
+    ("yes", "calibrated"),
+    (1, "calibrated"),
+]
+
+
+@pytest.mark.parametrize(("flag", "state"), LEGACY_FLAGS, ids=repr)
+def test_a_gate_flag_is_read_as_0_1_read_it(flag: object, state: str) -> None:
+    data = _v01()
+    for gate in data["gates"]:
+        if gate["name"] == "sx" and gate["qubits"] == [0]:
+            gate["operational"] = flag
+    assert _upgrade(data).table.gate("sx", (0,)).state == state
+
+
+@pytest.mark.parametrize(("flag", "state"), LEGACY_FLAGS, ids=repr)
+def test_a_qubit_flag_is_read_as_0_1_read_it(flag: object, state: str) -> None:
+    data = _v01()
+    data["qubits"][0]["operational"] = flag
+    assert _upgrade(data).table.qubit(0).disabled is (state == "disabled")
+
+
+def test_a_zero_frequency_is_kept() -> None:
+    profile = _upgrade(_first_qubit(frequency_ghz=0))
+    assert profile.extensions["v01_qubit_frequency_ghz"]["0"] == 0
+
+
+def test_an_empty_source_timestamp_is_not_replaced_by_the_capture_time() -> None:
+    with pytest.raises(ValueError, match="calibrated_at"):
+        _upgrade(_prov(source_timestamp=""))
+
+
 def _first_gate(**changes) -> dict:
     data = _v01()
     data["gates"][0].update(changes)
+    return data
+
+
+def _first_qubit(**changes) -> dict:
+    data = _v01()
+    data["qubits"][0].update(changes)
+    return data
+
+
+def _prov(**changes) -> dict:
+    data = _v01()
+    data["provenance"].update(changes)
     return data
 
 
@@ -141,6 +192,30 @@ def _first_gate(**changes) -> dict:
         (_v01(gates=[{"name": "sx"}]), "gates[0] needs a name and a list of qubits"),
         (_first_gate(error="high"), "gates[0]: error should be a number"),
         (_v01(provenance={"raw_hash": ["x"]}), "provenance.raw_hash should be a string"),
+        (
+            _first_gate(operational="maybe"),
+            'gates[0]: operational should be true or false, not "maybe"',
+        ),
+        (_first_gate(operational=None), "gates[0]: operational should be true or false, not null"),
+        (_first_qubit(operational=2), "qubits[0]: operational should be true or false, not 2"),
+        (
+            _first_qubit(operational=[]),
+            "qubits[0]: operational should be true or false, not a list",
+        ),
+        (
+            _first_qubit(frequency_ghz="4.9"),
+            "qubits[0]: frequency_ghz should be a number, not a string",
+        ),
+        (_first_qubit(metadata="x"), "qubits[0]: metadata should be an object, not a string"),
+        (
+            _prov(harvester_version=1),
+            "provenance.harvester_version should be a string, not a number",
+        ),
+        (
+            _prov(source_timestamp=123),
+            "provenance.source_timestamp should be a string, not a number",
+        ),
+        (_v01(captured_at=123), "captured_at should be a string, not a number"),
     ],
     ids=[
         "empty",
@@ -150,6 +225,15 @@ def _first_gate(**changes) -> dict:
         "gate-qubits",
         "gate-error",
         "raw-hash",
+        "gate-flag-word",
+        "gate-flag-null",
+        "qubit-flag-number",
+        "qubit-flag-list",
+        "frequency",
+        "metadata",
+        "harvester-version",
+        "source-timestamp",
+        "captured-at",
     ],
 )
 def test_a_malformed_0_1_file_is_refused_with_the_field_to_fix(data: dict, message: str) -> None:
