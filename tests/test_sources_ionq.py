@@ -219,7 +219,8 @@ def _throttle(request: urllib.request.Request, timeout: float) -> None:
         (
             _refuse,
             "could not reach IonQ's API (timed out)",
-            "check the network connection and try again",
+            "check the network connection, or run nv list to see every profile you can load"
+            " offline",
         ),
         (_throttle, f"IonQ's API answered HTTP 429 for {ionq.API}/backends", "try again later"),
     ],

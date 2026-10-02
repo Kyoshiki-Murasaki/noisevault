@@ -22,6 +22,7 @@ from typing import Any
 from .. import __version__
 from ..errors import SourceUnavailable, did_you_mean
 from ..profile import Profile
+from . import OFFLINE_HINT
 
 API = "https://api.ionq.co/v0.4"
 _TIMEOUT_S = 30.0
@@ -341,6 +342,5 @@ def _get(url: str) -> bytes:
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         raise SourceUnavailable(
-            f"could not reach IonQ's API ({reason})",
-            hint="check the network connection and try again",
+            f"could not reach IonQ's API ({reason})", hint=OFFLINE_HINT
         ) from None

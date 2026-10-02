@@ -36,6 +36,7 @@ import numpy as np
 from .. import __version__
 from ..errors import SourceDataError, SourceUnavailable
 from ..profile import Profile
+from . import OFFLINE_HINT
 
 REPOSITORY = "https://github.com/Quantinuum/quantinuum-hardware-specifications"
 COMMIT = "59e68bb55bd616694dc8fa37a435e2a68fe1cb6b"  # pinned so a rebuild gives the same bundle
@@ -529,8 +530,4 @@ def _get(url: str) -> bytes:
             return response.read()
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
-        raise SourceUnavailable(
-            f"could not download {url} ({reason})",
-            hint="check the network connection, or run nv list to see every profile you can load"
-            " offline",
-        ) from None
+        raise SourceUnavailable(f"could not download {url} ({reason})", hint=OFFLINE_HINT) from None

@@ -832,12 +832,13 @@ def test_pull_checks_the_output_folder_before_fetching(monkeypatch, tmp_path: Pa
     )
 
 
-def test_pull_of_an_unsupported_vendor_says_which_sources_exist() -> None:
+def test_pull_of_an_unsupported_vendor_says_what_pull_takes() -> None:
     result = runner.invoke(app, ["pull", "rigetti_ankaa-3"])
     assert result.exit_code == 1
     assert result.stderr == (
-        "error: no live source pulls 'rigetti_ankaa-3'; pull reads only IBM devices (ibm_...,"
-        " --source ibm or ibm-account) and IonQ devices (ionq..., --source ionq)\n"
+        "error: no source pulls 'rigetti_ankaa-3'\n"
+        "hint: nv pull takes IBM devices (ibm_fez) and IonQ devices (ionq_forte-1), and nv list"
+        " shows every profile you can load offline\n"
     )
 
 

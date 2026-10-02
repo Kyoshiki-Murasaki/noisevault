@@ -163,10 +163,7 @@ def test_an_id_that_also_names_a_folder_here_loads_the_id(tmp_path: Path, monkey
 def test_pulling_a_bundled_device_no_source_serves_says_how_to_load_it() -> None:
     with pytest.raises(SourceUnavailable) as info:
         nv.pull("google_weber")
-    assert info.value.message == (
-        "no live source pulls 'google_weber'; pull reads only IBM devices (ibm_..., source='ibm'"
-        " or 'ibm-account') and IonQ devices (ionq..., source='ionq')"
-    )
+    assert info.value.message == "no source pulls 'google_weber'"
     assert info.value.hint == "google_weber is bundled, so nv.load('google_weber') loads it offline"
     assert str(info.value).endswith(f"; {info.value.hint}")
 

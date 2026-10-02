@@ -12,6 +12,7 @@ from datetime import date, datetime
 from .. import __version__
 from ..errors import SourceUnavailable, did_you_mean
 from ..profile import Profile
+from . import OFFLINE_HINT
 from .qiskit_backend import (
     as_utc,
     calibration_from_properties,
@@ -85,9 +86,7 @@ def fetch(url: str) -> bytes:
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         raise SourceUnavailable(
-            f"could not reach IBM's public endpoint ({reason})",
-            hint="check the network connection, or run nv list to see every profile you can load"
-            " offline",
+            f"could not reach IBM's public endpoint ({reason})", hint=OFFLINE_HINT
         ) from None
 
 

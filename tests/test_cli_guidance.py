@@ -82,7 +82,8 @@ def _unlisted(monkeypatch: pytest.MonkeyPatch) -> None:
             _offline,
             ["pull", "ionq_forte-1"],
             "could not reach IonQ's API (timed out)",
-            "check the network connection and try again",
+            "check the network connection, or run nv list to see every profile you can load"
+            " offline",
         ),
         (
             _without_runtime,

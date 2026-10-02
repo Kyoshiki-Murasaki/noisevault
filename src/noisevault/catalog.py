@@ -459,12 +459,14 @@ def _default_source(device: str) -> str:
     source = _pull_source(device)
     if source is not None:
         return source
-    bundled = any(i.id == device for i in bundled_profiles())
-    raise SourceUnavailable(
-        f"no live source pulls {device!r}; pull reads only IBM devices (ibm_..., source='ibm' or"
-        " 'ibm-account') and IonQ devices (ionq..., source='ionq')",
-        hint=f"{device} is bundled, so nv.load({device!r}) loads it offline" if bundled else None,
-    )
+    if any(i.id == device for i in bundled_profiles()):
+        hint = f"{device} is bundled, so nv.load({device!r}) loads it offline"
+    else:
+        hint = (
+            "nv pull takes IBM devices (ibm_fez) and IonQ devices (ionq_forte-1), and nv list"
+            " shows every profile you can load offline"
+        )
+    raise SourceUnavailable(f"no source pulls {device!r}", hint=hint)
 
 
 def _unknown_source(source: str) -> _BadArgument:

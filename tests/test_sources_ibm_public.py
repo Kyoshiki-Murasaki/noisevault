@@ -157,15 +157,16 @@ def test_repull_of_a_reconverted_calibration_replaces_the_older_file(
     assert loaded.table.qubit(0).t1_ns == 99_000
 
 
-def test_pull_of_an_id_no_source_serves_names_the_sources(vault: Path) -> None:
-    with pytest.raises(
-        nv.SourceUnavailable, match="no live source pulls 'quantinuum_h2-1'"
-    ) as info:
+def test_pull_of_an_id_no_source_serves_says_what_pull_takes(vault: Path) -> None:
+    with pytest.raises(nv.SourceUnavailable, match="no source pulls 'quantinuum_h2-1'") as info:
         nv.pull("quantinuum_h2-1")
     assert "nv.load('quantinuum_h2-1') loads it offline" in str(info.value)
-    with pytest.raises(nv.SourceUnavailable, match="ionq") as info:
+    with pytest.raises(nv.SourceUnavailable) as info:
         nv.pull("rigetti_ankaa-3")
-    assert "nv.load" not in str(info.value)
+    assert str(info.value) == (
+        "no source pulls 'rigetti_ankaa-3'; nv pull takes IBM devices (ibm_fez) and IonQ devices"
+        " (ionq_forte-1), and nv list shows every profile you can load offline"
+    )
 
 
 def test_at_accepts_a_date_and_explains_a_bad_string(served: list[str]) -> None:
