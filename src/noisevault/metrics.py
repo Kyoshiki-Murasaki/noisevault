@@ -1,4 +1,4 @@
-"""Gate-error metrics: conversions, bounds and Pauli-vector ordering, all in one place.
+"""Error metrics: conversions, bounds, Pauli-vector ordering and scaling, all in one place.
 
 For an n-qubit operation with d = 2**n:
   r      average gate infidelity, 1 - F_avg
@@ -9,14 +9,21 @@ For an n-qubit operation with d = 2**n:
 Pauli vectors list labels in lexicographic I, X, Y, Z order without the identity. For two
 qubits this is Stim's PAULI_CHANNEL_2 order IX, IY, IZ, XI, XX, ..., ZZ, and the first letter
 acts on ``qubits[0]``.
+
+The scale_* rules raise a channel to a real power, so scaling twice multiplies the factors:
+scale(scale(x, a), b) equals scale(x, a * b). Factor 1 keeps x, and factor 0 removes the error.
+A value with no power at some factor >= 0 comes back unchanged at every factor. No rule raises.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from functools import cache
 from itertools import product
 from typing import Literal
+
+import numpy as np
 
 MetricKind = Literal["avg_infidelity", "process_infidelity", "depolarizing_param", "pauli"]
 METRIC_KEYS: tuple[MetricKind, ...] = (
@@ -26,6 +33,7 @@ METRIC_KEYS: tuple[MetricKind, ...] = (
     "pauli",
 )
 _TOL = 1e-12
+_RATE_TOL = 1e-12
 
 
 def dim(num_qubits: int) -> int:
@@ -133,3 +141,84 @@ def swap_pauli_2q(pauli: Sequence[float]) -> tuple[float, ...]:
     if len(pauli) != len(PAULI_2Q):
         raise ValueError(f"expected 15 entries, got {len(pauli)}")
     return tuple(pauli[i] for i in _SWAPPED_2Q)
+
+
+def _anticommute(p: str, q: str) -> bool:
+    return sum("I" not in (x, y) and x != y for x, y in zip(p, q, strict=True)) % 2 == 1
+
+
+@cache
+def _anticommutation(num_qubits: int) -> np.ndarray:
+    labels = pauli_labels(num_qubits)
+    return np.array([[_anticommute(p, q) for q in labels] for p in labels], dtype=float)
+
+
+def scale_avg_infidelity(r: float, num_qubits: int, factor: float) -> float:
+    """Average infidelity of the depolarizing channel with infidelity ``r``, raised to ``factor``.
+
+    The channel's Pauli fidelity 1 - lambda becomes (1 - lambda)**factor, so the result equals
+    the average infidelity of scale_pauli on ``uniform_pauli(r, num_qubits)``. At or past full
+    depolarization the fidelity is <= 0 and has no real power, so ``r`` comes back unchanged.
+    """
+    lam = depolarizing_from_avg(r, num_qubits)
+    if lam >= 1:
+        return r
+    return avg_from_depolarizing(-math.expm1(factor * math.log1p(-lam)), num_qubits)
+
+
+def pauli_rates(pauli: Sequence[float]) -> tuple[float, ...] | None:
+    """Pauli-Lindblad rates of a Pauli channel, or None when a Pauli fidelity is <= 0.
+
+    A channel equals exp(sum_k lam_k (P_k rho P_k - rho)) exactly when its fidelities satisfy
+    log f_a = -2 sum_k A[a, k] lam_k. A[a, k] is 1 when P_a and P_k anticommute and 0 otherwise.
+    The fidelities are f_a = 1 - 2 sum_k A[a, k] p_k.
+    """
+    anti = _anticommutation(pauli_arity(len(pauli)))
+    deficit = 2 * anti @ np.asarray(pauli, dtype=float)
+    if deficit.max() >= 1:
+        return None
+    return tuple(np.linalg.solve(anti, -np.log1p(-deficit) / 2).tolist())
+
+
+def pauli_embeddable(pauli: Sequence[float]) -> bool:
+    """True when the Pauli channel has Pauli-Lindblad rates and every rate is >= -1e-12.
+
+    An embeddable channel has a power that is a channel at every factor >= 0, so scale_pauli
+    scales it. The channel with no error is embeddable. A channel at or past full
+    depolarization has no rates and is not.
+    """
+    rates = pauli_rates(pauli)
+    return rates is not None and min(rates) >= -_RATE_TOL
+
+
+def scale_pauli(pauli: Sequence[float], factor: float) -> tuple[float, ...]:
+    """The Pauli channel raised to ``factor``, which turns every Pauli fidelity f into f**factor.
+
+    Only a channel that pauli_embeddable accepts scales. Its power has the Pauli-Lindblad rates
+    times ``factor``, so the power is a channel at every factor >= 0. Any other channel has a
+    power that is not a channel, or no real power at all, and comes back unchanged at every
+    factor. With A from pauli_rates, the scaled probabilities are
+    p_k = sum_a (2 A[k, a] - 1) (1 - f_a**factor) / 4**n.
+    """
+    if not pauli_embeddable(pauli):
+        return tuple(pauli)
+    anti = _anticommutation(pauli_arity(len(pauli)))
+    log_fidelities = np.log1p(-2 * anti @ np.asarray(pauli, dtype=float))
+    deficit = -np.expm1(factor * log_fidelities)
+    scaled = (2 * anti - 1) @ deficit / (len(pauli) + 1)
+    return tuple(np.maximum(scaled, 0.0).tolist())
+
+
+def scale_readout(pair: tuple[float, float], factor: float) -> tuple[float, float]:
+    """(P(1|0), P(0|1)) of M**factor, for the confusion matrix M = [[1 - a, b], [a, 1 - b]].
+
+    M has eigenvalues 1 and 1 - a - b. Its power M**s keeps the ratio a : b and has
+    a + b = 1 - (1 - a - b)**s. The identity (0, 0) and a pair no better than chance
+    (a + b >= 1) come back unchanged.
+    """
+    a, b = pair
+    total = a + b
+    if total == 0 or total >= 1:
+        return pair
+    k = -math.expm1(factor * math.log1p(-total)) / total
+    return (a * k, b * k)
