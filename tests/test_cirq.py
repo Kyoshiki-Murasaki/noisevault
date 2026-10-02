@@ -479,6 +479,15 @@ def test_wait_without_coherence_times_is_reported() -> None:
     assert model.report.unknown == ["T1 and T2 of qubit 2 (no WaitGate relaxation)"]
 
 
+def test_wait_clamps_t2_above_2_t1_and_reports_it() -> None:
+    model = to_cirq(Profile.model_validate(toy(qubits=[{"index": 1, "t1_us": 10, "t2_us": 100}])))
+    plus = np.full((2, 2), 0.5, dtype=complex)
+    rho = _final_rho(model, [cirq.wait(cirq.LineQubit(1), nanos=10_000)], plus)
+    assert abs(rho[0, 1]) == pytest.approx(0.5 * np.exp(-10 / 20), 1e-12)
+    t2 = [(a.what, a.how) for a in model.report.approximated if a.what.startswith("T2")]
+    assert t2 == [("T2 of qubit 1", "clamped to 2*T1")]
+
+
 # qubit mapping -------------------------------------------------------------------------------
 
 

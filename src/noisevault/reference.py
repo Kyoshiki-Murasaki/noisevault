@@ -1,8 +1,10 @@
 """A small, framework-free density-matrix simulator used as the reference for every export.
 
-It applies the ideal unitary of each operation, then the channels that the shared conversion
-rules assign to it, and finishes with per-qubit readout confusion. Probabilities are over the
-circuit's qubits in big-endian order: circuit qubit 0 is the most significant bit.
+It applies the ideal unitary of each gate, then the channels that the shared conversion rules
+assign to it, and finishes with per-qubit readout confusion. A delay applies no unitary, only
+the relaxation that :func:`~noisevault.conversion.idle_channel` gives the Qiskit export's delays
+and the Cirq export's waits. Probabilities are over the circuit's qubits in big-endian order:
+circuit qubit 0 is the most significant bit.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import numpy as np
 
 from . import gates
 from .channels import readout_matrix
-from .conversion import UnknownGates, native_name, resolve_op
+from .conversion import UnknownGates, idle_channel, native_name, resolve_op
 from .layout import normalize_layout
 from .profile import Profile
 from .report import Report
@@ -27,7 +29,10 @@ _MS_ROTATIONS = ("rxx", "ryy")
 
 @dataclass(frozen=True)
 class Op:
-    """One gate on circuit qubits ``qubits`` (indices ``0..n-1``) with numeric ``params``."""
+    """One gate on circuit qubits ``qubits`` (indices ``0..n-1``) with numeric ``params``.
+
+    ``Op("delay", (q,), (duration_ns,))`` idles circuit qubit ``q`` for ``duration_ns`` nanoseconds.
+    """
 
     name: str
     qubits: tuple[int, ...]
@@ -56,6 +61,12 @@ def probabilities(
     rho = np.zeros((2,) * (2 * num_qubits), dtype=complex)
     rho[(0,) * (2 * num_qubits)] = 1.0
     for op in ops:
+        if op.name == "delay":
+            (q,), (duration_ns,) = op.qubits, op.params
+            channel = idle_channel(table, physical[q], duration_ns, report)
+            if channel is not None:
+                rho = _apply(rho, channel.kraus, (q,), num_qubits)
+            continue
         info = gates.lookup(op.name)
         if info is None or info.unitary is None:
             raise ValueError(f"the reference simulator has no unitary for {op.name!r}")

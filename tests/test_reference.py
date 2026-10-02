@@ -1,4 +1,4 @@
-from math import pi
+from math import exp, pi
 
 import numpy as np
 import pytest
@@ -7,6 +7,7 @@ from conftest import require, toy
 import noisevault as nv
 from noisevault.errors import MissingCalibrationError
 from noisevault.reference import Op, _apply, probabilities
+from noisevault.report import Report
 
 
 def _dense_apply(rho, kraus, wires, n):
@@ -259,3 +260,105 @@ def test_every_export_agrees_with_the_reference_on_fixed_gates(framework, case) 
         assert np.all(np.abs(got - want) <= bound), (got, want)
     else:
         assert got == pytest.approx(want, abs=1e-9)
+
+
+_IDLE = toy(
+    device={"name": "idle", "vendor": "test", "technology": "superconducting", "num_qubits": 3},
+    connectivity={"edges": []},
+    gates={"x": {"avg_infidelity": 0}, "h": {"avg_infidelity": 0}},
+    qubits=[
+        {"index": 0, "t1_us": 50, "t2_us": 40, "dephasing_rate_per_s": 2000},
+        {"index": 1, "t1_us": 10, "t2_us": 100},
+    ],
+)
+_NS = 20_000.0
+_RAMSEY = (Op("h", (0,)), Op("delay", (0,), (_NS,)), Op("h", (0,)))
+
+
+def test_a_delay_relaxes_and_dephases_its_physical_qubit() -> None:
+    profile = nv.Profile.model_validate(_IDLE)
+    ops = [Op("x", (0,)), Op("x", (1,)), Op("delay", (0,), (_NS,))]
+    excited = exp(-_NS / 10_000)
+    assert probabilities(profile, ops, 2, layout=[1, 0]) == pytest.approx(
+        [0, 1 - excited, 0, excited], abs=1e-12
+    )
+    coherence = exp(-_NS / 40_000) * (1 - 2 * 2000 * _NS * 1e-9)
+    assert probabilities(profile, _RAMSEY, 1) == pytest.approx(
+        [(1 + coherence) / 2, (1 - coherence) / 2], abs=1e-12
+    )
+
+
+def test_a_delay_on_a_qubit_without_relaxation_data_adds_no_noise_and_is_unknown() -> None:
+    profile = nv.Profile.model_validate(_IDLE)
+    report = Report.start(profile, "reference", None)
+    assert probabilities(profile, _RAMSEY, 1, layout=[2], report=report) == pytest.approx(
+        [1, 0], abs=1e-15
+    )
+    assert report.unknown == ["T1 and T2 of qubit 2 (no delay relaxation)"]
+
+
+def test_a_delay_clamps_t2_above_2_t1_and_reports_it() -> None:
+    profile = nv.Profile.model_validate(_IDLE)
+    coherence = exp(-_NS / (2 * 10_000))
+    assert probabilities(profile, _RAMSEY, 1, layout=[1]) == pytest.approx(
+        [(1 + coherence) / 2, (1 - coherence) / 2], abs=1e-12
+    )
+    report = Report.start(profile, "reference", None)
+    probabilities(profile, [Op("delay", (0,), (_NS,))], 1, layout=[1], report=report)
+    t2 = [(a.what, a.how) for a in report.approximated if a.what.startswith("T2")]
+    assert t2 == [("T2 of qubit 1", "clamped to 2*T1")]
+
+
+@pytest.mark.parametrize("name", ["measure", "reset"])
+def test_measure_and_reset_still_have_no_place_in_the_reference(name) -> None:
+    profile = nv.Profile.model_validate(_IDLE)
+    with pytest.raises(ValueError, match=f"has no unitary for '{name}'"):
+        probabilities(profile, [Op("x", (0,)), Op(name, (0,))], 1)
+
+
+_REVIEW_CIRCUIT = (Op("h", (0,)), Op("delay", (0,), (50_000.0,)), Op("h", (0,)))
+
+
+def _h_qubit(**coherence) -> nv.Profile:
+    return nv.Profile.model_validate(
+        toy(
+            device={
+                "name": "h",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 1,
+            },
+            connectivity={"edges": []},
+            gates={"h": {"avg_infidelity": 1e-3}},
+            qubits=[{"index": 0, **coherence}],
+        )
+    )
+
+
+def test_the_reviews_circuit_gives_its_closed_form() -> None:
+    h_shrink = 1 - 2 * 1e-3
+    flipped = (1 - h_shrink**2 * exp(-50_000 / 1_000_000)) / 2
+    assert probabilities(_h_qubit(t2_us=1000), _REVIEW_CIRCUIT, 1) == pytest.approx(
+        [1 - flipped, flipped], abs=1e-12
+    )
+
+
+@pytest.mark.parametrize(
+    "coherence",
+    [{"t2_us": 1000}, {"t1_us": 30, "t2_us": 40, "dephasing_rate_per_s": 2000}],
+    ids=["t2-only", "t1-t2-dephasing"],
+)
+def test_a_delay_matches_the_qiskit_export_through_aer(coherence) -> None:
+    require("qiskit_aer")
+    from qiskit import QuantumCircuit
+
+    profile = _h_qubit(**coherence)
+    sim = profile.to_qiskit()
+    sim.set_options(method="density_matrix")
+    circuit = QuantumCircuit(1)
+    circuit.h(0)
+    circuit.delay(50, 0, unit="us")
+    circuit.h(0)
+    circuit.save_probabilities([0])
+    aer = np.asarray(sim.run(circuit).result().data()["probabilities"])
+    assert probabilities(profile, _REVIEW_CIRCUIT, 1) == pytest.approx(aer, abs=1e-12)

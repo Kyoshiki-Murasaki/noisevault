@@ -61,8 +61,8 @@ from qiskit_aer.noise import NoiseModel, QuantumError, ReadoutError, kraus_error
 from qiskit_aer.noise.passes import LocalNoisePass
 
 from .. import gates
-from ..channels import ChannelSpec, GateChannels, readout_matrix, thermal_relaxation_kraus
-from ..conversion import UnknownGates, resolve_op
+from ..channels import ChannelSpec, GateChannels, readout_matrix
+from ..conversion import UnknownGates, idle_channel, resolve_op
 from ..report import Report
 from ..table import GateNoise, NoiseTable, QubitNoise, Unavailable
 
@@ -699,15 +699,8 @@ def _delay_relaxation(
 
     def relax(op: Delay, qubits: Sequence[int]) -> QuantumError | None:
         (q,) = qubits
-        noise = table.qubit(q)
-        duration = _delay_ns(op, q)
-        if noise.relaxation_unknown:
-            report.mark_unknown(f"T1 and T2 of qubit {q} (no delay relaxation)")
-            return None
-        kraus = thermal_relaxation_kraus(
-            noise.t1_ns, noise.t2_ns, duration, noise.dephasing_rate_per_s
-        )
-        return None if len(kraus) == 1 else kraus_error(kraus)
+        channel = idle_channel(table, q, _delay_ns(op, q), report)
+        return None if channel is None else kraus_error(list(channel.kraus))
 
     return relax
 

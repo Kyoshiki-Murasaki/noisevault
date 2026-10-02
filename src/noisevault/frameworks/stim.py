@@ -33,8 +33,8 @@ except ImportError as exc:
     raise ImportError(f"the Stim export needs stim: {install_hint('stim')}") from exc
 
 from .. import gates, metrics
-from ..channels import ChannelSpec, pauli_twirl, thermal_relaxation_kraus
-from ..conversion import UnknownGates, native_name, resolve_op
+from ..channels import ChannelSpec, pauli_twirl
+from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
@@ -543,16 +543,13 @@ class _Exporter:
 
     def _idle_noise(self, q: int) -> str:
         if q not in self._idle:
-            noise = self.table.qubit(self.physical[q])
-            if noise.relaxation_unknown:
-                self.unknown["idle"].add(noise.index)
-            if noise.t2_clamped:
-                self.report.record_t2_clamp(noise.index)
-            kraus = thermal_relaxation_kraus(
-                noise.t1_ns, noise.t2_ns, float(self.tick_ns or 0.0), noise.dephasing_rate_per_s
-            )
-            channel = ChannelSpec("thermal_relaxation", (noise.index,), tuple(kraus))
-            self._idle[q] = self._twirl([channel], (noise.index,))
+            index = self.physical[q]
+            channel = None
+            if self.table.qubit(index).relaxation_unknown:
+                self.unknown["idle"].add(index)
+            else:
+                channel = idle_channel(self.table, index, float(self.tick_ns or 0.0), self.report)
+            self._idle[q] = "" if channel is None else self._twirl([channel], (index,))
         return self._idle[q]
 
     def _readout_flip(self, qubits: Iterable[int]) -> float:

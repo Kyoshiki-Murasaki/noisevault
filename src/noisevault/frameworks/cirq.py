@@ -28,8 +28,8 @@ except ImportError as exc:
     raise ImportError(f"to_cirq needs Cirq; install it with: {install_hint('cirq')}") from exc
 
 from .. import gates
-from ..channels import readout_matrix, thermal_relaxation_kraus
-from ..conversion import UnknownGates, native_name, resolve_op
+from ..channels import readout_matrix
+from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
@@ -446,15 +446,9 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
         duration = float(gate.duration.total_nanos())
         out = [operation]
         for qid, index in zip(operation.qubits, physical, strict=True):
-            q = self._table.qubit(index)
-            if q.relaxation_unknown:
-                self.report.mark_unknown(f"T1 and T2 of qubit {index} (no WaitGate relaxation)")
-                continue
-            if q.t2_clamped:
-                self.report.record_t2_clamp(index)
-            kraus = thermal_relaxation_kraus(q.t1_ns, q.t2_ns, duration, q.dephasing_rate_per_s)
-            if len(kraus) > 1:
-                out.append(cirq.KrausChannel(kraus).on(qid))
+            channel = idle_channel(self._table, index, duration, self.report, label="WaitGate")
+            if channel is not None:
+                out.append(cirq.KrausChannel(list(channel.kraus)).on(qid))
         return out
 
 
