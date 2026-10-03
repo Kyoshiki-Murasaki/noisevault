@@ -1227,7 +1227,7 @@ def _uvx(extra: str, command: str) -> str:
         (
             ["ibm_manila", "--framework", "stim,qiskit"],
             "stim",
-            _uvx("stim,qiskit", "nv check ibm_manila --framework stim,qiskit"),
+            _uvx("stim,qiskit", "nv check --framework stim,qiskit ibm_manila"),
         ),
     ],
     ids=["every_framework", "named_frameworks"],
@@ -1248,19 +1248,33 @@ def test_check_without_some_frameworks_gives_a_pip_and_a_whole_uvx_command(
     assert rows["stim"].split()[1:] == ["not", "installed"]
 
 
-def test_check_quotes_a_profile_path_with_a_space_in_its_uvx_command(
-    monkeypatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("name", "given", "printed"),
+    [
+        ("my profiles/manila.json", ["my profiles/manila.json"], "'my profiles/manila.json'"),
+        ("-manila.json", ["--", "-manila.json"], "-- -manila.json"),
+    ],
+    ids=["a space", "a leading hyphen"],
+)
+def test_the_uvx_check_command_runs_as_printed(
+    monkeypatch, tmp_path: Path, name: str, given: list[str], printed: str
 ) -> None:
     require("qiskit")
     monkeypatch.setitem(sys.modules, "stim", None)
-    folder = tmp_path / "my profiles"
-    folder.mkdir()
-    path = nv.load("ibm_manila").save(folder / "manila.json")
-    args = ["check", str(path), "--framework", "qiskit,stim"]
+    monkeypatch.chdir(tmp_path)
+    path = Path(name)
+    path.parent.mkdir(exist_ok=True)
+    nv.load("ibm_manila").save(path)
+    args = ["check", "--framework", "qiskit,stim", *given]
     result = runner.invoke(app, args, env={"COLUMNS": "80"})
     assert result.exit_code == 0, result.output
-    command = f"nv check '{path}' --framework qiskit,stim"
-    assert _uvx("qiskit,stim", command) in result.stdout.splitlines()
+    uvx = _uvx("qiskit,stim", f"nv check --framework qiskit,stim {printed}")
+    assert uvx in result.stdout.splitlines()
+    words = shlex.split(uvx.partition(": ")[2])
+    assert words[:4] == ["uvx", "--from", f"noisevault[qiskit,stim] @ git+{REPOSITORY}", "nv"]
+    followed = runner.invoke(app, words[4:], env={"COLUMNS": "80"})
+    assert followed.exit_code == 0, followed.output
+    assert followed.stdout.splitlines()[0] == result.stdout.splitlines()[0]
 
 
 def test_check_names_a_one_qubit_layout_in_the_singular(tmp_path: Path) -> None:
@@ -1470,7 +1484,7 @@ def test_check_of_a_named_framework_that_is_not_installed_installs_that_one(
         "error: nv check needs a framework to check, and cirq is not installed",
         f"hint: {install_hint('cirq')}",
         f'      or, with uv and no install: uvx --from "noisevault[cirq] @ git+{REPOSITORY}"'
-        " nv check ibm_manila --framework cirq",
+        " nv check --framework cirq ibm_manila",
     ]
 
 
@@ -1560,16 +1574,22 @@ def test_every_command_names_a_damaged_file_and_what_is_wrong(
     assert rest == ([f"hint: {hint.format(path=path)}"] if hint else [])
 
 
+@pytest.mark.parametrize(
+    ("given", "printed"),
+    [("my run/toy.json", "'my run/toy.json'"), ("./-toy.json", "-- -toy.json")],
+    ids=["a space", "a leading hyphen"],
+)
 @pytest.mark.parametrize("command", [c for c in _COMMANDS if c != "validate"])
-def test_the_validate_hint_runs_as_printed_for_a_path_with_a_space(
-    tmp_path: Path, command: str
+def test_the_validate_hint_runs_as_printed(
+    tmp_path: Path, monkeypatch, command: str, given: str, printed: str
 ) -> None:
-    path = tmp_path / "my run" / "toy.json"
-    path.parent.mkdir()
+    monkeypatch.chdir(tmp_path)
+    path = Path(given)
+    path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps(toy(gates=None)))
-    result = runner.invoke(app, _COMMANDS[command](str(path)), env={"COLUMNS": "80"})
+    result = runner.invoke(app, _COMMANDS[command](given), env={"COLUMNS": "80"})
     hint = result.stderr.splitlines()[-1]
-    assert hint == f"hint: run nv validate '{path}' to list them"
+    assert hint == f"hint: run nv validate {printed} to list them"
     nv_, *args = shlex.split(hint.removeprefix("hint: run ").removesuffix(" to list them"))
     followed = runner.invoke(app, args)
     assert (nv_, followed.exit_code, followed.stdout) == ("nv", 1, "")

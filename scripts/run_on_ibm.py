@@ -33,7 +33,7 @@ import shlex
 import sys
 import warnings
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
@@ -116,6 +116,55 @@ class Ran:
     run_at: datetime
     counts: tuple[dict[str, int], ...]
     timing: dict[str, Any]
+
+
+@dataclass
+class Owned:
+    path: Path
+    fd: int
+    data: bytes = b""
+    start: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.start = len(self.data)
+
+    def holds(self) -> bool:
+        try:
+            if not os.path.samestat(os.lstat(self.path), os.fstat(self.fd)):
+                return False
+            os.lseek(self.fd, 0, os.SEEK_SET)
+            content = b""
+            while len(content) <= len(self.data) and (
+                chunk := os.read(self.fd, len(self.data) + 1 - len(content))
+            ):
+                content += chunk
+        except OSError:
+            return False
+        return self.start <= len(content) <= len(self.data) and self.data.startswith(content)
+
+    def check(self) -> None:
+        if not self.holds():
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(self.path))
+
+    def append(self, data: bytes) -> None:
+        self.check()
+        self.data += data
+        view = memoryview(data)
+        while view:
+            view = view[os.write(self.fd, view) :]
+        self.start = len(self.data)
+
+    def cut(self, size: int) -> None:
+        self.check()
+        os.ftruncate(self.fd, size)
+        self.data = self.data[:size]
+        self.start = size
+
+    def drop(self) -> None:
+        ours = self.holds()
+        os.close(self.fd)
+        if ours:
+            self.path.unlink(missing_ok=True)
 
 
 def prepare(
@@ -431,36 +480,30 @@ def run(
         try:
             job = submit(backend, batch)
         except BaseException:
-            _drop(pending, record)
+            record.drop()
             raise
         submitted = Submitted(job.job_id(), batch.profile, batch.planned, batch.options)
         job_line = _line({"job_id": submitted.job_id})
         kept = _beside(output, f".{submitted.job_id}.job.json")
         changed = f"{pending} changed while the script submitted job {submitted.job_id}"
-        if _ours(pending, record):
-            try:
-                _write(record, job_line)
-            except BaseException as exc:
-                failed = f"could not save job {submitted.job_id} to {pending} ({_reason(exc)})"
-                try:
-                    os.ftruncate(record, len(plan))
-                    trimmed = True
-                except OSError:
-                    trimmed = False
-                ours = _ours(pending, record)
-                with contextlib.suppress(OSError):
-                    os.close(record)
-                if trimmed and ours:
-                    raise NoiseVaultError(
-                        failed,
-                        hint=f"run the same command with --job-id {submitted.job_id} to collect"
-                        " the job",
-                    ) from None
-                _save_elsewhere(
-                    failed if ours else changed, kept, submitted.job_id, plan + job_line
-                )
-        if not _ours(pending, record):
-            os.close(record)
+        try:
+            record.append(job_line)
+        except BaseException as exc:
+            failed = f"could not save job {submitted.job_id} to {pending} ({_reason(exc)})"
+            with contextlib.suppress(OSError):
+                record.cut(len(plan))
+            ours = record.holds()
+            with contextlib.suppress(OSError):
+                os.close(record.fd)
+            if ours and record.data == plan:
+                raise NoiseVaultError(
+                    failed,
+                    hint=f"run the same command with --job-id {submitted.job_id} to collect the"
+                    " job",
+                ) from None
+            _save_elsewhere(failed if ours else changed, kept, submitted.job_id, plan + job_line)
+        if not record.holds():
+            os.close(record.fd)
             _save_elsewhere(changed, kept, submitted.job_id, plan + job_line)
         print(f"submitted job {submitted.job_id} to {device}")
     print("waiting for it to run")
@@ -484,8 +527,8 @@ def run(
             ref = str(profile_file)
             files[profile_file] = file_bytes(bound, profile_file)
         try:
-            for fd in _create(files).values():
-                os.close(fd)
+            for owned in _create(files).values():
+                os.close(owned.fd)
         except FileExistsError as exc:
             raise NoiseVaultError(
                 f"could not save the counts of job {submitted.job_id}, because {exc.filename}"
@@ -496,14 +539,14 @@ def run(
             raise NoiseVaultError(f"{uncollected} ({_reason(exc)})", hint=again) from None
     except BaseException as exc:
         with contextlib.suppress(OSError):
-            os.close(record)
+            os.close(record.fd)
         if isinstance(exc, KeyboardInterrupt):
             raise NoiseVaultError(
                 f"stopped before the script saved the counts of job {submitted.job_id}", hint=again
             ) from None
         raise
     try:
-        _drop(pending, record)
+        record.drop()
     except OSError as exc:
         print(
             f"warning: could not delete {pending} ({_reason(exc)}). The script saved the"
@@ -529,7 +572,7 @@ def run(
     ]
     if ran.timing:
         lines.append(("timing", f"{timing}, how IBM scheduled each circuit"))
-    lines.append(("next", shlex.join(["nv", "compare", ref, str(output)])))
+    lines.append(("next", catalog.shell_command(["nv", "compare"], [ref, str(output)])))
     print()
     print("\n".join(f"{label:<{LABEL}}{value}" for label, value in lines))
     return measured
@@ -537,9 +580,9 @@ def run(
 
 def _resume(
     pending: Path, job_id: str | None, open_job: Callable[[str], Any]
-) -> tuple[int, Submitted, Any]:
+) -> tuple[Owned, Submitted, Any]:
     try:
-        record = os.open(pending, os.O_RDONLY | BINARY)
+        fd = os.open(pending, os.O_RDONLY | BINARY)
     except FileNotFoundError:
         raise NoiseVaultError(
             f"no job file {pending}",
@@ -552,9 +595,9 @@ def _resume(
             hint="make the job file readable. Then run the same command again",
         ) from None
     try:
-        submitted = _submitted(pending, record, job_id)
+        data, submitted = _submitted(pending, fd, job_id)
         try:
-            return record, submitted, open_job(submitted.job_id)
+            return Owned(pending, fd, data), submitted, open_job(submitted.job_id)
         except Exception as exc:
             raise NoiseVaultError(
                 f"could not open job {submitted.job_id} ({_reason(exc)})",
@@ -562,13 +605,13 @@ def _resume(
                 f" {_new_job(pending)}",
             ) from None
     except BaseException:
-        os.close(record)
+        os.close(fd)
         raise
 
 
 def _save_elsewhere(problem: str, kept: Path, job_id: str, data: bytes) -> NoReturn:
     try:
-        os.close(_create({kept: data})[kept])
+        os.close(_create({kept: data})[kept].fd)
     except OSError as exc:
         raise NoiseVaultError(
             f"{problem}, and the script could not save job {job_id} to {kept} ({_reason(exc)})",
@@ -577,14 +620,14 @@ def _save_elsewhere(problem: str, kept: Path, job_id: str, data: bytes) -> NoRet
         ) from None
     raise NoiseVaultError(
         f"{problem}. The script saved job {job_id} to {kept}",
-        hint=f"run the same command with --collect {shlex.quote(str(kept))} to collect the job",
+        hint=f"run the same command with --collect={shlex.quote(str(kept))} to collect the job",
     )
 
 
-def _submitted(pending: Path, record: int, job_id: str | None) -> Submitted:
+def _submitted(pending: Path, fd: int, job_id: str | None) -> tuple[bytes, Submitted]:
     lines: list[bytes] = []
     try:
-        with open(record, "rb", closefd=False) as handle:
+        with open(fd, "rb", closefd=False) as handle:
             lines = handle.readlines()
         data: dict[str, Any] = {}
         for line in lines:
@@ -619,7 +662,7 @@ def _submitted(pending: Path, record: int, job_id: str | None) -> Submitted:
             f"{pending} records job {recorded}, not job {job_id}",
             hint=f"run the same command without --job-id to collect job {recorded}",
         )
-    return Submitted(recorded or job_id, profile, planned, options)
+    return b"".join(lines), Submitted(recorded or job_id, profile, planned, options)
 
 
 def _job_id_in(lines: list[bytes]) -> str | None:
@@ -813,7 +856,7 @@ def _dt(length: float, dt_ns: float) -> str:
 def _new_name_hint(pending: Path) -> str:
     if pending.exists():
         return (
-            f"run the same command with --collect {shlex.quote(str(pending))} and a new -o file"
+            f"run the same command with --collect={shlex.quote(str(pending))} and a new -o file"
             " name. The script never replaces a file"
         )
     return "give -o a new file name. The script never replaces a file"
@@ -830,44 +873,24 @@ def _files(output: Path) -> tuple[Path, Path, Path]:
     return output, _beside(output, ".timing.json"), _beside(output, ".profile.json")
 
 
-def _create(files: dict[Path, bytes]) -> dict[Path, int]:
+def _create(files: dict[Path, bytes]) -> dict[Path, Owned]:
     """``os.link`` would make each full file appear at once, but exFAT does not support hard
     links."""
-    created: dict[Path, int] = {}
+    created: dict[Path, Owned] = {}
     try:
         for path in files:
-            created[path] = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | BINARY, 0o666)
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | BINARY, 0o666)
+            created[path] = Owned(path, fd)
         for path, data in files.items():
-            _write(created[path], data)
-        for path, fd in created.items():
-            if not _ours(path, fd):
-                raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(path))
+            created[path].append(data)
+        for owned in created.values():
+            owned.check()
     except BaseException:
-        for path, fd in created.items():
+        for owned in created.values():
             with contextlib.suppress(OSError):
-                _drop(path, fd)
+                owned.drop()
         raise
     return created
-
-
-def _write(fd: int, data: bytes) -> None:
-    view = memoryview(data)
-    while view:
-        view = view[os.write(fd, view) :]
-
-
-def _ours(path: Path, fd: int) -> bool:
-    try:
-        return os.path.samestat(os.lstat(path), os.fstat(fd))
-    except OSError:
-        return False
-
-
-def _drop(path: Path, fd: int) -> None:
-    ours = _ours(path, fd)
-    os.close(fd)
-    if ours:
-        path.unlink(missing_ok=True)
 
 
 def _line(data: dict[str, Any]) -> bytes:

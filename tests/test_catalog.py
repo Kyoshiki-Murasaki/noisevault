@@ -986,6 +986,23 @@ def test_the_command_for_a_skipped_entry_runs_as_printed_for_a_name_with_a_space
     assert result.stderr.startswith("error: noisevault: missing. Format 1.0 requires this key\n")
 
 
+def test_the_command_for_a_skipped_entry_runs_as_printed_for_a_path_that_starts_with_a_hyphen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NOISEVAULT_HOME", "-nv")
+    Path("-nv/profiles").mkdir(parents=True)
+    Path("-nv/profiles/empty.json").write_text("{}")
+    with pytest.warns(nv.NoiseVaultWarning) as caught:
+        nv.profiles()
+    (message,) = {str(w.message) for w in caught}
+    assert message.endswith(". Run nv validate -- -nv/profiles/empty.json")
+    nv_, *args = shlex.split(message.rpartition(". Run ")[2])
+    result = CliRunner().invoke(app, args)
+    assert (nv_, result.exit_code, result.stdout) == ("nv", 1, "")
+    assert result.stderr.startswith("error: noisevault: missing. Format 1.0 requires this key\n")
+
+
 def test_a_link_to_an_unreadable_file_is_skipped_and_the_rest_still_list(
     monkeypatch: pytest.MonkeyPatch, vault: Path
 ) -> None:

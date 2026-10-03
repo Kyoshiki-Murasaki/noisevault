@@ -13,7 +13,6 @@ import json
 import os
 import platform
 import re
-import shlex
 import sys
 import warnings
 import zlib
@@ -1092,8 +1091,8 @@ def _none_installed(missing: list[str], *, ref: str, framework: str | None) -> N
 
 
 def _check_command(ref: str, framework: str | None) -> str:
-    command = f"nv check {shlex.quote(ref)}"
-    return command if framework is None else f"{command} --framework {framework}"
+    options = [] if framework is None else ["--framework", framework]
+    return catalog.shell_command(["nv", "check", *options], [ref])
 
 
 def _uvx_hint(extra: str, command: str) -> str:
@@ -1338,7 +1337,7 @@ def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
         problems = plural(exc.error_count(), "problem")
         return _FileProblem(
             f"{path} is not a valid profile ({problems})",
-            f"run nv validate {shlex.quote(str(path))} to list them",
+            f"run {catalog.shell_command(['nv', 'validate'], [str(path)])} to list them",
         )
     if isinstance(exc, IsADirectoryError):
         return _FileProblem(f"{path} is a folder", _PROFILE_FILE)

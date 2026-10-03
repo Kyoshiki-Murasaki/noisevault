@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from importlib.resources import files
@@ -226,6 +227,11 @@ def _vault_entry(path: Path, cached: Any) -> tuple[dict[str, Any], ProfileInfo]:
     return entry, ProfileInfo.from_entry(entry, "vault", path)
 
 
+def shell_command(words: Sequence[str], operands: Sequence[str]) -> str:
+    end = ["--"] if any(operand.startswith("-") for operand in operands) else []
+    return shlex.join([*words, *end, *operands])
+
+
 def _skipped(path: Path, exc: Exception) -> str:
     """One line that names a vault entry that the listing skips, and why."""
     try:
@@ -238,7 +244,7 @@ def _skipped(path: Path, exc: Exception) -> str:
         n = exc.error_count()
         why = (
             f"not a valid profile ({n} problem{'s' * (n != 1)})."
-            f" Run nv validate {shlex.quote(str(path))}"
+            f" Run {shell_command(['nv', 'validate'], [str(path)])}"
         )
     elif isinstance(exc, OSError):
         why = exc.strerror or str(exc)

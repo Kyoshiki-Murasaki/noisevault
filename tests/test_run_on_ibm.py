@@ -426,7 +426,7 @@ def test_a_job_file_that_appears_before_the_script_submits_is_kept_and_nothing_i
         _submitting(tmp_path, another_run_submits_first)()
     assert (info.value.message, info.value.hint) == (
         f"{pending} exists, so the script did not submit a job",
-        f"run the same command with --collect {pending} and a new -o file name. The script never"
+        f"run the same command with --collect={pending} and a new -o file name. The script never"
         " replaces a file",
     )
     assert submissions == []
@@ -444,6 +444,26 @@ def test_a_failed_submission_leaves_no_job_file(
     with pytest.raises(NoiseVaultError, match=re.escape("(403 Forbidden)")):
         _submitting(tmp_path, lambda prompt: True)()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_job_file_that_another_run_changes_in_place_during_a_failed_submission_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pending = tmp_path / "fez.job.json"
+    inodes: list[int] = []
+
+    def another_run_writes_the_job_file_and_ibm_refuses(backend: Any, batch: Any) -> Any:
+        inodes.append(pending.stat().st_ino)
+        pending.write_text("another run\n")
+        inodes.append(pending.stat().st_ino)
+        raise NoiseVaultError("submitting the job failed (403 Forbidden)")
+
+    monkeypatch.setattr(script, "submit", another_run_writes_the_job_file_and_ibm_refuses)
+    with pytest.raises(NoiseVaultError, match=re.escape("(403 Forbidden)")):
+        _submitting(tmp_path, lambda prompt: True)()
+    assert len(set(inodes)) == 1
+    assert list(tmp_path.iterdir()) == [pending]
+    assert pending.read_text() == "another run\n"
 
 
 def test_the_counts_keep_circuit_qubit_0_first() -> None:
@@ -768,8 +788,10 @@ def _when_the_script_creates(
     *,
     before: Callable[[], None] | None = None,
     after: Callable[[], None] | None = None,
+    written: Callable[[], None] | None = None,
 ) -> None:
-    real_open = os.open
+    real_open, real_write = os.open, os.write
+    created: list[int] = []
 
     def open_(file: Any, flags: int, *args: Any, **kwargs: Any) -> int:
         if Path(file) != path or not flags & os.O_EXCL:
@@ -777,11 +799,20 @@ def _when_the_script_creates(
         if before is not None:
             before()
         fd = real_open(file, flags, *args, **kwargs)
+        created.append(fd)
         if after is not None:
             after()
         return fd
 
+    def write(fd: int, data: Any) -> int:
+        count = real_write(fd, data)
+        if written is not None and fd in created:
+            created.remove(fd)
+            written()
+        return count
+
     monkeypatch.setattr(os, "open", open_)
+    monkeypatch.setattr(os, "write", write)
 
 
 def _put(path: Path, text: str) -> None:
@@ -791,10 +822,28 @@ def _put(path: Path, text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("created", "moment"), [("fez.counts.json", "after"), ("fez.timing.json", "before")]
+    ("created", "moment", "put"),
+    [
+        ("fez.counts.json", "after", _put),
+        ("fez.counts.json", "after", Path.write_text),
+        ("fez.counts.json", "written", _put),
+        ("fez.counts.json", "written", Path.write_text),
+        ("fez.timing.json", "before", _put),
+    ],
+    ids=[
+        "replaced after the create",
+        "written in place after the create",
+        "replaced after the write",
+        "written in place after the write",
+        "before the create",
+    ],
 )
 def test_a_counts_file_that_another_program_puts_in_place_is_kept_with_the_job(
-    created: str, moment: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    created: str,
+    moment: str,
+    put: Callable[[Path, str], Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = _collecting_job_1(tmp_path, monkeypatch, timing={"ghz_chain": {"start": 0}})
     output, pending = tmp_path / "fez.counts.json", tmp_path / "fez.job.json"
@@ -803,7 +852,7 @@ def test_a_counts_file_that_another_program_puts_in_place_is_kept_with_the_job(
 
     def another_program() -> None:
         for path in others:
-            _put(path, "another experiment\n")
+            put(path, "another experiment\n")
 
     _when_the_script_creates(monkeypatch, tmp_path / created, **{moment: another_program})
     with pytest.raises(NoiseVaultError) as info:
@@ -847,21 +896,26 @@ def test_a_job_file_that_another_collect_removed_first_does_not_stop_this_one(
     assert not pending.exists()
 
 
+@pytest.mark.parametrize("saved", ["as a new file", "in place"])
 def test_a_job_file_that_a_new_run_saved_while_the_job_waited_is_kept(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    saved: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run = _collecting_job_1(tmp_path, monkeypatch)
     pending = tmp_path / "fez.job.json"
     job_2 = dataclasses.replace(_submitted_and_ran(_fez_profile())[0], job_id="job-2")
     collect = script.collect
+    inodes = [pending.stat().st_ino]
 
-    def the_other_collect_ends_and_a_new_run_submits(*args: Any) -> Any:
-        pending.unlink()
+    def a_new_run_saves_job_2(*args: Any) -> Any:
+        if saved == "as a new file":
+            pending.unlink()
         _save_job_file(job_2, pending)
+        inodes.append(pending.stat().st_ino)
         return collect(*args)
 
-    monkeypatch.setattr(script, "collect", the_other_collect_ends_and_a_new_run_submits)
+    monkeypatch.setattr(script, "collect", a_new_run_saves_job_2)
     assert run() is not None
+    assert (inodes[0] == inodes[1]) == (saved == "in place")
     assert load_counts(tmp_path / "fez.counts.json").execution.job_ids == ("job-1",)
     assert json.loads(pending.read_text())["job_id"] == "job-2"
 
@@ -1061,7 +1115,7 @@ def test_a_file_that_appears_at_the_output_while_the_job_waits_is_kept_with_the_
     _account(monkeypatch, _fractional_fez(), submissions)
     command = ["ibm_fez", "--yes", "-o", str(output)]
     hint = (
-        f"hint: run the same command with --collect '{pending}' and a new -o file name. The"
+        f"hint: run the same command with --collect='{pending}' and a new -o file name. The"
         " script never replaces a file\n"
     )
     with warnings.catch_warnings():
@@ -1125,7 +1179,7 @@ def test_collect_submits_nothing_when_another_collect_removes_the_job_file_first
     assert list(folder.iterdir()) == []
 
 
-@pytest.mark.parametrize("change", ["replaced", "moved"])
+@pytest.mark.parametrize("change", ["replaced", "moved", "changed in place"])
 def test_a_job_file_that_changes_while_the_job_is_submitted_keeps_the_job_in_a_new_job_file(
     change: str,
     tmp_path: Path,
@@ -1143,10 +1197,16 @@ def test_a_job_file_that_changes_while_the_job_is_submitted_keeps_the_job_in_a_n
     )
     submit = script.submit
     planned: list[bytes] = []
+    inodes: list[int] = []
 
     def another_program_changes_the_job_file(*args: Any) -> Any:
         job = submit(*args)
         planned.append(pending.read_bytes())
+        inodes.append(pending.stat().st_ino)
+        if change == "changed in place":
+            pending.write_text("another run\n")
+            inodes.append(pending.stat().st_ino)
+            return job
         if change == "moved":
             pending.rename(moved)
         _put(pending, "another run\n")
@@ -1157,6 +1217,7 @@ def test_a_job_file_that_changes_while_the_job_is_submitted_keeps_the_job_in_a_n
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         assert script.main(command) == 1
+        assert len(set(inodes)) == 1
         (submission,) = submissions
         job_id = submission.job.job_id()
         kept = folder / f"fez.{job_id}.job.json"
@@ -1164,7 +1225,7 @@ def test_a_job_file_that_changes_while_the_job_is_submitted_keeps_the_job_in_a_n
         assert err == (
             f"error: {pending} changed while the script submitted job {job_id}. The script saved"
             f" job {job_id} to {kept}\n"
-            f"hint: run the same command with --collect '{kept}' to collect the job\n"
+            f"hint: run the same command with --collect='{kept}' to collect the job\n"
         )
         assert pending.read_text() == "another run\n"
         assert kept.read_bytes() == planned[0] + script._line({"job_id": job_id})
@@ -1176,6 +1237,60 @@ def test_a_job_file_that_changes_while_the_job_is_submitted_keeps_the_job_in_a_n
     assert load_counts(output).execution.job_ids == (job_id,)
     assert not kept.exists()
     assert pending.read_text() == "another run\n"
+
+
+def test_each_printed_command_runs_for_file_names_that_start_with_a_hyphen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    submissions = _recording_sampler(monkeypatch, lose_the_first_wait=True)
+    _account(monkeypatch, _fractional_fez(), submissions)
+    monkeypatch.chdir(tmp_path)
+    pending = Path("-run.job.json")
+    submit = script.submit
+
+    def another_program_changes_the_job_file(*args: Any) -> Any:
+        job = submit(*args)
+        _put(pending, "another run\n")
+        return job
+
+    monkeypatch.setattr(script, "submit", another_program_changes_the_job_file)
+    command = ["ibm_fez", "--yes", "-o", "./-run.counts.json"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert script.main(command) == 1
+        (submission,) = submissions
+        job_id = submission.job.job_id()
+        kept = f"-run.{job_id}.job.json"
+        err = capsys.readouterr().err
+        assert err == (
+            f"error: {pending} changed while the script submitted job {job_id}. The script saved"
+            f" job {job_id} to {kept}\n"
+            f"hint: run the same command with --collect={kept} to collect the job\n"
+        )
+        Path("-run.counts.json").write_text("another experiment\n")
+        assert script.main([*command, *_hinted(err)]) == 1
+        err = capsys.readouterr().err
+        assert err == (
+            "error: -run.counts.json exists\n"
+            f"hint: run the same command with --collect={kept} and a new -o file name. The script"
+            " never replaces a file\n"
+        )
+        del submission.job.result
+        assert script.main(["ibm_fez", "--yes", "-o", "./-run-2.counts.json", *_hinted(err)]) == 0
+    label, printed = capsys.readouterr().out.rstrip("\n").splitlines()[-1].split(maxsplit=1)
+    nv_, compare, *args = shlex.split(printed)
+    assert (label, nv_, compare, args[0], args[2:]) == (
+        "next",
+        "nv",
+        "compare",
+        "--",
+        ["-run-2.counts.json"],
+    )
+    result = CliRunner().invoke(app, [compare, *args], env={"COLUMNS": "80"})
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    header = " ".join(line.strip() for line in lines[: lines.index("")])
+    assert " counts -run-2.counts.json, simulated, sha256:" in header
 
 
 def test_a_job_file_that_changes_on_a_full_disk_while_the_job_is_submitted_names_the_job(
@@ -1212,7 +1327,9 @@ def test_a_job_file_that_changes_on_a_full_disk_while_the_job_is_submitted_names
     assert pending.read_text() == "another run\n"
 
 
-@pytest.mark.parametrize("fault", ["replaced", "not cut back"])
+@pytest.mark.parametrize(
+    "fault", ["replaced", "changed in place", "emptied in place", "not cut back"]
+)
 def test_a_failed_job_id_write_that_leaves_no_job_file_to_collect_keeps_the_job_in_a_new_job_file(
     fault: str,
     tmp_path: Path,
@@ -1226,9 +1343,11 @@ def test_a_failed_job_id_write_that_leaves_no_job_file_to_collect_keeps_the_job_
     output, pending = folder / "fez.counts.json", folder / "fez.job.json"
     another_run = tmp_path / "another.job.json"
     _save_job_file(_submitted_and_ran(_fez_profile())[0], another_run)
+    in_place = {"changed in place": another_run.read_bytes(), "emptied in place": b""}
     disk = _disk(monkeypatch, folder)
-    submit, write, ftruncate = script.submit, os.write, os.ftruncate
+    submit, write = script.submit, os.write
     planned: list[bytes] = []
+    inodes: list[int] = []
 
     def submit_and_fill_the_disk(*args: Any) -> Any:
         job = submit(*args)
@@ -1236,33 +1355,41 @@ def test_a_failed_job_id_write_that_leaves_no_job_file_to_collect_keeps_the_job_
         disk.bytes_left = 5
         return job
 
-    def another_run_replaces_the_job_file_on_the_full_disk(fd: int, data: Any) -> int:
-        if fault == "replaced" and disk.bytes_left == 0:
+    def another_run_changes_the_job_file_on_the_full_disk(fd: int, data: Any) -> int:
+        if disk.bytes_left != 0:
+            return write(fd, data)
+        if fault == "replaced":
             _put(pending, another_run.read_text())
-        return write(fd, data)
+        if fault in in_place:
+            inodes.append(pending.stat().st_ino)
+            pending.write_bytes(in_place[fault])
+            inodes.append(pending.stat().st_ino)
+        try:
+            return write(fd, data)
+        finally:
+            disk.bytes_left = None
 
-    def space_frees_while_the_script_cuts_back(fd: int, length: int) -> None:
-        disk.bytes_left = None
-        if fault == "not cut back":
-            raise OSError(errno.EIO, "Input/output error")
-        ftruncate(fd, length)
+    def the_cut_fails(fd: int, length: int) -> None:
+        raise OSError(errno.EIO, "Input/output error")
 
     monkeypatch.setattr(script, "submit", submit_and_fill_the_disk)
-    monkeypatch.setattr(os, "write", another_run_replaces_the_job_file_on_the_full_disk)
-    monkeypatch.setattr(os, "ftruncate", space_frees_while_the_script_cuts_back)
+    monkeypatch.setattr(os, "write", another_run_changes_the_job_file_on_the_full_disk)
+    if fault == "not cut back":
+        monkeypatch.setattr(os, "ftruncate", the_cut_fails)
     command = ["ibm_fez", "--yes", "-o", str(output)]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         assert script.main(command) == 1
+        assert len(set(inodes)) == (fault in in_place)
         (submission,) = submissions
         job_id = submission.job.job_id()
         kept = folder / f"fez.{job_id}.job.json"
         job_line = script._line({"job_id": job_id})
+        changed = f"{pending} changed while the script submitted job {job_id}"
         problem, left = {
-            "replaced": (
-                f"{pending} changed while the script submitted job {job_id}",
-                another_run.read_bytes(),
-            ),
+            "replaced": (changed, another_run.read_bytes()),
+            "changed in place": (changed, another_run.read_bytes()),
+            "emptied in place": (changed, b""),
             "not cut back": (
                 f"could not save job {job_id} to {pending} ([Errno 28] No space left on device)",
                 planned[0] + job_line[:5],
@@ -1271,7 +1398,7 @@ def test_a_failed_job_id_write_that_leaves_no_job_file_to_collect_keeps_the_job_
         err = capsys.readouterr().err
         assert err == (
             f"error: {problem}. The script saved job {job_id} to {kept}\n"
-            f"hint: run the same command with --collect '{kept}' to collect the job\n"
+            f"hint: run the same command with --collect='{kept}' to collect the job\n"
         )
         assert kept.read_bytes() == planned[0] + job_line
         assert pending.read_bytes() == left
