@@ -200,6 +200,21 @@ _ON_QUBIT_0 = {
         {"value": 1.5},
         "readout.p0_given_1 of qubit 0: Input should be less than or equal to 1, got 1.5",
     ),
+    "a readout probability as text": (
+        "prob_meas0_prep1",
+        {"value": "0.0548"},
+        "prob_meas0_prep1 of qubit 0 is '0.0548', not a number",
+    ),
+    "a readout error of true": (
+        "readout_error",
+        {"value": True},
+        "readout_error of qubit 0 is True, not a number",
+    ),
+    "a unit that is not a string": (
+        "readout_length",
+        {"unit": ["ns"]},
+        "readout_length of qubit 0 has the unit ['ns'], not a string",
+    ),
 }
 
 
@@ -217,5 +232,22 @@ def test_a_snapshot_value_it_cannot_read_names_the_device_and_the_value(
         ibm_account.pull("ibm_manila")
     assert (info.value.message, info.value.hint) == (
         f"IBM's calibration of ibm_manila: {problem}",
+        "pass an earlier at= to use an older calibration",
+    )
+
+
+def test_a_gate_on_a_qubit_that_is_not_an_index_names_the_gate(
+    calls: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = require("qiskit_ibm_runtime")
+    props = _Backend(calls)._fake.properties().to_dict()
+    next(e for e in props["gates"] if e["gate"] == "cx")["qubits"] = ["0", 1]
+    snapshot = runtime.models.BackendProperties.from_dict(props)
+    monkeypatch.setattr(_Backend, "properties", lambda self, **_: snapshot)
+    with pytest.raises(nv.SourceDataError) as info:
+        ibm_account.pull("ibm_manila")
+    assert (info.value.message, info.value.hint) == (
+        "IBM's calibration of ibm_manila: gate cx is on ['0', 1]; a qubit index is an integer 0 or"
+        " more",
         "pass an earlier at= to use an older calibration",
     )

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__, gates, metrics, units
-from ..errors import SourceDataError, qubit_loci
+from ..errors import SourceDataError, plural, qubit_loci
 from ..profile import FORMAT_VERSION, Profile, Technology
 from . import Origin
 
@@ -421,13 +421,14 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
 
     The readout error and length on each qubit become its ``measure`` instruction. The
     ``measure`` entries of the gate list repeat those numbers, so this function skips them. A
-    time in an unknown unit raises a SourceDataError from ``origin``.
+    time in an unknown unit raises a SourceDataError from ``origin``. A value that is not a number
+    and a gate on the wrong number of qubits also raise one.
     """
     qubits: dict[int, QubitCalibration] = {}
     instructions: list[Instruction] = []
     for index, params in enumerate(props.get("qubits") or []):
-        values = {p["name"]: p for p in params}
         owner = f"qubit {index}"
+        values = _parameters(params, origin, owner)
         qubits[index] = QubitCalibration(
             t1_us=_in_unit(values.get("T1"), "us", origin, owner),
             t2_us=_in_unit(values.get("T2"), "us", origin, owner),
@@ -444,6 +445,7 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
                 )
             )
     skipped = set()
+    arities: dict[str, int] = {}
     for entry in props.get("gates") or []:
         name = entry["gate"]
         if name == "measure":
@@ -451,18 +453,16 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
         if name in _NOT_GATES:
             skipped.add(name)
             continue
-        values = {p["name"]: p for p in entry.get("parameters") or []}
+        canonical = _QISKIT_TO_CANONICAL.get(name, name)
+        locus = _locus(name, canonical, entry["qubits"], arities, origin)
+        owner = f"{name} on {qubit_loci(locus)}"
+        values = _parameters(entry.get("parameters") or [], origin, owner)
         instructions.append(
             Instruction(
-                _QISKIT_TO_CANONICAL.get(name, name),
-                tuple(entry["qubits"]),
+                canonical,
+                locus,
                 error=_value(values.get("gate_error")),
-                duration_ns=_in_unit(
-                    values.get("gate_length"),
-                    "ns",
-                    origin,
-                    f"{name} on {qubit_loci(entry['qubits'])}",
-                ),
+                duration_ns=_in_unit(values.get("gate_length"), "ns", origin, owner),
                 operational=_value(values.get("operational")) != 0,
             )
         )
@@ -475,6 +475,44 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
         calibrated_at=None if stamp is None else as_utc(stamp),
         skipped=tuple(sorted(skipped)),
     )
+
+
+def _parameters(
+    params: Iterable[Mapping[str, Any]], origin: Origin, owner: str
+) -> dict[str, Mapping[str, Any]]:
+    """The parameters by name; ``origin`` refuses a value that is not a number and a unit that is
+    not a string.
+    """
+    values = {}
+    for param in params:
+        value, unit = param.get("value"), param.get("unit")
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int | float)):
+            raise origin.refuse(f"{param['name']} of {owner} is {value!r}, not a number")
+        if unit is not None and not isinstance(unit, str):
+            raise origin.refuse(f"{param['name']} of {owner} has the unit {unit!r}, not a string")
+        values[param["name"]] = param
+    return values
+
+
+def _locus(
+    name: str, canonical: str, qubits: Sequence[Any], arities: dict[str, int], origin: Origin
+) -> tuple[int, ...]:
+    """``qubits`` of one gate entry; a gate the registry does not know keeps the qubit count of
+    its first entry.
+    """
+    if any(isinstance(q, bool) or not isinstance(q, int) or q < 0 for q in qubits):
+        raise origin.refuse(
+            f"gate {name} is on {list(qubits)}; a qubit index is an integer 0 or more"
+        )
+    info = gates.lookup(canonical)
+    arity = arities.setdefault(canonical, len(qubits)) if info is None else info.arity
+    if len(qubits) != arity:
+        expected = f"{name} acts on" if info else f"the first {name} entry is on"
+        raise origin.refuse(
+            f"gate {name} is on {plural(len(qubits), 'qubit')} {list(qubits)}; {expected}"
+            f" {plural(arity, 'qubit')}"
+        )
+    return tuple(qubits)
 
 
 def _value(param: Mapping[str, Any] | None) -> float | None:

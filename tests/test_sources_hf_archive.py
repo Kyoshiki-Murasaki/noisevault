@@ -365,3 +365,60 @@ def test_a_newer_time_it_cannot_read_names_the_newest_rows(tmp_path: Path) -> No
         " not one of ns, us, µs, ms or s",
         None,
     )
+
+
+_NOT_A_LOCUS = {
+    "a fractional qubit_b": (
+        "cz_gate_error",
+        "qubit_b",
+        2.5,
+        "qubit_b of the cz_gate_error row calibrated at 2026-06-02T08:00:00Z is 2.5, not a qubit"
+        " index",
+    ),
+    "a qubit_b that is not a number": (
+        "cz_gate_error",
+        "qubit_b",
+        float("nan"),
+        "qubit_b of the cz_gate_error row calibrated at 2026-06-02T08:00:00Z is nan, not a qubit"
+        " index",
+    ),
+    "a null qubit_a": (
+        "T1",
+        "qubit_a",
+        None,
+        "qubit_a of the T1 row calibrated at 2026-06-01T08:00:00Z is null, not a qubit index",
+    ),
+    "a qubit_b on a value of one qubit": (
+        "T1",
+        "qubit_b",
+        2.0,
+        "qubit_b of the T1 row calibrated at 2026-06-01T08:00:00Z is 2.0, but T1 is a value of one"
+        " qubit",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_NOT_A_LOCUS))
+def test_a_row_whose_qubits_are_not_a_locus_names_the_row(tmp_path: Path, case: str) -> None:
+    prop, column, value, problem = _NOT_A_LOCUS[case]
+    rows = pq.read_table(FIXTURE).to_pylist()
+    fez = [r for r in rows if (r["backend"], r["property"], r["qubit_a"]) == ("ibm_fez", prop, 1)]
+    max(fez, key=lambda r: r["calibrated_time"])[column] = value
+    with pytest.raises(nv.SourceDataError) as info:
+        _fez(path=_rewritten(tmp_path, rows))
+    assert (info.value.message, info.value.hint) == (
+        f"the ibm_fez rows of {FIXTURE.name}: {problem}",
+        "pass an earlier at= to use an older calibration",
+    )
+
+
+def test_rows_with_no_property_or_calibration_time_are_named(tmp_path: Path) -> None:
+    rows = pq.read_table(FIXTURE).to_pylist()
+    fez = [r for r in rows if r["backend"] == "ibm_fez"]
+    fez[0]["property"] = None
+    fez[1]["calibrated_time"] = None
+    profile = _fez(path=_rewritten(tmp_path, rows))
+    assert (
+        "This profile does not use 2 rows of ibm_fez with no property or no calibrated_time."
+        in profile.provenance.notes
+    )

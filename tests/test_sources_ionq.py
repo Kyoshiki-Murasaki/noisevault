@@ -360,6 +360,18 @@ _WRONG_SHAPE = {
         _first_record_with(_CHOSEN, timing=[1e-4]),
         " at characterizations[0].timing",
     ),
+    "a time as text": (
+        _CHOSEN,
+        _edited(_CHOSEN, lambda body: body["characterizations"][0]["timing"].update({"1q": "1"})),
+        " at characterizations[0].timing['1q']",
+    ),
+    "a median as text": (
+        _CHOSEN,
+        _edited(
+            _CHOSEN, lambda body: body["characterizations"][0]["fidelity"]["2q"].update(median="1")
+        ),
+        " at characterizations[0].fidelity['2q'].median",
+    ),
 }
 
 
@@ -420,3 +432,50 @@ def test_live_forte_1() -> None:
     assert profile.connectivity == "all_to_all"
     assert profile.gates["rzz"].statistic == "median"
     assert 0 < profile.gates["rzz"].avg_infidelity < 0.1
+
+
+@pytest.mark.parametrize(("key", "seconds"), [("1q", -0.00013), ("t1", 0)])
+def test_a_time_that_is_not_positive_names_the_field(served, key: str, seconds: float) -> None:
+    served[_CHOSEN] = _edited(
+        _CHOSEN, lambda body: body["characterizations"][0]["timing"].update({key: seconds})
+    )
+    with pytest.raises(SourceDataError) as info:
+        ionq.pull("forte-1")
+    assert (info.value.message, info.value.hint) == (
+        f"IonQ's API ({_CHOSEN}): timing.{key} is {seconds!r}, not a positive number of seconds",
+        _OLDER,
+    )
+
+
+def test_a_qubit_count_of_0_is_refused_not_replaced_by_the_listing(served) -> None:
+    served[_CHOSEN] = _first_record_with(_CHOSEN, qubits=0)
+    with pytest.raises(SourceDataError) as info:
+        ionq.pull("forte-1")
+    assert (info.value.message, info.value.hint) == (
+        f"IonQ's API ({_CHOSEN}): device.num_qubits: Input should be greater than or equal to 1,"
+        " got 0",
+        _OLDER,
+    )
+
+
+def test_a_median_above_1_is_read_as_corrupt_and_named(served) -> None:
+    served[_CHOSEN] = _edited(
+        _CHOSEN, lambda body: body["characterizations"][0]["fidelity"]["1q"].update(median=1.5)
+    )
+    profile = ionq.pull("forte-1")
+    assert profile.device.calibrated_at.date().isoformat() == "2026-09-01"
+    [note] = [n for n in profile.provenance.notes if "implausible" in n]
+    assert "a median above 1" in note
+    assert note.endswith("read as corrupt: 2026-09-27 (1Q 1.5, 2Q 0.9951)")
+
+
+def test_a_spam_median_above_1_leaves_readout_unknown_and_says_so(served) -> None:
+    served[_CHOSEN] = _edited(
+        _CHOSEN, lambda body: body["characterizations"][0]["fidelity"]["spam"].update(median=1.5)
+    )
+    profile = ionq.pull("forte-1")
+    assert profile.readout is None
+    assert (
+        "SPAM fidelity median 1.5 is above 1 (corrupt), so NoiseVault leaves readout error unknown"
+        in profile.provenance.notes
+    )

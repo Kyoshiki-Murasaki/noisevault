@@ -91,9 +91,9 @@ This file lists all notable changes to NoiseVault. Versions follow
   calibration from 2024-06-03, and `nv pull` then saved over that calibration. A load could also
   return another calibration when a save replaced a file during the load. NoiseVault now uses the
   index only when its version and digest show that NoiseVault wrote it, and otherwise reads the
-  files again. `nv.load` checks the profile that it read against the ref and the `expect=` pin.
-  If the profile does not match, `nv.load` reads the vault again. An `.index.json` that is not a
-  regular file no longer stops `nv list`.
+  files again. `nv.load` checks the profile that it read against the calibration that the ref
+  selected and against the `expect=` pin. If the profile does not match, `nv.load` reads the
+  vault again. An `.index.json` that is not a regular file no longer stops `nv list`.
 - **Importer input that is damaged or incomplete.** Three importers returned wrong values with
   no error. Each now raises `SourceDataError` that names the file and the field or line.
   - `from_ibm_csv` lost every row after a quote left open, so a file could import with no
@@ -111,6 +111,16 @@ This file lists all notable changes to NoiseVault. Versions follow
     empty first zone gave 0.5. The importer now refuses a shot count that is not a positive whole
     number and a count outside 0 to the shot count. It also refuses a sequence length that is
     not a whole number, a zone with no sequence lengths, and an empty or misshapen map.
+- **Vendor numbers and qubit indices of the wrong type or value.** The Braket, IonQ, IBM and
+  Hugging Face importers used some values with no check. Such a value could change with no
+  error, go missing with no note, or stop the import with an unexpected Python error. A Braket
+  T1 of `true` became 1 s. An archive `qubit_b` of 2.5 became qubit 2. A negative IonQ gate time
+  gave no gate time. An IBM gate on the wrong number of qubits stopped `nv pull` with a
+  `ValueError`. Each importer now checks these values where it reads them. A bad value raises
+  `nv.SourceDataError`, which names the source, the field and the value. A value of the wrong
+  type in an IonQ reply gives the error for a reply of the wrong shape. An IonQ median above 1
+  is corrupt data, and a provenance note says so. A provenance note also counts the archive
+  rows with no property or no `calibrated_time`, which the profile does not use.
 - **Damaged profiles and vendor replies.** Each case below now gives one error that names the
   damaged input. Before, a command printed an unexpected error and asked for a bug report, or
   printed a message such as `Expecting value: line 1 column 1 (char 0)` that named nothing.

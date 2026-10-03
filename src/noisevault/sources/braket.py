@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .. import __version__, gates, units
 from ..errors import SourceDataError
@@ -72,17 +72,22 @@ _ASSUMPTION = (
 _SAVE = "save AwsDevice(arn).properties.json() and pass that file"
 
 
-class _Time(BaseModel):
-    value: Any
+class _Shape(BaseModel):
+    model_config = ConfigDict(strict=True, allow_inf_nan=False)
+
+
+class _Time(_Shape):
+    value: float
     unit: Literal["ns", "us", "ms", "s"]
 
 
-class _FidelityType(BaseModel):
-    name: Any
+class _FidelityType(_Shape):
+    name: str
 
 
-class _Fidelity(BaseModel):
-    fidelity: Any
+class _Fidelity(_Shape):
+    fidelity: float
+    standardError: float | None = None
     fidelityType: _FidelityType | None = None
 
 
@@ -90,37 +95,37 @@ class _TypedFidelity(_Fidelity):
     fidelityType: _FidelityType
 
 
-class _Direction(BaseModel):
-    control: Any
-    target: Any
+class _Direction(_Shape):
+    control: int
+    target: int
 
 
 class _GateFidelity(_TypedFidelity):
-    gateName: Any
+    gateName: str
     direction: _Direction | None = None
 
 
-class _Qubit(BaseModel):
+class _Qubit(_Shape):
     T1: _Time | None = None
     T2: _Time | None = None
     oneQubitFidelity: list[_TypedFidelity] | None = None
 
 
-class _Pair(BaseModel):
+class _Pair(_Shape):
     twoQubitGateFidelity: list[_GateFidelity] | None = None
 
 
-class _PerElement(BaseModel):
-    oneQubitProperties: dict[Any, _Qubit] | None = None
-    twoQubitProperties: dict[Any, _Pair] | None = None
+class _PerElement(_Shape):
+    oneQubitProperties: dict[str, _Qubit] | None = None
+    twoQubitProperties: dict[str, _Pair] | None = None
 
 
-class _DeviceLevelQubit(BaseModel):
+class _DeviceLevelQubit(_Shape):
     oneQubitFidelity: list[_Fidelity] | None = None
 
 
-class _DeviceLevel(BaseModel):
-    oneQubitProperties: dict[Any, _DeviceLevelQubit] | None = None
+class _DeviceLevel(_Shape):
+    oneQubitProperties: dict[str, _DeviceLevelQubit] | None = None
     T1: _Time | None = None
     T2: _Time | None = None
     readoutFidelity: list[_Fidelity] | None = None
@@ -129,6 +134,17 @@ class _DeviceLevel(BaseModel):
     singleQubitGateDuration: _Time | None = None
     twoQubitGateFidelity: list[_Fidelity] | None = None
     twoQubitGateDuration: _Time | None = None
+
+
+class _Connectivity(_Shape):
+    fullyConnected: bool | None = None
+    connectivityGraph: dict[str, list[str]] | None = None
+
+
+class _Paradigm(_Shape):
+    qubitCount: int | None = None
+    nativeGateSet: list[str] | None = None
+    connectivity: _Connectivity | None = None
 
 
 def bundled_profiles() -> list[Profile]:
@@ -146,8 +162,14 @@ def from_braket(
     data: Any
     if isinstance(path_or_dict, Mapping):
         data = dict(path_or_dict)
-        raw = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
         source = "the dict passed in"
+        try:
+            raw = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+        except TypeError:
+            problem = _key_problem(data)
+            if problem is None:
+                raise
+            raise _origin(source).refuse(problem) from None
         name, hashed = device or "braket_device", "the canonical JSON of the dict passed in"
     else:
         path = Path(path_or_dict)
@@ -168,21 +190,27 @@ def from_braket(
         raise SourceDataError(
             f"{source}: Braket standardized properties version {version} is not supported"
         )
+    origin = _origin(source)
     shape, build = (_DeviceLevel, _device_level) if version == "3" else (_PerElement, _per_element)
-    try:
-        shape.model_validate(std)
-    except ValidationError as exc:
-        raise _shape_error(exc, ("standardized",) if whole else (), source) from None
-    vendor = _vendor(caps)
+    prefix = ("standardized",) if whole else ()
     paradigm = caps.get("paradigm") or {}
+    for checked, at, model in ((std, prefix, shape), (paradigm, ("paradigm",), _Paradigm)):
+        try:
+            model.model_validate(checked)
+        except ValidationError as exc:
+            raise _shape_error(exc, at, source, origin) from None
+    problem = _pair_problem(std, prefix)
+    if problem:
+        raise origin.refuse(problem)
+    vendor = _vendor(caps)
     notes = [
         f"source_hash is over {hashed}",
         "Braket does not say if Z rotations are virtual, so NoiseVault takes them as virtual (rz)",
         "readout is 1 - the READOUT fidelity, the same for both prepared states",
     ]
     physics = build(std, paradigm, notes)
-    calibrated_at = _calibrated_at(caps, std, notes)
-    return Origin(source, hint=f"correct that value in {source}").profile(
+    calibrated_at = _calibrated_at(caps, std, notes, origin)
+    return origin.profile(
         {
             "noisevault": "1.0",
             "device": {
@@ -209,7 +237,7 @@ def from_braket(
 
 
 def _calibrated_at(
-    caps: Mapping[str, Any], std: Mapping[str, Any], notes: list[str]
+    caps: Mapping[str, Any], std: Mapping[str, Any], notes: list[str], origin: Origin
 ) -> datetime | None:
     """The characterization time (standardized v3) or else when Braket refreshed the service.
 
@@ -220,7 +248,10 @@ def _calibrated_at(
     where, value = ("standardized", std_at) if std_at else ("service", service_at)
     if not value:
         return None
-    when = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+    try:
+        when = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise origin.refuse(f"the {where} updatedAt is {value!r}, not an ISO 8601 time") from None
     notes.append(f"calibrated_at is the {where} updatedAt, when Braket last refreshed it")
     if when.tzinfo is None:
         notes.append(f"the {where} updatedAt had no time zone, so NoiseVault reads it as UTC")
@@ -475,9 +506,63 @@ def _us(time: Mapping[str, Any]) -> float:
     return units.convert(float(time["value"]), time["unit"], "us")
 
 
-def _shape_error(exc: ValidationError, prefix: tuple[str, ...], source: str) -> SourceDataError:
+def _origin(source: str) -> Origin:
+    return Origin(source, hint=f"correct that value in {source}")
+
+
+def _key_problem(node: Any, path: tuple[str | int, ...] = ()) -> str | None:
+    """Where ``node`` holds a key that is not a string, or None."""
+    if isinstance(node, Mapping):
+        for key in node:
+            if not isinstance(key, str):
+                where = f"a key of {json_path(path)}" if path else "a top-level key"
+                return f"{where} is {key!r}, not a string"
+        children = node.items()
+    elif isinstance(node, list):
+        children = enumerate(node)
+    else:
+        return None
+    found = (_key_problem(value, (*path, key)) for key, value in children)
+    return next(filter(None, found), None)
+
+
+def _pair_problem(std: Mapping[str, Any], prefix: tuple[str, ...]) -> str | None:
+    """Why a two-qubit key or direction does not name one pair of qubits, or None."""
+    for key, props in (std.get("twoQubitProperties") or {}).items():
+        pair = key.split("-")
+        if len(pair) != 2:
+            where = json_path([*prefix, "twoQubitProperties"])
+            return f"{where} has the key {key!r}, not a pair of qubit ids such as '0-1'"
+        for i, entry in enumerate(props.get("twoQubitGateFidelity") or []):
+            direction = entry.get("direction")
+            if direction and {str(direction["control"]), str(direction["target"])} != set(pair):
+                where = json_path([*prefix, "twoQubitProperties", key, "twoQubitGateFidelity", i])
+                return (
+                    f"{where}.direction goes from qubit {direction['control']} to qubit"
+                    f" {direction['target']}, not between the qubits of {key!r}"
+                )
+    return None
+
+
+_EXPECTED = {
+    "bool_type": "true or false",
+    "finite_number": "a finite number",
+    "float_type": "a number",
+    "int_type": "an integer",
+    "string_type": "a string",
+}
+
+
+def _shape_error(
+    exc: ValidationError, prefix: tuple[str, ...], source: str, origin: Origin
+) -> SourceDataError:
     error = exc.errors()[0]
     *parents, last = (*prefix, *error["loc"])
+    if error["type"] in _EXPECTED:
+        where = json_path([*parents, last])
+        if last == "[key]":
+            where = f"a key of {json_path(parents[:-1])}"
+        return origin.refuse(f"{where} is {error['input']!r}, not {_EXPECTED[error['type']]}")
     if error["type"] == "missing":
         problem = f"{json_path(parents)} has no {last!r}"
     elif error["type"] == "literal_error":

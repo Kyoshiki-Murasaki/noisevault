@@ -21,6 +21,7 @@ from ..errors import (
     did_you_mean,
     install_hint,
     joined,
+    plural,
     qubit_loci,
 )
 from ..gates import is_symmetric
@@ -112,7 +113,8 @@ def from_calibration_archive(
             f"{path.name} has no rows for {name}. The file has rows for {', '.join(held)}",
             hint=did_you_mean(name, held).strip() or None,
         )
-    first = as_utc(_pyarrow().compute.min(rows["observed_time"]).as_py())
+    pc = _pyarrow().compute
+    first = as_utc(pc.min(rows["observed_time"]).as_py())
     stamp = None if at is None else as_utc(at, name="at")
     if stamp is not None and stamp < first:
         raise SourceDataError(
@@ -120,13 +122,20 @@ def from_calibration_archive(
             f" when the archive first recorded {name}",
             hint="pass an at= time on or after that time",
         )
-    picked = _newest(rows, stamp)
     origin = Origin(f"the {name} rows of {path.name}", hint=OLDER_HINT)
+    picked = _newest(rows, stamp, origin)
     cal = calibration_from_properties(_backend_properties(name, picked), origin=origin)
     notes = [
         "The dataset is CC-BY-4.0, but its numbers are IBM Quantum calibrations under IBM's"
         " terms, so redistributable is unknown, as for nv pull."
     ]
+    blank = pc.or_(pc.is_null(rows["property"]), pc.is_null(rows["calibrated_time"]))
+    unplaced = pc.sum(blank).as_py()
+    if unplaced:
+        notes.append(
+            f"This profile does not use {plural(unplaced, 'row')} of {name} with no property or"
+            " no calibrated_time."
+        )
     if all(row["unit"] is None for row in picked):
         notes.append(
             "The archive recorded every row behind this profile before 8 May 2026, when the"
@@ -135,9 +144,9 @@ def from_calibration_archive(
             " no other gates."
         )
     elif stamp is not None:
+        newest_origin = Origin(f"the newest {name} rows of {path.name}")
         newest = calibration_from_properties(
-            _backend_properties(name, _newest(rows, None)),
-            origin=Origin(f"the newest {name} rows of {path.name}"),
+            _backend_properties(name, _newest(rows, None, newest_origin)), origin=newest_origin
         )
         missing = sorted({i.name for i in newest.instructions} - {i.name for i in cal.instructions})
         if missing:
@@ -238,19 +247,22 @@ def _is(types: Any, kind: Any, expected: str) -> bool:
     return types.is_timestamp(kind)
 
 
-def _newest(rows: pa.Table, at: datetime | None) -> list[dict[str, Any]]:
+def _newest(rows: pa.Table, at: datetime | None, origin: Origin) -> list[dict[str, Any]]:
+    """The newest row of each property on each locus, with its ``qubits`` read from the row."""
     arrow = _pyarrow()
     pc = arrow.compute
     if at is not None:
         limit = arrow.scalar(at, type=rows.schema.field("calibrated_time").type)
         rows = rows.filter(pc.less_equal(rows["calibrated_time"], limit))
     # Arrow joins never match a null key, and one-qubit rows have a null qubit_b.
+    rows = rows.append_column("first", pc.fill_null(rows["qubit_a"], -1))
     rows = rows.append_column("pair", pc.fill_null(rows["qubit_b"], -1))
-    key = ["property", "qubit_a", "pair"]
+    key = ["property", "first", "pair"]
     latest = rows.group_by(key).aggregate([("calibrated_time", "max")])
     latest = latest.select([*key, "calibrated_time_max"]).rename_columns([*key, "calibrated_time"])
     picked = rows.join(latest, keys=[*key, "calibrated_time"], join_type="inner")
-    return picked.sort_by([(column, "ascending") for column in [*key, "value"]]).to_pylist()
+    ordered = picked.sort_by([(column, "ascending") for column in [*key, "value"]]).to_pylist()
+    return [{**row, "qubits": _locus(row, origin)} for row in ordered]
 
 
 def _backend_properties(device: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -261,7 +273,7 @@ def _backend_properties(device: str, rows: list[dict[str, Any]]) -> dict[str, An
         name, unit = row["property"], row["unit"]
         if unit is None and name in _IN_SECONDS_WITHOUT_UNIT:
             unit = "s"
-        locus = _locus(row)
+        locus = row["qubits"]
         top = max(top, *locus)
         split = _gate_parameter(name)
         if split is None:
@@ -284,9 +296,24 @@ def _backend_properties(device: str, rows: list[dict[str, Any]]) -> dict[str, An
     }
 
 
-def _locus(row: dict[str, Any]) -> tuple[int, ...]:
-    a, b = int(row["qubit_a"]), row["qubit_b"]
-    return (a,) if b is None else (a, int(b))
+def _locus(row: dict[str, Any], origin: Origin) -> tuple[int, ...]:
+    """The row's qubits; ``origin`` refuses an index that is not a whole number 0 or more, and a
+    qubit_b on a value of one qubit.
+    """
+    columns = ("qubit_a",) if row["qubit_b"] is None else ("qubit_a", "qubit_b")
+    for column in columns:
+        value = row[column]
+        if value is None or value < 0 or not float(value).is_integer():
+            problem = "not a qubit index"
+        elif column == "qubit_b" and _gate_parameter(row["property"]) is None:
+            problem = f"but {row['property']} is a value of one qubit"
+        else:
+            continue
+        shown = "null" if value is None else repr(value)
+        calibrated = iso_z(as_utc(row["calibrated_time"]))
+        row_name = f"the {row['property']} row calibrated at {calibrated}"
+        raise origin.refuse(f"{column} of {row_name} is {shown}, {problem}")
+    return tuple(int(row[column]) for column in columns)
 
 
 def _gate_parameter(name: str) -> tuple[str, str] | None:
@@ -314,7 +341,7 @@ def _stale_note(
             continue
         if label is None or label in unconverted:
             continue
-        locus = _locus(row)
+        locus = row["qubits"]
         if len(locus) == 2 and is_symmetric(label):
             locus = tuple(sorted(locus))
         loci.setdefault(label, set()).add(locus)

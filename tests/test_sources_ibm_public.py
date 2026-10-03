@@ -518,3 +518,31 @@ def test_a_value_a_profile_cannot_hold_names_the_reply_and_the_value(
         f"IBM's public endpoint ({url}): {problem}",
         "pass an earlier at= to use an older calibration",
     )
+
+
+_ERROR = [{"name": "gate_error", "value": 0.001}]
+
+
+@pytest.mark.parametrize(
+    ("entries", "problem"),
+    [
+        ([("sx", [0, 1], [])], "gate sx is on 2 qubits [0, 1]; sx acts on 1 qubit"),
+        (
+            [("foo", [0], _ERROR), ("foo", [0, 1], [])],
+            "gate foo is on 2 qubits [0, 1]; the first foo entry is on 1 qubit",
+        ),
+    ],
+    ids=["known-gate", "unknown-gate"],
+)
+def test_a_gate_on_the_wrong_number_of_qubits_names_the_gate_and_its_qubits(
+    monkeypatch: pytest.MonkeyPatch, entries: list[tuple[str, list[int], list]], problem: str
+) -> None:
+    props = json.loads(PROPERTIES)
+    props["gates"] += [{"gate": g, "qubits": q, "parameters": p} for g, q, p in entries]
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
+    with pytest.raises(nv.SourceDataError) as info:
+        ibm_public.pull("ibm_manila")
+    assert (info.value.message, info.value.hint) == (
+        f"IBM's public endpoint ({ibm_public.properties_url('ibm_manila')}): {problem}",
+        "pass an earlier at= to use an older calibration",
+    )

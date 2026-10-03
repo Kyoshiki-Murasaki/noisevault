@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import math
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,7 +34,7 @@ _SENDER = "IonQ's API"
 _TRY_LATER = "try again later"
 # IonQ's history holds medians no trapped-ion device produces (1Q 0.69, 2Q 0.75, SPAM 0.73)
 # next to normal ones, and chance-level SPAM placeholders (0.5, 0.501) from before SPAM was
-# measured. The importer reads medians below these floors as corrupt, not as data.
+# measured. The importer reads medians below these floors or above 1 as corrupt, not as data.
 _FLOORS = {"1q": 0.99, "2q": 0.9, "spam": 0.9}
 _NO_FIDELITIES = "without 1Q/2Q fidelities"
 _IMPLAUSIBLE = "with implausible medians on "
@@ -48,14 +49,33 @@ class _Backend(BaseModel):
     supported_native_gates: list[str] = []
 
 
+class _Statistic(BaseModel):
+    median: float | None = None
+    stderr: float | None = None
+
+
+class _Fidelities(BaseModel):
+    one: _Statistic | None = Field(None, alias="1q")
+    two: _Statistic | None = Field(None, alias="2q")
+    spam: _Statistic | None = None
+
+
+class _Timing(BaseModel):
+    one: float | None = Field(None, alias="1q")
+    two: float | None = Field(None, alias="2q")
+    readout: float | None = None
+    t1: float | None = None
+    t2: float | None = None
+
+
 class _Record(BaseModel):
     id: str
     date: Annotated[str, AfterValidator(checked_by(datetime.fromisoformat))]
     backend: str
     qubits: int | None = None
     connectivity: list[Annotated[list[int], Field(min_length=2, max_length=2)]] | None = None
-    fidelity: dict[str, Any] | None = None
-    timing: dict[str, Any] | None = None
+    fidelity: _Fidelities | None = None
+    timing: _Timing | None = None
 
 
 class _Characterizations(BaseModel):
@@ -114,8 +134,10 @@ def to_profile(
     backend = record["backend"]
     name = backend.removeprefix("qpu.")
     origin = Origin(f"{_SENDER} ({source_url})", hint=OLDER_HINT)
-    num_qubits = record.get("qubits") or listing.get("qubits")
-    if not num_qubits:
+    num_qubits = record.get("qubits")
+    if num_qubits is None:
+        num_qubits = listing.get("qubits")
+    if num_qubits is None:
         raise origin.refuse(
             f"record {record['id']} gives no qubit count, and neither does the backend listing"
         )
@@ -129,6 +151,7 @@ def to_profile(
         )
     one, two = _fidelity(fidelity, "1q"), _fidelity(fidelity, "2q")
     assert one is not None and two is not None  # _rejection() checked both
+    seconds = {key: _seconds(timing, key, origin) for key in ("1q", "2q", "readout", "t1", "t2")}
     natives = [g for g in listing.get("supported_native_gates", ()) if g in _TWO_QUBIT]
     if not natives:
         raise SourceUnavailable(
@@ -151,7 +174,7 @@ def to_profile(
         f"the two-qubit native ({natives[0]} -> {two_qubit}) comes from IonQ's current backend"
         " listing, also for older records",
     ]
-    if not record.get("qubits"):
+    if record.get("qubits") is None:
         notes.append(
             "the record gives no qubit count, so NoiseVault uses the qubit count of the current"
             f" listing ({num_qubits})"
@@ -160,16 +183,18 @@ def to_profile(
     spam = _fidelity(fidelity, "spam")
     readout: dict[str, float] | None = None
     if spam is not None:
-        readout = {"error": _clean(1 - spam[0]), **_ns("duration_ns", timing.get("readout"))}
-    elif _median(fidelity, "spam") is not None:
+        readout = {"error": _clean(1 - spam[0]), **_ns("duration_ns", seconds["readout"])}
+    elif (median := _median(fidelity, "spam")) is not None:
+        reason = (
+            "above 1 (corrupt)"
+            if median > 1
+            else f"below {_FLOORS['spam']} (a chance-level placeholder or corrupt)"
+        )
         notes.append(
-            f"SPAM fidelity median {_median(fidelity, 'spam')} is below {_FLOORS['spam']}"
-            " (a chance-level placeholder or corrupt), so NoiseVault leaves readout error unknown"
+            f"SPAM fidelity median {median} is {reason}, so NoiseVault leaves readout error unknown"
         )
     idle = {
-        key: _clean(seconds * 1e6)
-        for key, seconds in (("t1_us", timing.get("t1")), ("t2_us", timing.get("t2")))
-        if _positive(seconds)
+        f"{key}_us": _clean(seconds[key] * 1e6) for key in ("t1", "t2") if seconds[key] is not None
     }
     return origin.profile(
         {
@@ -185,8 +210,8 @@ def to_profile(
             "connectivity": _connectivity(record.get("connectivity"), num_qubits),
             "gates": {
                 "rz": {"virtual": True},
-                "r": _gate(one, timing.get("1q"), _FIDELITY_ASSUMPTION),
-                two_qubit: _gate(two, timing.get("2q"), two_assumption),
+                "r": _gate(one, seconds["1q"], _FIDELITY_ASSUMPTION),
+                two_qubit: _gate(two, seconds["2q"], two_assumption),
             },
             "readout": readout,
             "idle": idle or None,
@@ -207,7 +232,9 @@ def to_profile(
     )
 
 
-def _gate(fidelity: tuple[float, float | None], seconds: Any, assumption: str) -> dict[str, Any]:
+def _gate(
+    fidelity: tuple[float, float | None], seconds: float | None, assumption: str
+) -> dict[str, Any]:
     value, stderr = fidelity
     return {
         "avg_infidelity": _clean(1 - value),
@@ -235,17 +262,17 @@ def _median(fidelity: Mapping[str, Any], key: str) -> float | None:
     """The median IonQ gives for ``key``, or None for its null."""
     entry = fidelity.get(key)
     median = entry.get("median") if isinstance(entry, Mapping) else None
-    ok = isinstance(median, int | float) and not isinstance(median, bool) and 0 < median <= 1
+    ok = isinstance(median, int | float) and not isinstance(median, bool)
     return float(median) if ok else None
 
 
 def _fidelity(fidelity: Mapping[str, Any], key: str) -> tuple[float, float | None] | None:
     """(median, stderr) when the median is plausible data, or None for nulls and placeholders."""
     median = _median(fidelity, key)
-    if median is None or median < _FLOORS[key]:
+    if median is None or not _FLOORS[key] <= median <= 1:
         return None
     stderr = fidelity[key].get("stderr")
-    return median, float(stderr) if _positive(stderr) else None
+    return median, float(stderr) if stderr else None
 
 
 def _skip_notes(skipped: Sequence[str]) -> list[str]:
@@ -257,18 +284,22 @@ def _skip_notes(skipped: Sequence[str]) -> list[str]:
         shown = "; ".join(dated[:3]) + ("; ..." if len(dated) > 3 else "")
         notes.append(
             f"skipped {plural(len(implausible), 'newer record')} with implausible fidelity medians"
-            f" (1Q below {_FLOORS['1q']}, 2Q below {_FLOORS['2q']}, or a 1Q error above the 2Q"
-            f" error), read as corrupt: {shown}"
+            f" (1Q below {_FLOORS['1q']}, 2Q below {_FLOORS['2q']}, a median above 1, or a 1Q error"
+            f" above the 2Q error), read as corrupt: {shown}"
         )
     return notes
 
 
-def _positive(value: Any) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool) and value > 0
+def _seconds(timing: Mapping[str, Any], key: str, origin: Origin) -> float | None:
+    """``timing[key]``, or None for its null; ``origin`` refuses a time that is not positive."""
+    seconds = timing.get(key)
+    if seconds is not None and not (math.isfinite(seconds) and seconds > 0):
+        raise origin.refuse(f"timing.{key} is {seconds!r}, not a positive number of seconds")
+    return seconds
 
 
-def _ns(key: str, seconds: Any) -> dict[str, float]:
-    return {key: _clean(seconds * 1e9)} if _positive(seconds) else {}
+def _ns(key: str, seconds: float | None) -> dict[str, float]:
+    return {} if seconds is None else {key: _clean(seconds * 1e9)}
 
 
 def _clean(value: float) -> float:

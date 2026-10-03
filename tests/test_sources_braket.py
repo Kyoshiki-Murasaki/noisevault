@@ -6,7 +6,7 @@ import contextlib
 import hashlib
 import json
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -559,4 +559,106 @@ def test_a_value_a_profile_cannot_hold_names_the_file_and_the_value(tmp_path: Pa
         "rigetti.json: readout.error of qubit 3: Input should be greater than or equal to 0,"
         " got -0.5",
         "correct that value in rigetti.json",
+    )
+
+
+def _set(path: tuple[str | int, ...], value: object) -> Callable[[Any], None]:
+    return lambda doc: _parent(doc, path).__setitem__(path[-1], value)
+
+
+def _rekey(doc: Any) -> None:
+    pairs = doc["standardized"]["twoQubitProperties"]
+    pairs["1-2-3"] = pairs.pop("1-2")
+
+
+_RIGETTI_DIRECTION = ("twoQubitProperties", "0-1", "twoQubitGateFidelity", 0, "direction")
+
+
+@pytest.mark.parametrize(
+    ("fixture", "edit", "shown"),
+    [
+        (
+            IONQ,
+            _set(("standardized", "T1", "value"), True),
+            "standardized.T1.value is True, not a number",
+        ),
+        (
+            IONQ,
+            _set(("standardized", "singleQubitFidelity", 0, "fidelity"), "0.9996"),
+            "standardized.singleQubitFidelity[0].fidelity is '0.9996', not a number",
+        ),
+        (
+            IQM,
+            _set(("paradigm", "qubitCount"), "4"),
+            "paradigm.qubitCount is '4', not an integer",
+        ),
+        (
+            IQM,
+            _set(("paradigm", "connectivity", "fullyConnected"), "no"),
+            "paradigm.connectivity.fullyConnected is 'no', not true or false",
+        ),
+        (
+            RIGETTI,
+            _set((*_RIGETTI_DIRECTION, "control"), 1.5),
+            "twoQubitProperties['0-1'].twoQubitGateFidelity[0].direction.control is 1.5, not an"
+            " integer",
+        ),
+        (
+            RIGETTI,
+            _set((*_RIGETTI_DIRECTION, "control"), 3),
+            "twoQubitProperties['0-1'].twoQubitGateFidelity[0].direction goes from qubit 3 to"
+            " qubit 0, not between the qubits of '0-1'",
+        ),
+        (
+            IQM,
+            _rekey,
+            "standardized.twoQubitProperties has the key '1-2-3', not a pair of qubit ids such as"
+            " '0-1'",
+        ),
+        (
+            IONQ,
+            _set(("standardized", "updatedAt"), "yesterday"),
+            "the standardized updatedAt is 'yesterday', not an ISO 8601 time",
+        ),
+        (
+            IQM,
+            _set(("service", "updatedAt"), "2026-13-01"),
+            "the service updatedAt is '2026-13-01', not an ISO 8601 time",
+        ),
+    ],
+    ids=[
+        "bool-T1",
+        "text-fidelity",
+        "text-qubit-count",
+        "text-flag",
+        "direction",
+        "pair",
+        "key",
+        "standardized-time",
+        "service-time",
+    ],
+)
+def test_a_value_of_the_wrong_kind_names_the_file_the_field_and_the_value(
+    tmp_path: Path, fixture: Path, edit: Callable[[Any], None], shown: str
+) -> None:
+    doc = json.loads(fixture.read_text())
+    edit(doc)
+    damaged = tmp_path / fixture.name
+    damaged.write_text(json.dumps(doc))
+    with pytest.raises(nv.SourceDataError) as info:
+        from_braket(damaged)
+    assert (info.value.message, info.value.hint) == (
+        f"{fixture.name}: {shown}",
+        f"correct that value in {fixture.name}",
+    )
+
+
+def test_a_dict_with_a_key_that_is_not_a_string_names_the_key() -> None:
+    data = json.loads(RIGETTI.read_text())
+    data["oneQubitProperties"][5] = data["oneQubitProperties"]["0"]
+    with pytest.raises(nv.SourceDataError) as info:
+        from_braket(data)
+    assert (info.value.message, info.value.hint) == (
+        "the dict passed in: a key of oneQubitProperties is 5, not a string",
+        "correct that value in the dict passed in",
     )
