@@ -180,7 +180,7 @@ def vault_path(profile: Profile) -> Path:
 
 
 def bundled_profiles() -> list[ProfileInfo]:
-    index = json.loads((bundled_dir() / "index.json").read_text(encoding="utf-8"))
+    index = parse_json((bundled_dir() / "index.json").read_bytes())
     return [
         ProfileInfo.from_entry(entry, "bundled", bundled_dir() / entry["file"])
         for entry in index["profiles"]

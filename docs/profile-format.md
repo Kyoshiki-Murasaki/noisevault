@@ -112,6 +112,9 @@ coercions. The time fields `calibrated_at`, `retrieved_at` and `run_at` take an 
 a timezone, such as `2026-09-30T08:00:00Z`. In these fields, a number or a string of digits is an
 error, not a Unix timestamp.
 
+A key that occurs two times in one JSON object is an error, and the message names that key. The
+second value does not replace the first.
+
 ## Device
 
 | Field | Content |

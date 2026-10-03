@@ -10,7 +10,15 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
-from ..errors import SourceDataError, SourceUnavailable, parse_json, qubit_loci, unreadable
+from ..errors import (
+    DuplicateKeyError,
+    SourceDataError,
+    SourceUnavailable,
+    json_path,
+    parse_json,
+    qubit_loci,
+    unreadable,
+)
 from ..profile import Profile
 
 OFFLINE_HINT = (
@@ -92,6 +100,11 @@ def read_reply(raw: bytes, url: str, shape: TypeAdapter[Any], *, sender: str, hi
     """
     try:
         data = parse_json(raw)
+    except DuplicateKeyError as exc:
+        raise SourceUnavailable(
+            f"{sender} answered {url} with JSON that has the key {json_path(exc.path)} twice",
+            hint=hint,
+        ) from None
     except ValueError:
         raise SourceUnavailable(
             f"{sender} answered {url} with something other than JSON", hint=hint
@@ -130,9 +143,3 @@ def csv_by_line(text: str, source: str) -> list[tuple[int, list[str]]]:
             raise SourceDataError(f"{source} line {number} is not valid CSV: {exc}") from None
         lines.append((number, cells))
     return lines
-
-
-def json_path(keys: Sequence[str | int]) -> str:
-    return "".join(
-        f".{key}" if isinstance(key, str) and key.isidentifier() else f"[{key!r}]" for key in keys
-    ).removeprefix(".")

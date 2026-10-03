@@ -635,6 +635,29 @@ def test_an_index_this_noisevault_did_not_write_is_ignored_and_rewritten(
     assert writes == [index]
 
 
+def test_an_index_with_a_key_twice_is_ignored_and_rewritten(vault: Path) -> None:
+    profile = _dated("2025-01-01T00:00:00Z")
+    path = profile.save(vault_path(profile))
+    catalog.vault_profiles()
+    index = vault / ".index.json"
+    data = json.loads(index.read_text())
+    entry = data["entries"][path.name]
+    mistyped = {path.name: {**entry, "id": "ibm_mistyped"}}
+    text = json.dumps({**data, "digest": catalog._digest(mistyped), "entries": mistyped})
+    index.write_text(text.replace('"id": "ibm_mistyped"', '"id": "test_toy", "id": "ibm_mistyped"'))
+    assert [i.id for i in catalog.vault_profiles()] == ["test_toy"]
+    assert json.loads(index.read_text())["entries"] == {path.name: entry}
+
+
+def test_a_bundled_index_with_a_key_twice_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "index.json").write_text('{"profiles": [], "profiles": []}')
+    monkeypatch.setattr(catalog, "bundled_dir", lambda: tmp_path)
+    with pytest.raises(ValueError, match=r"^the key profiles appears twice$"):
+        bundled_profiles()
+
+
 def test_what_an_index_entry_records_changes_only_with_the_index_version() -> None:
     profile = Profile.model_validate(
         toy(
@@ -946,7 +969,8 @@ def test_a_load_through_the_index_reads_only_the_file_it_resolves(
     real = Path.read_bytes
     monkeypatch.setattr(Path, "read_bytes", lambda self: reads.append(self) or real(self))
     assert nv.load(ref) == days[picked]
-    assert [p for p in reads if p != vault / ".index.json"] == [vault_path(days[picked])]
+    indexes = (vault / ".index.json", catalog.bundled_dir() / "index.json")
+    assert [p for p in reads if p not in indexes] == [vault_path(days[picked])]
 
 
 def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:

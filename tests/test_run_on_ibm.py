@@ -1409,6 +1409,63 @@ def test_a_failed_job_id_write_that_leaves_no_job_file_to_collect_keeps_the_job_
     assert pending.read_bytes() == left
 
 
+def test_a_job_file_that_another_run_saves_in_place_between_two_job_id_writes_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    submissions = _recording_sampler(monkeypatch)
+    _account(monkeypatch, _fractional_fez(), submissions)
+    folder = tmp_path / "my counts"
+    folder.mkdir()
+    output, pending = folder / "fez.counts.json", folder / "fez.job.json"
+    submit, write = script.submit, os.write
+    planned: list[bytes] = []
+    another_run: list[bytes] = []
+    inodes: list[int] = []
+
+    def submit_and_plan_another_run(*args: Any) -> Any:
+        job = submit(*args)
+        planned.append(pending.read_bytes())
+        another_id = "x" * len(job.job_id())
+        assert another_id != job.job_id()
+        another_run.append(planned[0] + script._line({"job_id": another_id}))
+        return job
+
+    def five_bytes_then_another_run_saves_its_job(fd: int, data: Any) -> int:
+        if not another_run or os.fstat(fd).st_ino != pending.stat().st_ino:
+            return write(fd, data)
+        inodes.append(pending.stat().st_ino)
+        written = write(fd, data[:5])
+        pending.write_bytes(another_run.pop())
+        inodes.append(pending.stat().st_ino)
+        return written
+
+    monkeypatch.setattr(script, "submit", submit_and_plan_another_run)
+    monkeypatch.setattr(os, "write", five_bytes_then_another_run_saves_its_job)
+    command = ["ibm_fez", "--yes", "-o", str(output)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert script.main(command) == 1
+        assert len(inodes) == 2
+        assert len(set(inodes)) == 1
+        (submission,) = submissions
+        job_id = submission.job.job_id()
+        kept = folder / f"fez.{job_id}.job.json"
+        saved = planned[0] + script._line({"job_id": "x" * len(job_id)})
+        err = capsys.readouterr().err
+        assert err == (
+            f"error: {pending} changed while the script submitted job {job_id}. The script saved"
+            f" job {job_id} to {kept}\n"
+            f"hint: run the same command with --collect='{kept}' to collect the job\n"
+        )
+        assert pending.read_bytes() == saved
+        assert kept.read_bytes() == planned[0] + script._line({"job_id": job_id})
+        assert script.main([*command, *_hinted(err)]) == 0
+    assert len(submissions) == 1
+    assert load_counts(output).execution.job_ids == (job_id,)
+    assert not kept.exists()
+    assert pending.read_bytes() == saved
+
+
 def test_a_job_file_that_the_script_cannot_read_gives_an_error_and_submits_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1546,6 +1603,17 @@ def _plan_line_cut_short(data: dict[str, Any]) -> str:
     return '{"profile": {\n' + json.dumps({"job_id": data["job_id"]}) + "\n"
 
 
+def _profile_format_twice(data: dict[str, Any]) -> str:
+    plan = json.dumps({k: v for k, v in data.items() if k != "job_id"})
+    plan = plan.replace('"profile": {', '"profile": {"noisevault": "0.1", ', 1)
+    return plan + "\n" + json.dumps({"job_id": data["job_id"]}) + "\n"
+
+
+def _job_id_twice(data: dict[str, Any]) -> str:
+    plan = json.dumps({k: v for k, v in data.items() if k != "job_id"})
+    return plan + '\n{"job_id": "job-1", "job_id": "job-2"}\n'
+
+
 def _second_circuit_named_ghz_chain(data: dict[str, Any]) -> str:
     data["planned"][1]["name"] = "ghz_chain"
     return json.dumps(data) + "\n"
@@ -1575,6 +1643,8 @@ _TOO_MANY_OUTCOMES = [{"name": f"wide_{i}", "qubits": list(range(10)), "ops": []
             "job-1",
         ),
         (_plan_line_cut_short, "Expecting property name", "job-1"),
+        (_profile_format_twice, "(the key profile.noisevault appears twice)", "job-1"),
+        (_job_id_twice, "(the key job_id appears twice)", None),
         (_with(job_id=5), "Input should be a valid string", None),
         (_with(job_id=""), "the job id is empty", None),
         (_second_circuit_named_ghz_chain, 'circuits[1] repeats the name "ghz_chain"', "job-1"),
@@ -1594,6 +1664,8 @@ _TOO_MANY_OUTCOMES = [{"name": f"wide_{i}", "qubits": list(range(10)), "ops": []
         "options not an object",
         "options against the format",
         "plan line cut short",
+        "profile key twice",
+        "job id twice",
         "job id a number",
         "no job id",
         "two circuits with one name",

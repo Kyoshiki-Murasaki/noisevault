@@ -298,4 +298,5 @@ same bytes.
 `load_counts` raises `nv.CountsError`, a `ValueError`, for a file it refuses. The message is one
 line that starts with the path and names the field, such as
 `run.counts.json: circuits[0]: counts sum to 3999, but shots is 4000`. `hint` says how to fix the
-problem. `load_counts` raises `OSError` for a file that it cannot read.
+problem. A key that occurs two times in one JSON object is an error, such as two `"0"` keys in
+`counts`. `load_counts` raises `OSError` for a file that it cannot read.

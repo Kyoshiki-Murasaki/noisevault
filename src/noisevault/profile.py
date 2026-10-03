@@ -41,6 +41,7 @@ from pydantic import (
 
 from . import __version__, compat, gates, metrics
 from .errors import (
+    DuplicateKeyError,
     LociText,
     MigrationWarning,
     NoiseVaultError,
@@ -1409,7 +1410,9 @@ def read_json_file(
     try:
         return json_bytes(raw)
     except (ValueError, EOFError, zlib.error, gzip.BadGzipFile) as exc:
-        if path.name.endswith((".json", ".json.gz")):
+        if isinstance(exc, DuplicateKeyError):
+            hint = f"the file is damaged. {_REDO[kind]}, or keep one of the two keys"
+        elif path.name.endswith((".json", ".json.gz")):
             hint = f"the file is damaged or truncated. {_REDO[kind]}"
         else:
             hint = f"give a {kind} file (.json or .json.gz)"

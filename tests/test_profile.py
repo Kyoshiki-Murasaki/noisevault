@@ -32,6 +32,7 @@ from noisevault.profile import (
     load_file,
     parse_ref,
     profile_id,
+    read_json_file,
     unmodeled_note,
 )
 
@@ -277,6 +278,25 @@ def test_a_file_nested_deeper_than_the_parser_takes_is_not_json(tmp_path: Path) 
         f"nested {len(nested) // 2 + 2} levels deep",
         line,
         innermost,
+    )
+
+
+def test_a_gate_defined_twice_is_refused_before_the_second_replaces_the_first(
+    tmp_path: Path,
+) -> None:
+    data = toy(device={**toy()["device"], "num_qubits": 1}, connectivity={"edges": []})
+    data["gates"] = {"x": {"avg_infidelity": 0.2}}
+    text = json.dumps(data).replace('"gates": {', '"gates": {"x": {"avg_infidelity": 0.01}, ')
+    path = tmp_path / "twice.json"
+    path.write_text(text)
+
+    with pytest.raises(ValueError, match=r"^the key gates\.x appears twice$"):
+        load_file(path)
+    with pytest.raises(nv.NoiseVaultError) as caught:
+        read_json_file(path, "profile")
+    assert (caught.value.message, caught.value.hint) == (
+        f"{path} has the key gates.x twice",
+        "the file is damaged. Pull or export the profile again, or keep one of the two keys",
     )
 
 

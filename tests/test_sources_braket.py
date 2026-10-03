@@ -340,8 +340,9 @@ def test_values_it_cannot_read_are_named() -> None:
         (b'{\n  "braketSchemaHeader": "\xb5"}', "is not UTF-8 text (byte 0xb5 on line 2)"),
         (b"[]", "is not Braket standardized gate-model properties"),
         (b'{"standardized": [1]}', "is not Braket standardized gate-model properties"),
+        (b'{"standardized": {}, "standardized": []}', "has the key standardized twice"),
     ],
-    ids=["truncated", "cut-in-a-string", "latin-1", "array", "standardized-array"],
+    ids=["truncated", "cut-in-a-string", "latin-1", "array", "standardized-array", "key-twice"],
 )
 def test_a_file_that_is_not_braket_json_names_the_file(
     tmp_path: Path, raw: bytes, message: str

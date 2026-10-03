@@ -6,14 +6,17 @@ import pickle
 import sys
 
 import pytest
+from conftest import deeper_than_the_parser_takes
 
 import noisevault as nv
 from noisevault.errors import (
+    DuplicateKeyError,
     FingerprintMismatch,
     LayoutError,
     LociText,
     NoiseVaultError,
     did_you_mean,
+    parse_json,
     qubit_loci,
     unreadable,
 )
@@ -63,6 +66,45 @@ def test_a_number_too_long_to_read_is_named_in_words_not_python_advice() -> None
     assert unreadable("big.json", long_number) == (
         f"big.json is not JSON (a number has 5000 digits, over the {limit}-digit limit)"
     )
+
+
+@pytest.mark.parametrize(
+    ("raw", "path", "message"),
+    [
+        (b'{"a": 1, "a": 1}', ("a",), "dup.json has the key a twice"),
+        (
+            b'[0, {"x": [{"0-1": 1, "0-1": 2}]}]',
+            (1, "x", 0, "0-1"),
+            "dup.json has the key [1].x[0]['0-1'] twice",
+        ),
+        (b'{"a": {"b": 1, "b": 2}, "a": 3}', ("a",), "dup.json has the key a twice"),
+        (
+            b'{"k": [{}], "r": {"z": 1, "y": 2, "z": 3}}',
+            ("r", "z"),
+            "dup.json has the key r.z twice",
+        ),
+        (
+            b'{"a": {"x": 1, "x": 2}, "b": {"y": 1, "y": 2}}',
+            ("a", "x"),
+            "dup.json has the key a.x twice",
+        ),
+    ],
+    ids=["same value", "inside arrays", "lost first value", "after a sibling", "first of two"],
+)
+def test_a_key_twice_in_one_object_is_refused_with_its_path(
+    raw: bytes, path: tuple[str | int, ...], message: str
+) -> None:
+    with pytest.raises(DuplicateKeyError) as caught:
+        parse_json(raw)
+    assert caught.value.path == path
+    assert unreadable("dup.json", caught.value) == message
+
+
+def test_a_key_twice_before_nesting_deeper_than_the_parser_takes_gives_the_depth() -> None:
+    nested = deeper_than_the_parser_takes()
+    with pytest.raises(json.JSONDecodeError) as caught:
+        parse_json(('[{"a": 1, "a": 2}, ' + nested + "]").encode())
+    assert caught.value.msg == f"nested {len(nested) // 2 + 1} levels deep"
 
 
 def test_a_damaged_gzip_file_gives_its_reason_in_lower_case() -> None:

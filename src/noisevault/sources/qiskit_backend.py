@@ -28,7 +28,7 @@ from typing import Any, NewType
 from .. import __version__, gates, metrics, units
 from ..errors import SourceDataError, plural, qubit_loci
 from ..profile import FORMAT_VERSION, Profile, Technology
-from . import Origin
+from . import Origin, source_json
 
 RUNTIME_REPO = "https://github.com/Qiskit/qiskit-ibm-runtime"
 IBM_ATTRIBUTION = "IBM Quantum, via qiskit-ibm-runtime"
@@ -398,7 +398,7 @@ def _model_caveat(backend: Any, shipped: bytes, version: str) -> str | None:
     A snapshot taken from a device has the device name (``ibm_fez``, ``ibmq_manila``). The
     package's modeled backends have their own names (``fake_nighthawk``, ``fake_fractional``).
     """
-    name = json.loads(shipped).get("backend_name") or ""
+    name = source_json(shipped, backend.props_filename).get("backend_name") or ""
     if not name.startswith("fake_"):
         return None
     note = (

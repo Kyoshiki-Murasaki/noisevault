@@ -53,7 +53,13 @@ from noisevault.counts import (  # noqa: E402
     _duration,
     plan,
 )
-from noisevault.errors import CountsError, NoiseVaultError, install_hint, qubit_loci  # noqa: E402
+from noisevault.errors import (  # noqa: E402
+    CountsError,
+    NoiseVaultError,
+    install_hint,
+    parse_json,
+    qubit_loci,
+)
 from noisevault.profile import (  # noqa: E402
     Profile,
     _readable_json,
@@ -128,10 +134,10 @@ class Owned:
     def __post_init__(self) -> None:
         self.start = len(self.data)
 
-    def holds(self) -> bool:
+    def _held(self) -> int | None:
         try:
             if not os.path.samestat(os.lstat(self.path), os.fstat(self.fd)):
-                return False
+                return None
             os.lseek(self.fd, 0, os.SEEK_SET)
             content = b""
             while len(content) <= len(self.data) and (
@@ -139,19 +145,26 @@ class Owned:
             ):
                 content += chunk
         except OSError:
-            return False
-        return self.start <= len(content) <= len(self.data) and self.data.startswith(content)
+            return None
+        if self.start <= len(content) <= len(self.data) and self.data.startswith(content):
+            return len(content)
+        return None
 
-    def check(self) -> None:
-        if not self.holds():
+    def holds(self) -> bool:
+        return self._held() is not None
+
+    def check(self) -> int:
+        held = self._held()
+        if held is None:
             raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(self.path))
+        return held
 
     def append(self, data: bytes) -> None:
-        self.check()
+        held = self.check()
         self.data += data
-        view = memoryview(data)
-        while view:
-            view = view[os.write(self.fd, view) :]
+        while held < len(self.data):
+            os.write(self.fd, memoryview(self.data)[held:])
+            held = self.check()
         self.start = len(self.data)
 
     def cut(self, size: int) -> None:
@@ -631,7 +644,7 @@ def _submitted(pending: Path, fd: int, job_id: str | None) -> tuple[bytes, Submi
             lines = handle.readlines()
         data: dict[str, Any] = {}
         for line in lines:
-            data.update(json.loads(line))
+            data.update(parse_json(line))
         profile = Profile.model_validate(data["profile"])
         planned = tuple(PlannedCircuit.model_validate(c) for c in data["planned"])
         options = data["options"]
@@ -668,8 +681,8 @@ def _submitted(pending: Path, fd: int, job_id: str | None) -> tuple[bytes, Submi
 def _job_id_in(lines: list[bytes]) -> str | None:
     found = None
     for line in lines:
-        with contextlib.suppress(ValueError, RecursionError):
-            entry = json.loads(line)
+        with contextlib.suppress(ValueError):
+            entry = parse_json(line)
             if isinstance(entry, dict) and isinstance(entry.get("job_id"), str) and entry["job_id"]:
                 found = entry["job_id"]
     return found

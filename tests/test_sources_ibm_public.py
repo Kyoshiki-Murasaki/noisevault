@@ -157,6 +157,21 @@ def test_a_reply_that_is_not_json_says_to_try_again(
     )
 
 
+def test_a_reply_with_a_key_twice_names_the_key_and_says_to_try_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_t1 = b'"value": 131.5286444531517}'
+    raw = PROPERTIES.replace(first_t1, b'"value": 0.001, ' + first_t1, 1)
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: raw)
+    with pytest.raises(nv.SourceUnavailable) as info:
+        ibm_public.pull("ibm_fez")
+    url = f"{ibm_public.BASE_URL}/ibm_fez/properties"
+    assert (info.value.message, info.value.hint) == (
+        f"IBM's public endpoint answered {url} with JSON that has the key qubits[0][0].value twice",
+        "try again later, or pull through your IBM account with source='ibm-account'",
+    )
+
+
 def _properties(edit: Callable[[dict[str, Any]], object]) -> bytes:
     props = json.loads(PROPERTIES)
     edit(props)

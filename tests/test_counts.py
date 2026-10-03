@@ -410,6 +410,23 @@ def test_a_file_that_is_not_counts_is_named_with_what_to_give(tmp_path: Path) ->
     assert all("\n" not in str(e) for e in errors.values())
 
 
+def test_an_outcome_counted_twice_is_refused_before_the_second_count_replaces_the_first(
+    tmp_path: Path,
+) -> None:
+    fixture = Path(__file__).parent / "fixtures" / "compare" / "toy-xx.counts.json"
+    text = fixture.read_text()
+    path = tmp_path / "twice.counts.json"
+    path.write_text(text.replace('"counts": {"0": 3950,', '"counts": {"0": 1, "1": 50, "0": 3950,'))
+
+    with pytest.raises(CountsError) as caught:
+        load_counts(path)
+
+    assert (caught.value.message, caught.value.hint) == (
+        f"{path} has the key circuits[0].counts['0'] twice",
+        "the file is damaged. Save the counts again, or keep one of the two keys",
+    )
+
+
 def test_a_file_nested_deeper_than_the_parser_takes_is_one_counts_error_line(
     tmp_path: Path,
 ) -> None:

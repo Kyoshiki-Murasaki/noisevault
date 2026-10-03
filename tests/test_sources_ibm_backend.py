@@ -18,7 +18,7 @@ from conftest import FAKES_ADDED_IN, needs_runtime, require
 
 import noisevault as nv
 from noisevault.reference import Op, probabilities
-from noisevault.sources import Origin
+from noisevault.sources import Origin, qiskit_backend
 from noisevault.sources.qiskit_backend import BUNDLED_FAKES
 from noisevault.table import GateNoise, Unavailable
 
@@ -274,6 +274,14 @@ def test_a_modeled_fake_is_a_vendor_model_with_the_package_caveat(
     prov = _profile(class_name)[1].provenance
     assert prov.data_kind == "vendor_model"
     assert any(caveat in note for note in prov.notes), prov.notes
+
+
+def test_a_shipped_snapshot_with_a_key_twice_is_refused() -> None:
+    backend = _backend("FakeManilaV2")
+    shipped = b'{"backend_name": "fake_manila", "backend_name": "ibmq_manila"}'
+    with pytest.raises(nv.SourceDataError) as caught:
+        qiskit_backend._model_caveat(backend, shipped, "0.49.0")
+    assert caught.value.message == f"{backend.props_filename} has the key backend_name twice"
 
 
 def test_a_device_snapshot_is_measured_without_a_model_caveat() -> None:

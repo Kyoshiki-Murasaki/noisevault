@@ -3,8 +3,9 @@ from __future__ import annotations
 import difflib
 import json
 import re
+from collections import Counter
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, NoReturn
 
 
 class NoiseVaultError(Exception):
@@ -69,11 +70,36 @@ class CountsError(NoiseVaultError, ValueError):
     """
 
 
+class DuplicateKeyError(ValueError):
+    """A JSON object has the same key twice. ``path`` ends with that key."""
+
+    def __init__(self, path: tuple[str | int, ...]) -> None:
+        super().__init__(f"the key {json_path(path)} appears twice")
+        self.path = path
+
+
+def json_path(keys: Sequence[str | int]) -> str:
+    return "".join(
+        f".{key}" if isinstance(key, str) and key.isidentifier() else f"[{key!r}]" for key in keys
+    ).removeprefix(".")
+
+
 def parse_json(raw: bytes) -> Any:
     try:
-        return json.loads(raw)
+        return json.loads(raw, object_pairs_hook=_unique)
+    except _Repeat:
+        pass
     except RecursionError:
-        text = raw.decode(json.detect_encoding(raw), "surrogatepass")
+        _too_deep(raw)
+    try:
+        tree = json.loads(raw, object_pairs_hook=_Marked)
+    except RecursionError:
+        _too_deep(raw)
+    raise DuplicateKeyError(_repeated(tree))
+
+
+def _too_deep(raw: bytes) -> NoReturn:
+    text = raw.decode(json.detect_encoding(raw), "surrogatepass")
     depth = deepest = at = 0
     for token in _STRING_OR_BRACKET.finditer(text):
         if token[0] in ("[", "{"):
@@ -83,6 +109,47 @@ def parse_json(raw: bytes) -> Any:
         elif token[0] in ("]", "}"):
             depth -= 1
     raise json.JSONDecodeError(f"nested {deepest} levels deep", text, at)
+
+
+class _Repeat(Exception):
+    pass
+
+
+def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    obj = dict(pairs)
+    if len(obj) < len(pairs):
+        raise _Repeat
+    return obj
+
+
+class _Marked(dict[str, Any]):
+    def __init__(self, pairs: list[tuple[str, Any]]) -> None:
+        super().__init__(pairs)
+        counts = Counter(k for k, _ in pairs)
+        self.repeated = next((k for k, n in counts.items() if n > 1), None)
+
+
+def _repeated(tree: Any) -> tuple[str | int, ...]:
+    parents: list[tuple[int, str | int]] = [(0, "")]
+    stack: list[tuple[Any, int]] = [(tree, 0)]
+    while True:
+        node, at = stack.pop()
+        if isinstance(node, _Marked) and node.repeated is not None:
+            break
+        if isinstance(node, dict):
+            children: list[tuple[str | int, Any]] = list(node.items())
+        elif isinstance(node, list):
+            children = list(enumerate(node))
+        else:
+            continue
+        for key, child in reversed(children):
+            parents.append((at, key))
+            stack.append((child, len(parents) - 1))
+    path: list[str | int] = [node.repeated]
+    while at:
+        at, key = parents[at]
+        path.append(key)
+    return tuple(reversed(path))
 
 
 _STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
@@ -96,6 +163,8 @@ def unreadable(source: str, exc: Exception) -> str:
     if isinstance(exc, json.JSONDecodeError):
         where = f"{exc.msg.removesuffix(' at')} at line {exc.lineno}, column {exc.colno}"
         return f"{source} is not JSON ({_lower_first(where)})"
+    if isinstance(exc, DuplicateKeyError):
+        return f"{source} has the key {json_path(exc.path)} twice"
     if isinstance(exc, ValueError):
         digits = _DIGIT_LIMIT.search(str(exc))
         reason = (
