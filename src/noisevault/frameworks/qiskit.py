@@ -65,7 +65,7 @@ from qiskit_aer.noise.passes import LocalNoisePass
 from .. import gates
 from ..channels import ChannelSpec, GateChannels, readout_matrix
 from ..conversion import UnknownGates, idle_channel, resolve_op
-from ..report import Report
+from ..report import LociText, Report
 from ..table import GateNoise, NoiseTable, QubitNoise, Unavailable
 
 if TYPE_CHECKING:
@@ -317,7 +317,7 @@ def to_qiskit(
     exports = _exports(profile, report, omitted)
     placements = _placements(table, exports, enabled, unknown_gates, report, omitted)
     for name, why in omitted.items():
-        report.omit(f"native {name}: {why}")
+        report.omit(LociText(f"native {name}: ", why))
     _require_natives(profile, placements, omitted, enabled)
     report.events.clear()  # locus bookkeeping. Events count applications as circuits run
     target = _target(profile, placements, enabled)
@@ -415,10 +415,11 @@ def _placements(
                 continue
             out.append(_placement(table, export, qargs, found, unknown_gates, report, memo))
         if uncalibrated:
-            omitted[export.canonical] = (
-                f"no error metric on {qubit_loci(*uncalibrated)}, and unknown_gates='error', so"
-                " transpile does not use this native there (unknown_gates='typical' gives those"
-                " loci the typical native's noise)"
+            omitted[export.canonical] = LociText(
+                "no error metric on ",
+                uncalibrated,
+                ", and unknown_gates='error', so transpile does not use this native there"
+                " (unknown_gates='typical' gives those loci the typical native's noise)",
             )
         elif unavailable and len(unavailable) == len(candidates):
             omitted[export.canonical] = unavailable[0]
@@ -496,7 +497,9 @@ def _require_natives(
                 f"{refusal}. The profile connectivity allows no pair of enabled qubits, so"
                 f" profile.to_cirq() cannot run a {word}-qubit gate either"
             )
-        why = "; ".join(f"{n}: {omitted.get(n, 'disabled on every locus')}" for n in defined)
+        why = "; ".join(
+            LociText(f"{n}: ", omitted.get(n, "disabled on every locus")).short for n in defined
+        )
         if any(table.allowed(n, qargs) for n in defined for qargs in loci):
             raise UnsupportedDevice(
                 f"{refusal} ({why})",
@@ -761,13 +764,13 @@ def _report_fixed(table: NoiseTable, enabled: Sequence[int], readout: bool, repo
     elif len(no_readout) < len(qubits):
         report.mark_exact("readout: P(1|0) and P(0|1) per qubit, as given (Aer ReadoutError)")
     if readout and no_readout:
-        report.mark_unknown(f"readout error of {qubit_loci(*((q,) for q in no_readout))}")
+        report.mark_unknown(LociText("readout error of ", [(q,) for q in no_readout]))
     no_prep = [q.index for q in qubits if q.prep_error is None]
     if len(no_prep) < len(qubits):
         report.mark_exact("reset: bit flip with the preparation error after each reset")
         report.approximate("initial state", "ideal |0>", "preparation error applies after reset")
     if no_prep:
-        report.mark_unknown(f"preparation (reset) error of {qubit_loci(*((q,) for q in no_prep))}")
+        report.mark_unknown(LociText("preparation (reset) error of ", [(q,) for q in no_prep]))
     if not all(q.relaxation_unknown for q in qubits):
         report.mark_exact("delay: thermal relaxation and dephasing over its duration")
     for q in qubits:

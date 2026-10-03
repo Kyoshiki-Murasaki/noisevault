@@ -39,7 +39,7 @@ from ..channels import ChannelSpec, pauli_twirl
 from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
-from ..report import Report
+from ..report import LociText, Report
 from ..table import GateNoise, Unavailable
 
 Readout = Literal["symmetrize", "exact", "none"]
@@ -603,7 +603,7 @@ class _Exporter:
         for key, qubits in self.unknown.items():
             if qubits:
                 self.report.mark_unknown(
-                    f"{texts[key]} of physical {qubit_loci(*((q,) for q in sorted(qubits)))}"
+                    LociText(f"{texts[key]} of physical ", [(q,) for q in sorted(qubits)])
                 )
 
 

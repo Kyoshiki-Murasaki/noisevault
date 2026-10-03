@@ -1,4 +1,5 @@
 import copy
+import json
 import pickle
 import time
 import warnings
@@ -680,6 +681,25 @@ def test_unknown_readout_is_reported_for_exact_readout_too():
     out = to_stim(Profile.model_validate(toy()), "M 0 1", readout="exact")
     assert out.readout_flips.tolist() == [[0.0, 0.0], [0.0, 0.0]]
     assert out.report.unknown == ["readout error of physical qubits 0 and 1"]
+
+
+def test_a_saved_report_names_every_qubit_without_readout():
+    device = {"name": "eight", "vendor": "test", "technology": "superconducting"}
+    data = toy(
+        device={**device, "num_qubits": 8},
+        connectivity={"edges": [[q, q + 1] for q in range(7)]},
+        qubits=[
+            {"index": q, "readout": {"p1_given_0": 0.01, "p0_given_1": 0.02}} for q in (3, 4, 5)
+        ],
+    )
+    out = to_stim(Profile.model_validate(data), "M 0 1 2 3 4 5 6 7")
+    again = pickle.loads(pickle.dumps(out))
+    for report in (out.report, again.report):
+        saved = json.loads(json.dumps(report.to_dict()))
+        assert saved["unknown"] == ["readout error of physical qubits 0, 1, 2, 6 and 7"]
+        assert (
+            "unknown (no noise applied): readout error of physical qubits 0, 1, 2 and 2 more"
+        ) in report.summary().splitlines()
 
 
 def test_sample_with_readout_is_exact_for_asymmetric_readout():

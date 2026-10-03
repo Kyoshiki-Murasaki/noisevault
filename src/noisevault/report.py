@@ -13,11 +13,11 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .errors import NoiseApproximationWarning, UnsupportedEffect, qubit_loci
+from .errors import NoiseApproximationWarning, UnsupportedEffect, joined, qubit_loci
 from .profile import unmodeled_note
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterable
+    from collections.abc import Callable, Collection, Iterable, Sequence
     from types import FrameType
 
     from .channels import GateChannels
@@ -44,6 +44,37 @@ _EVENTS = {  # event -> how summary() states one key's count
         "the export kept the circuit's own {key} as written, with no noise added, {times}"
     ),
 }
+
+
+_Loci = tuple[tuple[int, ...], ...]
+
+
+class LociText(str):
+    """Report text that names qubit loci.
+
+    The text names every locus. ``short`` shortens a list of more than four loci, as qubit_loci
+    does. A part is text, a sequence of loci, or a LociText. to_dict() keeps the text, so a saved
+    report names every qubit. summary() shows ``short``.
+    """
+
+    parts: tuple[str | _Loci, ...]
+
+    def __new__(cls, *parts: str | Iterable[Sequence[int]]) -> LociText:
+        flat: list[str | _Loci] = []
+        for part in parts:
+            if isinstance(part, LociText):
+                flat += part.parts
+            elif isinstance(part, str):
+                flat.append(part)
+            else:
+                flat.append(tuple(tuple(locus) for locus in part))
+        text = super().__new__(cls, _render(flat, _every_locus))
+        text.parts = tuple(flat)
+        return text
+
+    @property
+    def short(self) -> str:
+        return _render(self.parts, qubit_loci)
 
 
 @dataclass(frozen=True)
@@ -177,8 +208,8 @@ class Report:
             "options": _jsonable(self.options),
             "exact": list(self.exact),
             "approximated": [a.__dict__.copy() for a in self.approximated],
-            "omitted": list(self.omitted),
-            "unknown": list(self.unknown),
+            "omitted": [str(what) for what in self.omitted],
+            "unknown": [str(what) for what in self.unknown],
             "clamped": [
                 {
                     "gate": c.gate,
@@ -207,9 +238,12 @@ class Report:
             detail = f" ({a.detail})" if a.detail else ""
             lines.append(f"approximated: {a.what}: {a.how}{detail}")
         if self.omitted:
-            lines.append("omitted: " + ", ".join(self.omitted))
+            lines.append("omitted: " + ", ".join(LociText(what).short for what in self.omitted))
         if self.unknown:
-            lines.append("unknown (no noise applied): " + ", ".join(self.unknown))
+            lines.append(
+                "unknown (no noise applied): "
+                + ", ".join(LociText(what).short for what in self.unknown)
+            )
         noisier = [c for c in self.clamped if c.achieved > c.requested]
         quieter = [c for c in self.clamped if c.achieved < c.requested]
         if noisier:
@@ -260,6 +294,17 @@ def _gates(n: int) -> str:
 def _worst(clamps: list[Clamp]) -> str:
     c = max(clamps, key=lambda c: abs(c.achieved - c.requested))
     return f"{c.gate} on {qubit_loci(c.qubits)}, {c.requested:.3g} -> {c.achieved:.3g}"
+
+
+def _render(parts: Iterable[str | _Loci], loci_text: Callable[..., str]) -> str:
+    return "".join(part if isinstance(part, str) else loci_text(*part) for part in parts)
+
+
+def _every_locus(*loci: Sequence[int]) -> str:
+    """The qubit_loci text without its limit of four loci."""
+    labels = ["-".join(map(str, locus)) for locus in loci]
+    single = len(loci) == 1 and len(loci[0]) == 1
+    return f"qubit {joined(labels)}" if single else f"qubits {joined(labels)}"
 
 
 def _count_sentence(event: str, key: str, n: int) -> str:

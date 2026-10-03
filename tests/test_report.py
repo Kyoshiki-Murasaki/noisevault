@@ -9,7 +9,7 @@ from conftest import require, toy
 import noisevault as nv
 from noisevault.errors import NoiseApproximationWarning, UnsupportedEffect
 from noisevault.profile import Profile
-from noisevault.report import HONESTY, Clamp, Report
+from noisevault.report import HONESTY, Clamp, LociText, Report
 
 
 def _report(**sections) -> tuple[Profile, Report]:
@@ -97,6 +97,22 @@ def test_clamps_are_counted_as_one_gate_or_several_gates() -> None:
         "clamped: 1 gate less noisy than stated because relaxation plus the strongest depolarizing"
         " noise stays below the stated error. The largest is sx on qubit 0, 0.01 -> 0.002" in lines
     )
+
+
+def test_a_saved_report_names_every_locus_as_plain_text() -> None:
+    _, report = _report()
+    pairs = [(q, q + 1) for q in range(6)]
+    report.omit(LociText("native cz: ", LociText("no metric on ", pairs, ", so none")))
+    report.mark_unknown(LociText("readout error of ", [(5,)]))
+    saved = report.to_dict()
+    assert saved["omitted"] == [
+        "native cz: no metric on qubits 0-1, 1-2, 2-3, 3-4, 4-5 and 5-6, so none"
+    ]
+    assert saved["unknown"] == ["readout error of qubit 5"]
+    assert {type(text) for text in saved["omitted"] + saved["unknown"]} == {str}
+    lines = report.summary().splitlines()
+    assert "omitted: native cz: no metric on qubits 0-1, 1-2, 2-3 and 3 more, so none" in lines
+    assert "unknown (no noise applied): readout error of qubit 5" in lines
 
 
 def test_calibration_qualifiers_of_used_gates_are_reported() -> None:

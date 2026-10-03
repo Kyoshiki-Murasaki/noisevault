@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import warnings
 from typing import Any
@@ -966,6 +967,60 @@ def test_the_report_names_a_native_that_no_listed_pair_allows() -> None:
         " there"
     )
     assert omission in sim.report.omitted
+
+
+def _line(num_qubits: int, **sections: Any) -> Profile:
+    device = {"name": "line", "vendor": "test", "technology": "superconducting"}
+    return Profile.model_validate(
+        toy(
+            device={**device, "num_qubits": num_qubits},
+            connectivity={"edges": [[q, q + 1] for q in range(num_qubits - 1)]},
+            **sections,
+        )
+    )
+
+
+def test_a_saved_report_names_every_affected_qubit() -> None:
+    readout = {"p1_given_0": 0.01, "p0_given_1": 0.02}
+    profile = _line(
+        8,
+        gates={**_ONE_QUBIT_NATIVES, "x": {}, "cz": {"avg_infidelity": 1e-2}},
+        qubits=[{"index": q, "readout": readout} for q in (3, 4, 5)],
+    )
+    report = to_qiskit(profile, unknown_gates="error").report
+    saved = json.loads(json.dumps(report.to_dict()))
+    assert saved["unknown"] == [
+        "readout error of qubits 0, 1, 2, 6 and 7",
+        "preparation (reset) error of qubits 0, 1, 2, 3, 4, 5, 6 and 7",
+    ]
+    assert (
+        "native x: no error metric on qubits 0, 1, 2, 3, 4, 5, 6 and 7" + _UNCALIBRATED[:-1]
+    ) in saved["omitted"]
+    summary = report.summary()
+    assert (
+        "unknown (no noise applied): readout error of qubits 0, 1, 2 and 2 more,"
+        " preparation (reset) error of qubits 0, 1, 2 and 5 more"
+    ) in summary.splitlines()
+    assert "omitted: native x: no error metric on qubits 0, 1, 2 and 5 more, and" in summary
+
+
+def test_the_summary_stays_short_on_a_156_qubit_device() -> None:
+    report = to_qiskit(_line(156)).report
+    every = "qubits " + ", ".join(map(str, range(155))) + " and 155"
+    assert report.to_dict()["unknown"] == [
+        f"readout error of {every}",
+        f"preparation (reset) error of {every}",
+    ]
+    assert (
+        "unknown (no noise applied): readout error of qubits 0, 1, 2 and 153 more,"
+        " preparation (reset) error of qubits 0, 1, 2 and 153 more"
+    ) in report.summary().splitlines()
+
+
+def test_a_refusal_shortens_a_long_list_of_uncalibrated_loci() -> None:
+    with pytest.raises(UnsupportedDevice) as refused:
+        to_qiskit(_line(6, gates={**_ONE_QUBIT_NATIVES, "cz": {}}), unknown_gates="error")
+    assert "(cz: no error metric on qubits 0-1, 1-0, 1-2 and 7 more, and" in refused.value.message
 
 
 def test_readout_must_be_a_bool() -> None:
