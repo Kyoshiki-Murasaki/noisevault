@@ -68,6 +68,7 @@ _FIXED_AT_HALF_PI = {"rzz": "zz", "rxx": "ms", "ryy": "ms"}
 # Fixed z-family gates, which a profile without their own calibration charges as p, else rz.
 _FIXED_PHASES = ("s", "z", "sdg", "t", "tdg")
 _MAX_ORDER = 8
+_CHECK_ONLY = frozenset({"chain_mirror"})
 
 
 @dataclass(frozen=True)
@@ -292,6 +293,8 @@ def plan_circuits(
     *,
     purpose: Literal["check", "run"],
 ) -> tuple[list[int], tuple[Circuit, ...]]:
+    """The check chain and its circuits. A hardware run (``purpose="run"``) leaves out
+    ``chain_mirror``, so the run keeps the circuits that counts files record."""
     chain, circuits = _chain_and_circuits(profile, layout)
     if not circuits:
         raise NoiseVaultError(
@@ -299,6 +302,8 @@ def plan_circuits(
             f" {qubit_loci(chain)}, so there is nothing to {purpose}",
             hint=None if layout is None else "pass layout= with other qubits",
         )
+    if purpose == "run":
+        circuits = tuple(c for c in circuits if c.name not in _CHECK_ONLY)
     return chain, circuits
 
 
@@ -344,6 +349,9 @@ def build_circuits(
 
     Circuit qubit i is ``chain[i]``. The circuits are an entangling chain, a mirror circuit, a
     single-qubit sequence, and every 2-qubit native on one pair when there are several. The
+    ``chain_mirror`` circuit runs the entangling chain and its inverse twice: first with a
+    superposition on qubit 0 only, then on every qubit. This circuit finds 2-qubit errors that the
+    other circuits do not show, such as an X error on the target of ``cx`` after ``h``. The
     list also has a fixed phase gate that the profile charges as ``p``, and a measurement-only
     circuit. Only readout error moves the outcomes of the measurement-only circuit off
     ``0...0``.
@@ -373,6 +381,10 @@ def build_circuits(
     circuits = []
     if mix is not None and entangles:
         circuits.append(Circuit("ghz_chain", n, (*layer(n), *entangle(n), *layer(n))))
+        one = _undone([*layer(1), *entangle(n)])
+        every = _undone([*layer(n), *entangle(n)])
+        if one is not None and every is not None:
+            circuits.append(Circuit("chain_mirror", n, (*one, *every)))
     k = min(3, n)
     forward = []
     if mix is not None:
@@ -392,11 +404,9 @@ def build_circuits(
     phase = _fixed_phase(profile, chain[0])
     if mix is not None and phase is not None and expressible(phase):
         # Undone like the mirror circuit, so the phase gate's Z errors show as |1>.
-        forward = [*layer(1), phase]
-        undo = [_inverse(op) for op in reversed(forward)]
-        if all(ops is not None for ops in undo):
-            backward = [op for ops in undo for op in ops]  # type: ignore[union-attr]
-            circuits.append(Circuit("fixed_phase", 1, (*forward, *backward)))
+        undone = _undone([*layer(1), phase])
+        if undone is not None:
+            circuits.append(Circuit("fixed_phase", 1, tuple(undone)))
     if circuits:
         circuits.append(Circuit("readout", n, ()))
     return tuple(circuits)
@@ -465,6 +475,14 @@ def _inverse(op: Op) -> list[Op] | None:
             return [op] * (k - 1)
         power = u @ power
     return None
+
+
+def _undone(forward: list[Op]) -> list[Op] | None:
+    """``forward`` and then its inverse, or None when a gate of ``forward`` has no inverse."""
+    undo = [_inverse(op) for op in reversed(forward)]
+    if any(ops is None for ops in undo):
+        return None
+    return [*forward, *(op for ops in undo for op in ops)]  # type: ignore[union-attr]
 
 
 # expected probabilities ---------------------------------------------------------------------
@@ -799,6 +817,7 @@ class _Cirq(_Runner):
             "cx": lambda: c.CNOT,
             "cz": lambda: c.CZ,
             "ecr": ECRGate,
+            "swap": lambda: c.SWAP,
             "iswap": lambda: c.ISWAP,
             "sqrt_iswap": lambda: c.ISWAP**0.5,
             "zz": lambda: c.ZZ**0.5,

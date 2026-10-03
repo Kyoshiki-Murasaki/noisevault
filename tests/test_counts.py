@@ -522,11 +522,12 @@ def _timeline(profile: Profile, circuit: PlannedCircuit) -> list[float]:
 def test_plan_runs_the_check_circuits_with_every_qubit_busy_or_delayed_to_the_end() -> None:
     profile = kingston()
     expected = profile.check(frameworks=[])
+    checked = [c for c in expected.circuits if c.name != "chain_mirror"]
 
     planned = plan(profile)
 
-    assert [c.name for c in planned] == [c.name for c in expected.circuits]
-    for circuit, check_circuit in zip(planned, expected.circuits, strict=True):
+    assert [c.name for c in planned] == [c.name for c in checked]
+    for circuit, check_circuit in zip(planned, checked, strict=True):
         assert circuit.qubits == tuple(expected.layout[i] for i in range(check_circuit.num_qubits))
         assert tuple(op for op in circuit.ops if op.name != "delay") == check_circuit.ops
         clock = _timeline(profile, circuit)

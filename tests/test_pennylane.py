@@ -1361,12 +1361,23 @@ def test_every_buildable_registry_gate_has_the_registry_unitary(qml) -> None:
         if make is None:
             missing.add(row.name)
             continue
-        args = params[: len(row.params)]
+        args = (0.0, 0.0) if row.name == "ms" else params[: len(row.params)]
         theirs = _matrix(qml, make(*args, wires=list(range(row.arity))))
         overlap = np.trace(theirs.conj().T @ row.unitary(*args)) / 2**row.arity
         assert abs(abs(overlap) - 1) < 1e-12, row.name
-    # Adjoint(...) is no qml attribute, and PennyLane has no Molmer-Sorensen gate.
-    assert missing == {"sdg", "sxdg", "tdg", "ms", "cxswap", "swapcx", "czswap"}
+    # Adjoint(...) is no qml attribute.
+    assert missing == {"sdg", "sxdg", "tdg", "cxswap", "swapcx", "czswap"}
+
+
+def test_ms_builds_only_at_zero_phases_as_an_ising_xx_that_gets_the_ms_noise(qml) -> None:
+    from noisevault.frameworks.pennylane import gate_name, operation_for
+
+    ms = operation_for("ms")(0.0, 0.0, wires=[0, 1])
+    assert ms.name == "IsingXX"
+    assert np.allclose(_matrix(qml, ms), GATES["ms"].unitary(0.0, 0.0), rtol=0, atol=1e-12)
+    assert gate_name(ms, {"ms", "rxx"}) == "ms"
+    with pytest.raises(ValueError, match=r"builds only ms\(0, 0\).*Got ms\(0.37, 0.0\)"):
+        operation_for("ms")(0.37, 0.0, wires=[0, 1])
 
 
 def _trapped_ion(*, two_qubit: str = "zz") -> Profile:

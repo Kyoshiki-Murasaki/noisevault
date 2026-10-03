@@ -1197,7 +1197,7 @@ def test_check_counts_a_reduced_circuit_apart_and_names_its_missing_gates(tmp_pa
     result = runner.invoke(app, ["check", str(path), "--framework", "stim"])
     assert result.exit_code == 0, result.output
     row = next(line for line in result.stdout.splitlines() if line.startswith("stim "))
-    assert "4 of 5, 1 reduced" in row
+    assert "5 of 6, 1 reduced" in row
     assert (
         "stim: two_qubit_natives ran without rxx, ryy, rzz: Stim simulates only Clifford gates,"
         " and this profile's rxx gate is not Clifford" in " ".join(result.stdout.split())
@@ -1288,9 +1288,9 @@ def test_check_keeps_each_row_whole_at_60_columns_and_names_a_skip_once() -> Non
     assert qiskit[:2] + qiskit[3:] == [
         "qiskit",
         "pass",
-        "4",
+        "5",
         "of",
-        "4",
+        "5",
         "exact",
         "+",
         "20000",

@@ -503,7 +503,8 @@ def plan(
 ) -> tuple[PlannedCircuit, ...]:
     """The circuits that a hardware run executes.
 
-    These are the ``nv check`` circuits on the ``nv check`` chain, scheduled as soon as possible.
+    These are the ``nv check`` circuits on the ``nv check`` chain, except ``chain_mirror``,
+    scheduled as soon as possible.
     An explicit delay holds every wait. A delay pads each qubit to the end of the circuit, so no
     gap stays empty and every backend scheduling policy gives the same timeline. Durations come
     from the calibration as stated. A virtual gate or a missing duration takes 0 ns.

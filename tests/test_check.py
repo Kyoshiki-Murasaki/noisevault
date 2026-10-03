@@ -5,6 +5,7 @@ import importlib
 import json
 import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,7 @@ from conftest import require, toy
 from typer.testing import CliRunner
 
 import noisevault as nv
-from noisevault import gates
+from noisevault import gates, metrics
 from noisevault.check import (
     EXACT_TOLERANCE,
     FRAMEWORKS,
@@ -24,6 +25,7 @@ from noisevault.check import (
     _Stim,
     build_circuits,
     check,
+    plan_circuits,
 )
 from noisevault.cli import app
 from noisevault.errors import LayoutError, NoiseVaultError, install_hint
@@ -79,6 +81,87 @@ def test_an_export_that_drops_gate_noise_fails(monkeypatch: pytest.MonkeyPatch) 
     assert not by_name["cirq"].passed and by_name["cirq"].max_tvd > 1e-3
     assert by_name["pennylane"].passed
     assert not result.passed
+
+
+def _one_pauli_error(
+    mix: str, native: str, error: str, loci: list[list[int]], **connectivity: object
+) -> Profile:
+    """Ideal gates on a line of 4 qubits, except a 5% ``error`` on ``native`` at ``loci``."""
+    pauli = [0.05 if label == error else 0.0 for label in metrics.PAULI_2Q]
+    four = {"name": "blind", "vendor": "test", "technology": "superconducting", "num_qubits": 4}
+    data = toy(
+        device=four,
+        connectivity={"edges": [[0, 1], [1, 2], [2, 3]], **connectivity},
+        gates={mix: {"avg_infidelity": 0.0}, native: {"avg_infidelity": 0.0}},
+        calibrations=[{"gate": native, "qubits": q, "pauli": pauli} for q in loci],
+    )
+    return Profile.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("mix", "native", "error", "loci", "connectivity"),
+    [
+        ("h", "cx", "IX", [[0, 1], [1, 2], [2, 3]], {}),
+        ("h", "cx", "XX", [[0, 1], [1, 2], [2, 3]], {}),
+        ("sx", "cz", "IZ", [[2, 3]], {}),
+        ("sx", "ecr", "YY", [[0, 1]], {"edges": [[0, 1], [2, 1], [2, 3]], "directed": True}),
+        ("r", "zz", "ZZ", [[2, 3]], {}),
+    ],
+)
+def test_only_the_chain_mirror_finds_an_entangler_error_that_the_export_drops(
+    monkeypatch: pytest.MonkeyPatch, mix, native, error, loci, connectivity
+) -> None:
+    from noisevault.frameworks import cirq as nv_cirq
+
+    profile = _one_pauli_error(mix, native, error, loci, **connectivity)
+    (good,) = check(profile, frameworks=["cirq"], layout=[0, 1, 2, 3]).frameworks
+    assert good.passed
+    resolve = nv_cirq.resolve_op
+
+    def without_native(table, name, qubits, **options):
+        built = resolve(table, name, qubits, **options)
+        return replace(built, channels=()) if name == native else built
+
+    monkeypatch.setattr(nv_cirq, "resolve_op", without_native)
+    (cirq,) = check(profile, frameworks=["cirq"], layout=[0, 1, 2, 3]).frameworks
+    assert [c.circuit for c in cirq.circuits if not c.passed] == ["chain_mirror"]
+
+
+def test_a_hardware_run_leaves_out_only_the_chain_mirror() -> None:
+    profile = nv.load("ibm_kingston")
+    chain, checked = plan_circuits(profile, None, purpose="check")
+    assert plan_circuits(profile, None, purpose="run") == (
+        chain,
+        tuple(c for c in checked if c.name != "chain_mirror"),
+    )
+    assert [c.name for c in checked] == [
+        "ghz_chain",
+        "chain_mirror",
+        "mirror",
+        "single_qubit",
+        "readout",
+    ]
+
+
+def test_pennylane_checks_an_ms_native_against_the_reference() -> None:
+    natives = {"h": {"avg_infidelity": 0.01}, "ms": {"avg_infidelity": 0.02}}
+    result = check(Profile.model_validate(toy(gates=natives)), frameworks=["pennylane"])
+    (pennylane,) = result.frameworks
+    assert pennylane.not_run == ()
+    assert {c.circuit for c in pennylane.circuits} == {c.name for c in result.circuits}
+    assert "ms" in next(c for c in pennylane.circuits if c.circuit == "ghz_chain").gates
+    assert pennylane.passed and pennylane.max_tvd <= EXACT_TOLERANCE
+
+
+def test_every_framework_runs_a_swap_native() -> None:
+    errors = {"h": 0.01, "cx": 0.02, "swap": 0.03}
+    natives = {name: {"avg_infidelity": error} for name, error in errors.items()}
+    result = check(Profile.model_validate(toy(gates=natives)), layout=[0, 1])
+    assert result.passed and not result.skipped
+    for f in result.frameworks:
+        assert f.not_run == (), f.framework
+        pair = next(c for c in f.circuits if c.circuit == "two_qubit_natives")
+        assert "swap" in pair.gates, f.framework
 
 
 @pytest.mark.parametrize("framework", ["qiskit", "pennylane"])
@@ -250,6 +333,7 @@ def test_natives_a_framework_lacks_are_explained() -> None:
     (stim,) = nv.load("ibm_brisbane").check(frameworks=["stim"]).frameworks
     assert stim.not_run == (
         NotRun("ghz_chain", "Stim has no ecr instruction"),
+        NotRun("chain_mirror", "Stim has no ecr instruction"),
         NotRun("mirror", "Stim has no ecr instruction"),
     )
 

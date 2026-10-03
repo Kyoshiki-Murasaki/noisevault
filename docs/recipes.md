@@ -348,7 +348,8 @@ running the script again.
 On another device, take steps 1 to 3 by hand. Step 4 is the same for every device.
 
 1. Plan the circuits. `plan(profile)` from `noisevault.counts` returns the `nv check` circuits on
-   the qubits that `nv check` picks. `plan` schedules each gate as soon as its qubits are free.
+   the qubits that `nv check` picks. `plan` leaves out `chain_mirror`, a circuit that only
+   `nv check` runs. `plan` schedules each gate as soon as its qubits are free.
    It writes every wait as a `delay`, so the device and the noise model get the same idle time.
 2. Run each circuit on the device exactly as planned. Do not transpile the circuits, twirl them
    or add dynamical decoupling. Start each shot in the ground state. Measure every circuit qubit

@@ -84,7 +84,10 @@ placer. A layout onto a disabled or missing qubit raises `LayoutError` with the 
 `to_qiskit()` builds an Aer simulator with a Qiskit `Target`. The `Target` holds every native
 gate on every allowed locus, with the error and duration that the simulator applies.
 `transpile(circuit, sim)` therefore compiles to the device's natives, routes around disabled
-gates and places circuits by noise. `to_qiskit()` keys the noise model on physical qubits.
+gates and places circuits by noise. The `Target` also holds `measure`, `delay` and `reset` on
+every enabled qubit, but not a `reset` that the profile disables. Each `reset` has the profile's
+reset duration, so `scheduling_method="alap"` can schedule circuits with resets. `to_qiskit()`
+keys the noise model on physical qubits.
 
 ```python
 from qiskit import QuantumCircuit, transpile
@@ -125,7 +128,8 @@ What the report can list:
   resets add none. A `delay` on a qubit with no T1, T2 or dephasing rate adds no noise, and the
   report names the qubit.
 
-`readout=False` leaves measurements noiseless.
+`readout=False` leaves measurements noiseless. The `Target` then gives `measure` an error of 0,
+so `transpile` does not place circuits by a readout error that the simulator does not apply.
 
 On a profile with disabled qubits or gates, transpile with
 `initial_layout=list(profile.suggest_layout(n).values())`. Qiskit's `optimization_level=0`
@@ -178,7 +182,9 @@ What the report can list:
 - **Omitted.** The preparation error of the initial state, idle time outside `WaitGate`, and the
   profile's leakage effects.
 
-Classically controlled operations raise an error that says how to restructure the circuit.
+Classically controlled operations raise an error that says how to restructure the circuit. An
+operation on a qubit where the profile disables it raises `DisabledGateError`. Measurements,
+`cirq.reset` and `cirq.WaitGate` use the profile's `measure`, `reset` and `delay` entries.
 
 ## PennyLane
 
@@ -251,6 +257,10 @@ third word commutes with both, `default.mixed` decides which shots that word sha
 cannot see that decision, so the model raises an error. To fix the error, wrap the QNode in
 `qml.transforms.split_non_commuting` before `qml.add_noise`.
 
+Before the model selects the measured basis and the words that share shots, the model simplifies
+each Pauli observable as PennyLane does. The simplification removes each word whose coefficient
+is at most 1e-8. For example, `qml.X(0) + 0 * qml.Y(1)` reads only wire 0, in the X basis.
+
 PennyLane has no operation named after the `r`, `zz` and `ms` natives of trapped-ion profiles.
 A `qml.Rot(a, theta, -a)` gets the profile's `r` noise, and `qml.IsingZZ(pi/2)` gets its `zz`
 noise. On a profile with an `ms` native, `qml.IsingXX(±pi/2)` and `qml.IsingYY(±pi/2)` get its
@@ -263,6 +273,10 @@ noise, with `qml.add_noise(qml.transforms.broadcast_expand(qnode), model)`.
 The model checks every wire that a circuit uses against the layout and the profile, also with
 `readout=False`. The check includes wires that the circuit only measures. A model built by adding
 or subtracting noise models checks only the wires its operations or readout reach.
+
+A gate or a reset on a qubit where the profile disables it raises `DisabledGateError`. For
+example, `qml.measure(0, reset=True)` raises the error when the profile disables `reset` on
+qubit 0.
 
 ## Stim
 
@@ -290,6 +304,10 @@ The report also states this substitution. For a grid device,
 `noisevault.stim.layout_from_coords(circuit, profile)` places a circuit by matching its
 `QUBIT_COORDS` to the profile's qubit coords. If a match uses coords that two enabled qubits
 have, the function raises `LayoutError`. Then give `layout=` to `to_stim`.
+
+An instruction on a qubit where the profile disables it raises `DisabledGateError`. Measurements
+(`M`, `MX`, `MY`, `MPP`, `MXX` and the others) use the profile's `measure` entry. Resets (`R`,
+`RX` and `RY`) use its `reset` entry. `MR`, `MRX` and `MRY` use both entries.
 
 In `MPP` and `SPP`, the export first reduces each Pauli product. Pauli factors on one qubit
 multiply. A qubit whose Pauli factors cancel is neither read out nor busy. A product that reduces
@@ -330,6 +348,12 @@ check needs the measurement-only circuit because readout error leaves a uniform 
 unchanged. When the profile calibrates `p`, the check also runs a fixed phase gate that the profile
 does not define, such as `s`. Every export must charge that gate as `p`.
 
+The `chain_mirror` circuit runs the chain of 2-qubit gates and then its inverse, two times. The
+first time, only the first qubit starts in a superposition. The second time, every qubit starts in
+a superposition. Thus `chain_mirror` finds 2-qubit errors that the other circuits do not show. An
+example is an X error on the target qubit of `cx` after `h`. The circuits of a hardware run, from
+`noisevault.counts.plan()`, do not include `chain_mirror`.
+
 The `deviation` and `tolerance` columns show the circuit that is nearest to its tolerance, or
 furthest past it. For an exact framework, the deviation is the TVD from the reference, and the
 tolerance is 1e-9. A sampled check compares the frequency of each outcome with the reference
@@ -343,7 +367,7 @@ for each export configuration that the check ran. Each report names every affect
 
 A framework that cannot express one of a circuit's gates runs the circuit without that gate. It
 skips the circuit when nothing useful remains. The `circuits` column counts only circuits that
-ran whole, for example `3 of 4, 1 reduced`. A line under the table names each gate left out and
+ran whole, for example `5 of 6, 1 reduced`. A line under the table names each gate left out and
 why, such as `stim: two_qubit_natives ran without rxx, ryy, rzz`. A pass covers only the gates
 that ran. `--json` lists the same information under each framework's `not_run`. There,
 `ran_without` names the gates that a reduced circuit left out.

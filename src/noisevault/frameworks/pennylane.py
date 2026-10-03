@@ -74,9 +74,21 @@ _AT_ANGLE: dict[str, tuple[str, Callable[[Sequence[Any]], Any], tuple[float, ...
     "IsingYY": ("ms", lambda p: p[0], (pi / 2, -pi / 2)),  # ms(pi/2, pi/2) and ms(pi/2, -pi/2)
     "Rot": ("r", lambda p: p[0] + p[2], (0.0,)),  # Rot(a, theta, -a) = r(theta, pi/2 - a)
 }
+
+
+def _ms(phi0: float, phi1: float, wires: Any) -> Operator:
+    if phi0 != 0 or phi1 != 0:
+        raise ValueError(
+            f"PennyLane has no Molmer-Sorensen gate, so operation_for('ms') builds only ms(0, 0),"
+            f" which is qml.IsingXX(pi/2). Got ms({phi0}, {phi1})"
+        )
+    return qml.IsingXX(pi / 2, wires=wires)
+
+
 _BUILDERS: dict[str, Callable[..., Operator]] = {
     "zz": lambda wires: qml.IsingZZ(pi / 2, wires=wires),
     "r": lambda theta, phi, wires: qml.Rot(pi / 2 - phi, theta, phi - pi / 2, wires=wires),
+    "ms": _ms,
 }
 _ANGLE_TOL = 1e-9
 _NOT_GATES = frozenset({"Barrier", "Snapshot", "GlobalPhase", "WireCut"})
@@ -339,10 +351,10 @@ def to_pennylane(
 
     ``qml.IsingZZ(pi/2)`` gets the noise of a profile's ``zz``. ``qml.IsingXX(+-pi/2)`` and
     ``qml.IsingYY(+-pi/2)`` get the noise of its ``ms``, and ``qml.Rot(a, theta, -a)`` gets the
-    noise of its ``r``. :func:`operation_for` builds zz and r. See :func:`gate_name`. NoiseVault
-    cannot compare traced angles, as under ``jax.jit``, so those operations then get ``rzz``,
-    ``rxx`` or ``ryy`` noise or the typical-noise rule. A broadcast whose angles need the noise of
-    different gates raises ValueError. Apply ``qml.transforms.broadcast_expand`` before
+    noise of its ``r``. :func:`operation_for` builds zz, r and ms(0, 0). See :func:`gate_name`.
+    NoiseVault cannot compare traced angles, as under ``jax.jit``, so those operations then get
+    ``rzz``, ``rxx`` or ``ryy`` noise or the typical-noise rule. A broadcast whose angles need the
+    noise of different gates raises ValueError. Apply ``qml.transforms.broadcast_expand`` before
     ``qml.add_noise``.
     """
     return NoiseVaultPennyLaneModel(
@@ -377,7 +389,8 @@ def operation_for(name: str) -> Callable[..., Operator] | None:
     """The PennyLane operation for registry gate ``name``, called with the gate's parameters
     and ``wires=``, or None if PennyLane has no such operation.
     ``operation_for("r")(theta, phi, wires=0)`` is a ``qml.Rot`` with the unitary of ``r``,
-    which the noise model recognizes as ``r``."""
+    which the noise model recognizes as ``r``. ``operation_for("ms")`` builds only ms(0, 0), as
+    ``qml.IsingXX(pi/2)``, and raises ValueError at other phases."""
     if name in _BUILDERS:
         return _BUILDERS[name]
     info = gates.lookup(name)
