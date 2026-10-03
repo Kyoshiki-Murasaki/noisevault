@@ -55,6 +55,7 @@ This file lists all notable changes to NoiseVault. Versions follow
     code that runs the circuits through `SamplerV2` itself.
   - `load_counts` raises `nv.CountsError` for a file it refuses. The message names the file and
     the field, and `hint` says how to correct the file.
+  - A circuit in a counts file has at most 10^10 shots. `simulate` refuses more shots.
   - When a command that takes a profile gets a counts file, the error says that the file is a
     counts file and not a profile. When the two arguments are in the wrong order, `nv compare`
     names the correct order.

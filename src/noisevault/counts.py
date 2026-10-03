@@ -57,6 +57,7 @@ from .table import GateNoise
 
 COUNTS_FORMAT = "1.0"
 _MAX_OUTCOMES = 4096
+_MAX_SHOTS = 10_000_000_000
 BitOrder = Literal["clbit0_left", "qiskit"]
 
 
@@ -310,6 +311,17 @@ class MeasuredCircuit(PlannedCircuit):
         dict[str, Annotated[int, Strict(), Field(ge=0)]], BeforeValidator(_string_keys)
     ]
 
+    @field_validator("shots")
+    @classmethod
+    def _shots_fit(cls, shots: int) -> int:
+        if shots > _MAX_SHOTS:
+            raise CountsError(
+                f"{shots} is more than {_MAX_SHOTS}, the most shots that a counts file accepts for"
+                " one circuit",
+                hint="split the shots over several circuits with the same qubits and ops",
+            )
+        return shots
+
     @field_validator("counts")
     @classmethod
     def _canonical_counts(cls, counts: dict[str, int], info: ValidationInfo) -> FrozenDict:
@@ -546,6 +558,11 @@ def simulate(
     counts and the same ``sha256``.
     """
     check.validate_shots(shots)
+    if shots > _MAX_SHOTS:
+        raise ValueError(
+            f"shots={shots!r}: give at most {_MAX_SHOTS} shots, the most that a counts file"
+            " accepts for one circuit"
+        )
     rng = np.random.default_rng(seed)
     measured = []
     for circuit in circuits:
@@ -595,4 +612,5 @@ def _real(value: int | float) -> float:
 
 def _shown(value: Any, limit: int = 40) -> str:
     text = json.dumps(value, ensure_ascii=False, default=repr)
+    text = text.encode("utf-8", "backslashreplace").decode("utf-8")
     return text if len(text) <= limit else text[: limit - 3] + "..."

@@ -120,12 +120,12 @@ the job ids.
 | `name` | The circuit's name. Names are unique within a file. |
 | `qubits` | The physical qubits, 1 to 10 and distinct. Circuit qubit i is `qubits[i]`. |
 | `ops` | The ops the device ran, in order, on circuit qubits. Can be empty. |
-| `shots` | The number of shots, at least 1. |
+| `shots` | The number of shots, at least 1 and at most 10^10 (10000000000). |
 | `counts` | The number of shots that gave each outcome. The counts add up to `shots`. |
 
 The device measures every circuit qubit once, after the last op, into the classical bit with the
 same index. A file holds at most 4096 outcomes over all its circuits, where a circuit on n qubits
-has 2^n.
+has 2^n. `simulate` also refuses `shots` above 10^10.
 
 ### Ops
 

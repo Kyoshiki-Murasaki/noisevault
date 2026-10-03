@@ -136,6 +136,10 @@ def _too_many_outcomes(data: dict[str, Any]) -> None:
     data["circuits"] = [{"name": f"c{i}", **wide} for i in range(5)]
 
 
+def _shots(circuit: int, shots: int) -> Callable[[dict[str, Any]], None]:
+    return lambda data: data["circuits"][circuit].update(shots=shots, counts={"000": shots})
+
+
 class _Refusal(NamedTuple):
     change: Callable[[dict[str, Any]], None]
     words: str
@@ -185,6 +189,12 @@ _REFUSALS: dict[str, _Refusal] = {
         "circuits[0]: counts sum to 99, but shots is 100",
         "add up to shots",
     ),
+    "more shots than a counts file accepts": _Refusal(
+        _shots(1, 10**10 + 1),
+        "circuits[1].shots: 10000000001 is more than 10000000000, the most shots that a counts"
+        " file accepts for one circuit",
+        "split the shots over several circuits with the same qubits and ops",
+    ),
     "key of the wrong length": _Refusal(
         _set("circuits", 0, "counts", value={"00": 99, "011": 1}),
         'circuits[0].counts: key "011" has 3 bits, but the circuit measures 2 qubits',
@@ -216,6 +226,11 @@ _REFUSALS: dict[str, _Refusal] = {
         _set("circuits", 0, "ops", 2, value=["sycamore", [0, 1], []]),
         'circuits[0].ops[2]: "sycamore" is not a gate NoiseVault can simulate',
         "use a gate name from the registry, such as sx, cz or rz, or delay",
+    ),
+    "gate name with accents": _Refusal(
+        _set("circuits", 0, "ops", 2, value=["résumé", [0, 1], []]),
+        'circuits[0].ops[2]: "résumé" is not a gate NoiseVault can simulate',
+        None,
     ),
     "misspelled gate": _Refusal(
         _set("circuits", 0, "ops", 2, value=["iswapp", [0, 1], []]),
@@ -318,6 +333,16 @@ _REFUSALS: dict[str, _Refusal] = {
         _set("execution", "options", "\ud800", value=1),
         "execution.options: the key '\\ud800' holds the unpaired surrogate \\ud800",
         None,
+    ),
+    "surrogate in a counts key": _Refusal(
+        _set("circuits", 0, "counts", value={"00": 99, "\ud800": 1}),
+        'circuits[0].counts: key "\\ud800" holds characters other than 0 and 1',
+        "write each key in 0 and 1",
+    ),
+    "surrogate in an op name": _Refusal(
+        _set("circuits", 0, "ops", 2, value=["\ud800", [0, 1], []]),
+        'circuits[0].ops[2]: "\\ud800" is not a gate NoiseVault can simulate',
+        "use a gate name from the registry",
     ),
     "surrogate in an option value": _Refusal(
         _set("execution", "options", "note", value="\ud800"),
@@ -587,6 +612,22 @@ def test_plan_refuses_a_profile_with_no_calibrated_native_on_the_chain() -> None
 def test_simulate_refuses_a_shot_count_that_is_not_positive() -> None:
     with pytest.raises(ValueError, match="give a positive number of shots"):
         simulate(kingston(), plan(kingston()), shots=0, seed=0)
+
+
+def test_a_circuit_of_the_most_shots_loads_simulates_and_one_more_shot_is_refused(
+    tmp_path: Path,
+) -> None:
+    data = _run()
+    _shots(1, 10**10)(data)
+    one = plan(kingston())[:1]
+
+    loaded = load_counts(_write(tmp_path / "run.counts.json", data))
+    drawn = simulate(kingston(), one, shots=10**10, seed=0, run_at=RUN_AT)
+
+    assert loaded.circuits[1].vector()[0] == 10**10
+    assert drawn.circuits[0].vector().sum() == 10**10
+    with pytest.raises(ValueError, match="give at most 10000000000 shots"):
+        simulate(kingston(), one, shots=10**10 + 1, seed=0, run_at=RUN_AT)
 
 
 def test_the_example_in_the_counts_format_page_loads(tmp_path: Path) -> None:
