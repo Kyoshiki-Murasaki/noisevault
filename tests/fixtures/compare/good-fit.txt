@@ -6,9 +6,9 @@ circuit       shots  profile TVD  fitted TVD  noise TVD 95%
 ghz_chain      4000       0.0217      0.0215         0.0327
 mirror         4000       0.0237      0.0050         0.0067
 single_qubit   4000       0.0067      0.0011         0.0037
-readout        4000       0.0096      0.0036         0.0047
+readout        4000       0.0096      0.0036         0.0046
 
-gate errors     x2.16 (95% interval 1.77 to 2.58)
+gate errors     x2.16 (95% interval 1.76 to 2.58)
 readout errors  x1.34 (95% interval 1.16 to 1.53)
 fit             within shot noise on every circuit (p = 0.66)
 

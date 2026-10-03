@@ -109,10 +109,10 @@ tests have shown.
 ### Which counts it accepts
 
 `nv compare` refuses counts that name another device or another calibration fingerprint. It also
-refuses counts that ran before the calibration, or that use an op the profile does not calibrate
-on the measured qubits. The fit starts from the calibration without `unmodeled_error`. The factors
-it reports therefore multiply the stated error rates, even when the profile already carries
-factors.
+refuses counts that ran before the calibration, or that use an op the profile does not calibrate on
+the measured qubits. It also refuses counts whose circuits use a delay or a measurement that the
+profile disables. The fit starts from the calibration without `unmodeled_error`. The factors it
+reports therefore multiply the stated error rates, even when the profile already carries factors.
 
 ### The likelihood
 
@@ -170,17 +170,24 @@ no gates, so only readout error moves it, and that circuit separates the two fac
 
 `nv compare` reports both factors as not identified when the two factors move the counts in the
 same direction. That condition holds when the smallest eigenvalue of the Fisher information is
-below 1e-6 of the largest. A factor whose interval reaches one end of the range keeps a one-sided
-interval, printed with "at most" or "at least".
+below 4.4e-16 times the largest, the floating-point precision of the eigenvalues. Above that limit,
+the counts carry information on both factors, and the interval of each factor shows how well the
+counts constrain it. An example is a circuit with 10^10 shots beside a circuit with 4000 shots.
+There, the smaller eigenvalue is 2e-7 times the larger, and `nv compare` reports both factors. The
+condition also needs both factors to move the counts. Thus the information on each factor must be
+at least 1e-6 of the information on the other. Otherwise, the intervals show which factor the
+counts constrain. A factor whose interval reaches one end of the range keeps a one-sided interval,
+printed with "at most" or "at least".
 
 ### The goodness-of-fit test
 
-The deviance is twice the gap between the log-likelihood of the counts' own frequencies and
-that of the fitted model. The test compares the deviance with its degrees of freedom. The test
-counts the outcomes that the profile can produce at some factor in the range. The degrees of
-freedom are that count minus one for each circuit, minus the rank of the Fisher information. That
-rank is 2 when the counts determine both factors, and less when they do not. A circuit whose
-shots all leave the likelihood adds no degrees of freedom and no Fisher information.
+The deviance is twice the gap between the log-likelihood of the counts' own frequencies and that of
+the fitted model. The test compares the deviance with its degrees of freedom. The test counts the
+outcomes that the profile can produce at some factor in the range. The degrees of freedom are that
+count minus one for each circuit, minus the rank of the Fisher information. That rank is 2 when the
+counts determine both factors, and less when they do not. The rank counts the eigenvalues above the
+same limit. A circuit whose shots all leave the likelihood adds no degrees of freedom and no Fisher
+information.
 
 The p-value ranks the deviance among the deviances of 400 sets of counts drawn from the fitted
 model. The smallest possible p is therefore 1/401, about 0.0025. Below 0.01, `nv compare` reports
@@ -250,6 +257,24 @@ gives the maximum of the observed counts. The grid step is a quarter of the inte
 For a one-sided interval, the step is at least 0.0125 in log factor. The grid also holds the two
 ends of the factor range. A set with no error shots has its maximum at the lower end, which a grid
 around a larger estimate does not reach.
+
+From the best grid point, the fit builds a quadratic from the nine grid points around it. The
+quadratic includes the term that couples the two factors. The fit then computes the likelihood at
+the vertex of the quadratic. It keeps that value when the quadratic predicts it within 0.02 and no
+neighboring grid point is more than 3.84 lower. Otherwise, the fit climbs from the best point. At
+each readout factor, it finds the best gate factor, and it then moves the readout factor. Each
+climb steps to a better neighbor, or it computes the vertex of a parabola through its two neighbors
+and makes its step smaller. A climb stops when both neighbors are within 0.001 of its best point.
+It also stops when the parabola predicts the likelihood at the vertex within 0.001 and no neighbor
+is more than 3.84 lower. Fits with one factor held climb along the other factor in the same way.
+Thus each maximum that the fit reports is the likelihood of the model at the reported factors. No
+reported maximum is above the true maximum.
+
+On a narrow ridge of the likelihood, the quadratic on the grid misses the maximum, and the climb
+finds it. An example is one qubit with an `x x` circuit of 10^8 shots and a readout circuit of 4000
+shots. Only the readout circuit separates the factors, and alone it gives a readout interval of
+0.72 to 1.35. Separate parabolas on each axis of the grid put the upper end at 2.56. With the
+climb, the interval is 0.70 to 1.35.
 
 ### Outcomes the profile rules out
 

@@ -7,7 +7,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeAlias
 
 import numpy as np
@@ -29,7 +29,7 @@ from .errors import (
 from .profile import POOR_FIT_P_VALUE, Bound, ErrorFactor, UnmodeledError, iso_z, ref_on_day
 from .reference import charged_as, outcome_bits, probabilities
 from .report import Report
-from .table import GateNoise, unscaled_phrases
+from .table import GateNoise, refuse_disabled, unscaled_phrases
 
 if TYPE_CHECKING:
     from .counts import MeasuredCounts, PlannedCircuit
@@ -46,7 +46,8 @@ WINDOW_POINTS = 33
 END_TOL = 0.02
 IMPOSSIBLE = 1e-12
 MIN_INFORMATIVE_SHOTS = 100
-SEPARABLE = 1e-6
+SEPARABLE = 2 * float(np.finfo(float).eps)
+FLAT = 1e-6
 FD_STEP = 1e-3
 REFINE_TOL = 0.04
 REGION = 9.0
@@ -377,8 +378,7 @@ def compare(profile: Profile, counts: MeasuredCounts) -> Comparison:
     fitted = _exact(base, circuits, gate, readout)
     info = _fisher(base, circuits, shots, fitted, gate, readout)
     unfitted = _identify(surface, observed, info)
-    eigen = np.linalg.eigvalsh(info)
-    rank = int(np.sum(eigen > SEPARABLE * eigen[-1])) if eigen[-1] > 0 else 0
+    rank = _rank(info)
     used = [part for part, n in zip(surface.slices, shots, strict=True) if n]
     dof = sum(int(surface.supported[part].sum()) - 1 for part in used) - rank
     deviance = _deviance(observed, fitted, surface.slices)
@@ -518,7 +518,7 @@ class _Surface:
         factors, which = np.unique(np.asarray(log_readout, dtype=float), return_inverse=True)
         which = which.ravel()
         matrices = {
-            pair: np.array([_confusion(pair, float(x)) for x in factors])[which]
+            pair: _confusion(pair, factors)[which]
             for pair in {pair for pairs in self.readout_pairs for pair in pairs if pair is not None}
         }
         out = np.empty_like(unread)
@@ -527,13 +527,18 @@ class _Surface:
             for i, pair in enumerate(pairs):
                 if pair is not None:
                     block = _read(block, i + 1, matrices[pair])
-            out[:, part] = block.reshape(len(unread), -1)
+            out[:, part] = block.reshape(len(unread), part.stop - part.start)
         return out
 
     def loglik_at(
         self, log_gate: ByPoint, log_readout: ByPoint, counts: ByCell | ByCellByDraw
     ) -> ByPoint | ByPointByDraw:
         return _loglik(self.probs_at(log_gate, log_readout), counts)
+
+    def loglik_each(
+        self, log_gate: ByColumn, log_readout: ByColumn, counts: ByCellByDraw
+    ) -> ByColumn:
+        return _paired(self.probs_at(log_gate, log_readout), counts)
 
     def loglik(self, counts: ByCell | ByCellByDraw, gate: ByPoint | None = None) -> ByGateByReadout:
         gate = _grid(self.gate) if gate is None else gate
@@ -809,10 +814,11 @@ class _Fit:
         line = np.linspace(max(center - _STEP, _LO), min(center + _STEP, _HI), WINDOW_POINTS)
         values = f(line)[:, None]
         k = np.argmax(values, axis=0)
-        vertex = _refine(values, k, line[1] - line[0])
+        vertex = _refine(values, k, line)
         x, top = float(line[k[0]] + vertex.shift[0]), float(values[k[0], 0] + vertex.gain[0])
-        if not _at_edge(line, int(k[0])) and abs(float(f(np.array([x]))[0]) - top) <= ASCENT_TOL:
-            return x, top
+        value = float(f(np.array([x]))[0])
+        if not _at_edge(line, int(k[0])) and abs(value - top) <= ASCENT_TOL:
+            return x, value
         return _zoom(f, x)
 
     def accepts(self, axis: Axis, held: float) -> bool:
@@ -848,30 +854,79 @@ class _Fit:
                 parts.append(np.zeros((len(cell), RESAMPLES)))
         return np.concatenate(parts).astype(float)
 
-    def draw_max(
-        self, draws: ByCellByDraw, windows: Sequence[_Window] = ()
-    ) -> tuple[ByColumn, ByColumn, ByColumn]:
-        found = [_window_max(window, draws) for window in _with_edges(windows or self.windows())]
-        top, gate, readout = found[0]
-        for other_top, other_gate, other_readout in found[1:]:
-            better = other_top > top
-            top = np.where(better, other_top, top)
-            gate = np.where(better, other_gate, gate)
-            readout = np.where(better, other_readout, readout)
-        return top, gate, readout
+    def draw_max(self, draws: ByCellByDraw, windows: Sequence[_Window] = ()) -> _Best:
+        windows = windows or self.windows()
+        gate_span, readout_span = _spacing(windows[0].gate), _spacing(windows[0].readout)
+
+        def climb(counts: ByCellByDraw, start: _Best) -> _Best:
+            def profile(
+                readout: ByColumn, which: np.ndarray, gate: ByColumn
+            ) -> tuple[ByColumn, ByColumn]:
+                return self._free_max("readout", readout, counts[:, which], gate, gate_span)
+
+            top, gate = profile(start.readout, np.arange(len(start.top)), start.gate)
+            readout, top, gate = _climb(profile, start.readout, top, gate, readout_span)
+            return _Best(top, gate, readout)
+
+        found = [_window_max(window, draws) for window in _with_edges(windows)]
+        return self._polish(draws, found, climb)
 
     def draw_restricted(
         self, draws: ByCellByDraw, axis: Axis, held: float, windows: Sequence[_Window] = ()
     ) -> ByColumn:
-        tops = []
-        for window in _with_edges(windows or self.windows()):
-            line = window.gate if axis == "readout" else window.readout
+        windows = windows or self.windows()
+        free = _other(axis)
+        span = _spacing(_grid_line(windows[0], free))
+
+        def climb(counts: ByCellByDraw, start: _Best) -> _Best:
+            fixed = np.full(len(start.top), held)
+            top, others = self._free_max(axis, fixed, counts, _grid_line(start, free), span)
+            return _Best(top, *_point(axis, held, others))
+
+        found = []
+        for window in _with_edges(windows):
+            line = _grid_line(window, free)
             values = self._line(axis, held, line, draws)
             k = np.argmax(values, axis=0)
-            tops.append(
-                values[k, np.arange(values.shape[1])] + _refine(values, k, _spacing(line)).gain
+            top, vertex = values[k, np.arange(len(k))], _refine(values, k, line)
+            found.append(
+                (
+                    _Best(top, *_point(axis, held, line[k])),
+                    _Best(top + vertex.gain, *_point(axis, held, line[k] + vertex.shift)),
+                    vertex.settled,
+                )
             )
-        return np.max(tops, axis=0)
+        return self._polish(draws, found, climb).top
+
+    def _polish(
+        self,
+        draws: ByCellByDraw,
+        found: Sequence[tuple[_Best, _Best, np.ndarray]],
+        climb: Callable[[ByCellByDraw, _Best], _Best],
+    ) -> _Best:
+        grids, vertices, settled = zip(*found, strict=True)
+        vertex, pick = _highest(vertices)
+        value = self.surface.loglik_each(vertex.gate, vertex.readout, draws)
+        best, _ = _highest([*grids, vertex._replace(top=value)])
+        settled = np.array(settled)[pick, np.arange(len(pick))]
+        with np.errstate(invalid="ignore"):
+            loose = np.flatnonzero(~settled | (np.abs(value - vertex.top) > TIE))
+        if len(loose):
+            climbed = climb(draws[:, loose], _Best(*(field[loose] for field in best)))
+            for field, values in zip(best, climbed, strict=True):
+                field[loose] = values
+        return best
+
+    def _free_max(
+        self, axis: Axis, held: ByColumn, counts: ByCellByDraw, others: ByColumn, span: float
+    ) -> tuple[ByColumn, ByColumn]:
+        def f(x: ByColumn, which: np.ndarray, _: ByColumn) -> tuple[ByColumn, ByColumn]:
+            point = (held[which], x) if axis == "gate" else (x, held[which])
+            return self.surface.loglik_each(*point, counts[:, which]), x
+
+        top, _ = f(others, np.arange(len(others)), others)
+        others, top, _ = _climb(f, others, top, others, span)
+        return top, others
 
     def windows(self) -> tuple[_Window, ...]:
         if not self._windows:
@@ -979,15 +1034,116 @@ def _spans(window: _Window, gate: float, readout: float) -> bool:
     )
 
 
-def _window_max(window: _Window, draws: ByCellByDraw) -> tuple[ByColumn, ByColumn, ByColumn]:
+class _Best(NamedTuple):
+    top: ByColumn
+    gate: ByColumn
+    readout: ByColumn
+
+
+def _highest(found: Sequence[_Best]) -> tuple[_Best, ByColumn]:
+    pick = np.argmax([best.top for best in found], axis=0)
+    columns = np.arange(len(pick))
+    return _Best(*(np.array(field)[pick, columns] for field in zip(*found, strict=True))), pick
+
+
+def _grid_line(window: _Window | _Best, axis: Axis) -> np.ndarray:
+    return window.gate if axis == "gate" else window.readout
+
+
+def _window_max(window: _Window, draws: ByCellByDraw) -> tuple[_Best, _Best, np.ndarray]:
     gate, readout = window.gate, window.readout
     values = _loglik(window.probs, draws).reshape(len(gate), len(readout), -1)
     columns = np.arange(values.shape[-1])
     i, j = np.unravel_index(np.argmax(values.reshape(-1, len(columns)), axis=0), values.shape[:2])
-    along_gate = _refine(values[:, j, columns], i, _spacing(gate))
-    along_readout = _refine(values[i, :, columns].T, j, _spacing(readout))
-    top = values[i, j, columns] + along_gate.gain + along_readout.gain
-    return top, gate[i] + along_gate.shift, readout[j] + along_readout.shift
+    top = values[i, j, columns]
+
+    def at(di: int, dj: int) -> ByColumn:
+        return values[
+            np.clip(i + di, 0, len(gate) - 1), np.clip(j + dj, 0, len(readout) - 1), columns
+        ]
+
+    on_gate, on_readout = _interior(gate, i), _interior(readout, j)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        slope_gate = np.where(on_gate, (at(1, 0) - at(-1, 0)) / 2, 0.0)
+        slope_readout = np.where(on_readout, (at(0, 1) - at(0, -1)) / 2, 0.0)
+        curve_gate = np.where(on_gate, at(1, 0) - 2 * top + at(-1, 0), -1.0)
+        curve_readout = np.where(on_readout, at(0, 1) - 2 * top + at(0, -1), -1.0)
+        corners = at(1, 1) - at(1, -1) - at(-1, 1) + at(-1, -1)
+        mixed = np.where(on_gate & on_readout, corners / 4, 0.0)
+        det = curve_gate * curve_readout - mixed**2
+        step_gate = (mixed * slope_readout - curve_readout * slope_gate) / det
+        step_readout = (mixed * slope_gate - curve_gate * slope_readout) / det
+        fits = (curve_gate < 0) & (det > 0) & (np.abs(step_gate) <= 1) & (np.abs(step_readout) <= 1)
+        step_gate, step_readout = np.where(fits, step_gate, 0.0), np.where(fits, step_readout, 0.0)
+        gain = np.where(fits, (slope_gate * step_gate + slope_readout * step_readout) / 2, 0.0)
+    vertex = _Best(
+        top + gain,
+        gate[i] + step_gate * _spacing(gate),
+        readout[j] + step_readout * _spacing(readout),
+    )
+    drop = np.maximum(
+        np.where(on_gate, top - np.minimum(at(1, 0), at(-1, 0)), 0.0),
+        np.where(on_readout, top - np.minimum(at(0, 1), at(0, -1)), 0.0),
+    )
+    settled = fits & (drop <= CHI2_95) & ~_stuck(gate, i) & ~_stuck(readout, j)
+    return _Best(top, gate[i], readout[j]), vertex, settled
+
+
+def _interior(line: np.ndarray, k: ByColumn) -> ByColumn:
+    return (len(line) >= 3) & (k > 0) & (k < len(line) - 1)
+
+
+def _stuck(line: np.ndarray, k: ByColumn) -> ByColumn:
+    return (len(line) > 1) & ~_interior(line, k) & (line[k] > _LO) & (line[k] < _HI)
+
+
+def _climb(
+    f: Callable[[ByColumn, np.ndarray, ByColumn], tuple[ByColumn, ByColumn]],
+    x: ByColumn,
+    top: ByColumn,
+    aux: ByColumn,
+    span: float,
+) -> tuple[ByColumn, ByColumn, ByColumn]:
+    x, top, aux = x.copy(), top.copy(), aux.copy()
+    spans = np.full(len(x), span)
+    active = np.flatnonzero(spans > 0)
+    while len(active):
+        center, value, h = x[active], top[active], spans[active]
+        low, high = np.maximum(center - h, _LO), np.minimum(center + h, _HI)
+        both = np.tile(active, 2)
+        sides, aux_sides = f(np.concatenate([low, high]), both, aux[both])
+        (f_low, f_high), (aux_low, aux_high) = np.split(sides, 2), np.split(aux_sides, 2)
+        up = f_high > f_low
+        moved = np.where(up, f_high, f_low) > value
+        flat = ~moved & (
+            ((low == center) | (value - f_low <= ASCENT_TOL))
+            & ((high == center) | (value - f_high <= ASCENT_TOL))
+        )
+        a, b, da, db = low - center, high - center, f_low - value, f_high - value
+        with np.errstate(divide="ignore", invalid="ignore"):
+            curve = (db / b - da / a) / (b - a)
+            slope = da / a - curve * a
+            vertex, predicted = center - slope / (2 * curve), value - slope**2 / (4 * curve)
+        fits = np.flatnonzero(~moved & ~flat & (curve < 0) & np.isfinite(predicted))
+        f_vertex, aux_vertex = f(vertex[fits], active[fits], aux[active[fits]])
+        better = f_vertex > value[fits]
+        fine = (np.abs(f_vertex - predicted[fits]) <= ASCENT_TOL) & (
+            -np.minimum(da, db)[fits] <= CHI2_95
+        )
+        side = active[moved]
+        x[side] = np.where(up, high, low)[moved]
+        top[side] = np.where(up, f_high, f_low)[moved]
+        aux[side] = np.where(up, aux_high, aux_low)[moved]
+        gained = active[fits][better]
+        x[gained] = vertex[fits][better]
+        top[gained] = f_vertex[better]
+        aux[gained] = aux_vertex[better]
+        done = flat.copy()
+        done[fits] |= fine
+        spans[active[moved]] *= 2
+        spans[active[~moved & ~done]] /= 8
+        active = active[~done]
+    return x, top, aux
 
 
 def _bind(profile: Profile, counts: MeasuredCounts) -> Profile:
@@ -1025,11 +1181,19 @@ def _bind(profile: Profile, counts: MeasuredCounts) -> Profile:
                 raise CountsError(
                     f"circuit {c.name} measures qubit {q}, which {profile.id} marks disabled"
                 )
-        for op in c.ops:
-            if op.name == "delay":
-                continue
-            targets = [c.qubits[q] for q in op.qubits]
             try:
+                refuse_disabled(table.gate("measure", (q,)))
+            except DisabledGateError as exc:
+                raise CountsError(
+                    f"circuit {c.name}: {exc.message}",
+                    hint="run the circuits on qubits that the profile can measure",
+                ) from None
+        try:
+            for op in c.ops:
+                targets = [c.qubits[q] for q in op.qubits]
+                if op.name == "delay":
+                    refuse_disabled(table.gate("delay", targets))
+                    continue
                 resolve_op(
                     table,
                     charged_as(base, op.name, gates.unitary(op.name, op.params)),
@@ -1037,11 +1201,11 @@ def _bind(profile: Profile, counts: MeasuredCounts) -> Profile:
                     unknown_gates="error",
                     report=report,
                 )
-            except (MissingCalibrationError, DisabledGateError, LayoutError) as exc:
-                raise CountsError(
-                    f"circuit {c.name}: {exc.message}",
-                    hint="nv compare scores only ops the profile calibrates on their qubits",
-                ) from None
+        except (MissingCalibrationError, DisabledGateError, LayoutError) as exc:
+            raise CountsError(
+                f"circuit {c.name}: {exc.message}",
+                hint="nv compare scores only ops the profile calibrates on their qubits",
+            ) from None
     return base
 
 
@@ -1118,12 +1282,16 @@ def _identify(
             out[axis] = None
     if out["gate"] is None and out["readout"] is None:
         diagonal = np.diag(info)
-        flat = diagonal <= SEPARABLE * diagonal.max()
-        eigen = np.linalg.eigvalsh(info)
-        if not flat.any() and eigen[0] < SEPARABLE * eigen[-1]:
+        flat = diagonal <= FLAT * diagonal.max()
+        if not flat.any() and _rank(info) < len(info):
             same = NoEstimate(_SAME_WAY)
             out = {"gate": same, "readout": same}
     return out
+
+
+def _rank(info: np.ndarray) -> int:
+    eigen = np.linalg.eigvalsh(info)
+    return int(np.sum(eigen > SEPARABLE * eigen[-1])) if eigen[-1] > 0 else 0
 
 
 def _absent(surface: _Surface, axis: Axis) -> str:
@@ -1241,6 +1409,14 @@ def _scaled_without_revalidation(
     )
     fields = {name: getattr(base, name) for name in type(base).model_fields}
     return type(base).model_construct(**{**fields, "unmodeled_error": unmodeled})
+
+
+def _paired(probs: ByPointByCell, counts: ByCellByDraw) -> ByColumn:
+    zero = probs <= 0
+    with np.errstate(divide="ignore"):
+        out = np.einsum("kc,ck->k", np.where(zero, 0.0, np.log(probs)), counts)
+    out[(zero & (counts.T > 0)).any(axis=1)] = -np.inf
+    return out
 
 
 def _loglik(probs: ByPointByCell, counts: ByCell | ByCellByDraw) -> ByPoint | ByPointByDraw:
@@ -1362,21 +1538,23 @@ def _nearest_one(values: np.ndarray, gate: np.ndarray, readout: np.ndarray) -> t
 class _Vertex(NamedTuple):
     shift: ByColumn
     gain: ByColumn
+    settled: ByColumn
 
 
-def _refine(line: ByPointByColumn, best: ByColumn, step: float) -> _Vertex:
-    zero = np.zeros(line.shape[1])
-    if len(line) < 3:
-        return _Vertex(zero, zero)
-    columns = np.arange(line.shape[1])
-    inner = np.clip(best, 1, len(line) - 2)
-    left, mid, right = (line[inner + d, columns] for d in (-1, 0, 1))
+def _refine(values: ByPointByColumn, best: ByColumn, line: np.ndarray) -> _Vertex:
+    zero = np.zeros(values.shape[1])
+    if len(values) < 3:
+        return _Vertex(zero, zero, ~_stuck(line, best))
+    columns = np.arange(values.shape[1])
+    inner = np.clip(best, 1, len(values) - 2)
+    left, mid, right = (values[inner + d, columns] for d in (-1, 0, 1))
     curve = 2 * mid - left - right
     usable = (best == inner) & (curve > 0) & np.isfinite(left) & np.isfinite(right)
     with np.errstate(invalid="ignore", divide="ignore"):
-        shift = np.where(usable, 0.5 * (right - left) / curve * step, 0.0)
+        shift = np.where(usable, 0.5 * (right - left) / curve * _spacing(line), 0.0)
         gain = np.where(usable, (right - left) ** 2 / (8 * curve), 0.0)
-    return _Vertex(shift, gain)
+    resolved = usable & (mid - np.minimum(left, right) <= CHI2_95)
+    return _Vertex(shift, gain, np.where(best == inner, resolved, ~_stuck(line, best)))
 
 
 def _point(axis: Axis, held: float, others: ByPoint) -> tuple[ByPoint, ByPoint]:
@@ -1413,10 +1591,10 @@ def _read(
     )
 
 
-@lru_cache(maxsize=1 << 16)
-def _confusion(pair: tuple[float, float], log_factor: float) -> np.ndarray:
-    a, b = metrics.scale_readout(pair, math.exp(log_factor))
-    return np.array([[1 - a, b], [a, 1 - b]])
+def _confusion(pair: tuple[float, float], log_factors: ByPoint) -> ByPointByMeasuredByPrepared:
+    scaled = [metrics.scale_readout(pair, math.exp(x)) for x in log_factors]
+    a, b = np.array(scaled).reshape(-1, 2).T
+    return np.stack([np.stack([1 - a, b], -1), np.stack([a, 1 - b], -1)], -2)
 
 
 def _bisect(

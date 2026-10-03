@@ -454,6 +454,71 @@ def test_a_flat_gate_axis_does_not_stop_the_readout_search() -> None:
     assert result.deviance < 0.01, result.deviance
 
 
+def narrow_ridge(shots: int) -> tuple[Profile, MeasuredCounts]:
+    profile = one_qubit("narrow", {"x": {"avg_infidelity": 0.01}}, readout={"error": 0.01})
+    ones = round(shots * reference(profile, XX, 1, unknown_gates="error")[1])
+    xx = ("xx", XX, {"0": shots - ones, "1": ones})
+    return profile, written(profile, [xx, ("readout", (), {"0": 3960, "1": 40})])
+
+
+def test_every_drawn_maximum_is_the_likelihood_at_its_factors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    found = []
+    draw_max = fit._Fit.draw_max
+
+    def recorded(self: Any, draws: np.ndarray, windows: Any = ()) -> Any:
+        best = draw_max(self, draws, windows)
+        found.append((self.surface, draws, best))
+        return best
+
+    monkeypatch.setattr(fit._Fit, "draw_max", recorded)
+    compare(*narrow_ridge(100_000))
+    for surface, draws, (top, gate, readout) in found:
+        reached = [
+            surface.loglik_at([g], [r], draws[:, k])[0]
+            for k, (g, r) in enumerate(zip(gate, readout, strict=True))
+        ]
+        np.testing.assert_allclose(top, reached, rtol=1e-12)
+
+
+def test_a_ridge_narrower_than_the_grid_keeps_the_readout_interval_of_its_readout_circuit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    found = []
+    draw_max = fit._Fit.draw_max
+
+    def recorded(self: Any, draws: np.ndarray, windows: Any = ()) -> Any:
+        best = draw_max(self, draws, windows)
+        if not windows:
+            found.append(fit._saturated(draws, self.surface.slices) - best[0])
+        return best
+
+    monkeypatch.setattr(fit._Fit, "draw_max", recorded)
+    profile, counts = narrow_ridge(10_000_000)
+    joint = compare(profile, counts).readout
+    (gap,) = found
+    assert -1e-6 <= gap.min() and gap.max() <= 2 * fit.ASCENT_TOL, (gap.min(), gap.max())
+    alone = compare(profile, written(profile, [("readout", (), {"0": 3960, "1": 40})])).readout
+    half = math.log(alone.high / alone.low) / 2
+    for end, expected in ((joint.low, alone.low), (joint.high, alone.high)):
+        assert abs(math.log(end / expected)) < 0.1 * half, (joint, alone)
+
+
+def test_unequal_shots_leave_both_factors_to_their_intervals() -> None:
+    profile, counts = narrow_ridge(MOST_SHOTS)
+    circuits = counts.circuits
+    observed = np.concatenate([c.vector() for c in circuits]).astype(float)
+    center = fit._exact(profile, circuits, 1.0, 1.0)
+    shots = np.array([MOST_SHOTS, 4000.0])
+    info = fit._fisher(profile, circuits, shots, center, 1.0, 1.0)
+    eigen = np.linalg.eigvalsh(info)
+    assert eigen[0] < 1e-6 * eigen[1]
+    surface = fit._Surface.cached(profile, circuits)
+    assert fit._identify(surface, observed, info) == {"gate": None, "readout": None}
+    assert fit._rank(info) == 2
+
+
 SPARSE_SHOTS, SPARSE_ERROR = 4000, 0.00075
 
 
@@ -619,6 +684,16 @@ def test_a_gate_axis_flat_at_the_estimate_is_not_a_collinearity() -> None:
         ]
     )
     assert np.abs(surface.probs_at([math.log(floor)], [0.0])[0] - expected).max() < 1e-12
+
+
+def test_a_gate_that_barely_moves_the_only_circuit_leaves_the_readout_interval() -> None:
+    readout = {"p1_given_0": 0.005, "p0_given_1": 0.07}
+    profile = one_qubit("faint", {"x": {"pauli": [1e-6, 1e-5, 2e-3]}}, readout=readout)
+    ops = (Op("x", (0,)),)
+    ones = round(100_000 * reference(profile, ops, 1, unknown_gates="error")[1])
+    result = compare(profile, written(profile, [("x", ops, {"0": 100_000 - ones, "1": ones})]))
+    assert result.gates == NoEstimate("the counts do not constrain the gate factor")
+    assert covers(result.readout, 1.0) and result.readout.high / result.readout.low < 1.1
 
 
 def test_x_then_x_counts_identify_neither_factor() -> None:
@@ -802,6 +877,20 @@ def test_an_op_the_profile_does_not_calibrate_on_its_qubits_is_refused() -> None
     data["circuits"][0]["ops"].append(["cz", [0, 2], []])
     message = refused(kingston, MeasuredCounts.model_validate(data))
     assert message.startswith("circuit ghz_chain: cz on qubits 148-150: ")
+
+
+@pytest.mark.parametrize(
+    ("name", "hint"),
+    [
+        ("measure", "run the circuits on qubits that the profile can measure"),
+        ("delay", "nv compare scores only ops the profile calibrates on their qubits"),
+    ],
+)
+def test_a_measurement_or_delay_the_profile_disables_is_refused(name: str, hint: str) -> None:
+    profile = one_qubit("off", {"x": {"avg_infidelity": 0.01}, name: {"disabled": True}})
+    wait = ("wait", (Op("x", (0,)), Op("delay", (0,), (100.0,))), {"0": 40, "1": 3960})
+    message = refused(profile, written(profile, [wait]))
+    assert message == f"circuit wait: {name} on qubit 0 is disabled in this profile; {hint}"
 
 
 def test_profile_compare_is_compare_and_import_noisevault_leaves_the_fit_unloaded() -> None:
