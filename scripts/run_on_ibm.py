@@ -465,7 +465,7 @@ def run(
         print(f"submitted job {submitted.job_id} to {device}")
     print("waiting for it to run")
     print("Ctrl-C stops waiting. Run the same command again to collect the job")
-    again = f"run the same command again to collect them, or delete {pending} to submit a new job"
+    again = f"run the same command again to collect them. {_new_job(pending)}"
     uncollected = f"could not collect the counts of job {submitted.job_id}"
     try:
         try:
@@ -558,7 +558,8 @@ def _resume(
         except Exception as exc:
             raise NoiseVaultError(
                 f"could not open job {submitted.job_id} ({_reason(exc)})",
-                hint=f"delete {pending} to submit a new job",
+                hint=f"run the same command again to collect job {submitted.job_id}."
+                f" {_new_job(pending)}",
             ) from None
     except BaseException:
         os.close(record)
@@ -576,7 +577,7 @@ def _save_elsewhere(problem: str, kept: Path, job_id: str, data: bytes) -> NoRet
         ) from None
     raise NoiseVaultError(
         f"{problem}. The script saved job {job_id} to {kept}",
-        hint=f"run the same command with --collect {kept} to collect the job",
+        hint=f"run the same command with --collect {shlex.quote(str(kept))} to collect the job",
     )
 
 
@@ -594,23 +595,24 @@ def _submitted(pending: Path, record: int, job_id: str | None) -> Submitted:
         recorded = data.get("job_id")
         counts = tuple({"0" * len(c.qubits): 1} for c in planned)
         ran = Ran(recorded, "hardware", datetime.now(UTC), counts, {})
-        counts_file(profile, Submitted(recorded, profile, planned, options), ran)
+        _bind(profile, counts_file(profile, Submitted(recorded, profile, planned, options), ran))
         if recorded == "":
             raise ValueError("the job id is empty")
     except Exception as exc:
         named = _job_id_in(lines)
         raise NoiseVaultError(
             f"{pending} is damaged ({_reason(exc)})",
-            hint="delete it to submit a new job"
+            hint="the script cannot collect a job from the damaged job file. Look for the job in"
+            f" your IBM Quantum account. {_new_job(pending)}"
             if named is None
             else f"the script cannot collect job {named} from the damaged job file. Find job"
-            f" {named} in your IBM Quantum account. To submit a new job, delete the job file",
+            f" {named} in your IBM Quantum account. {_new_job(pending)}",
         ) from None
     if recorded is None and job_id is None:
         raise NoiseVaultError(
             f"{pending} has no job id",
             hint="give --job-id the job id that the script printed or that your IBM Quantum account"
-            f" shows. If IBM has no new job, delete {pending} to submit a new job",
+            f" shows. {_new_job(pending)}",
         )
     if recorded is not None and job_id is not None and recorded != job_id:
         raise NoiseVaultError(
@@ -811,10 +813,17 @@ def _dt(length: float, dt_ns: float) -> str:
 def _new_name_hint(pending: Path) -> str:
     if pending.exists():
         return (
-            f"run the same command with --collect {pending} and a new -o file name. The script"
-            " never replaces a file"
+            f"run the same command with --collect {shlex.quote(str(pending))} and a new -o file"
+            " name. The script never replaces a file"
         )
     return "give -o a new file name. The script never replaces a file"
+
+
+def _new_job(pending: Path) -> str:
+    return (
+        f"To submit a new job, delete {pending}. Then run the command without --collect and"
+        " --job-id"
+    )
 
 
 def _files(output: Path) -> tuple[Path, Path, Path]:

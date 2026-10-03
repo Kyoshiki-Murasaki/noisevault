@@ -29,6 +29,7 @@ SETUP = (
     "set IBM_QUANTUM_TOKEN to your IBM Quantum API key, or pull without an account with"
     " source='ibm'"
 )
+_RETRY = "try again later, or pull without an account with source='ibm'"
 
 
 def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
@@ -42,8 +43,7 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
         backend = service.backend(device)
     except Exception as exc:  # the runtime raises several types for "not visible to you"
         raise SourceUnavailable(
-            f"your IBM account cannot open {device} ({exc})",
-            hint="list the devices your account can see with QiskitRuntimeService().backends()",
+            f"your IBM account cannot open {device} ({exc})", hint=_visible_hint(service, device)
         ) from None
     when = None if at is None else as_utc(at)
     try:
@@ -51,7 +51,7 @@ def pull(device: str, *, at: str | date | datetime | None = None) -> Profile:
     except Exception as exc:  # API, protocol and network errors all arrive here
         raise SourceUnavailable(
             f"IBM did not return the calibration of {device} ({exc})",
-            hint="try again later, or pull without an account with source='ibm'",
+            hint=_RETRY,
         ) from None
     if props is None:
         if at is None:
@@ -103,6 +103,18 @@ def _service() -> Any:
         raise SourceUnavailable(
             f"could not open your IBM Quantum account ({exc})", hint=SETUP
         ) from None
+
+
+def _visible_hint(service: Any, device: str) -> str:
+    try:
+        names = sorted(backend.name for backend in service.backends())
+    except Exception:
+        return _RETRY
+    if not names:
+        return "pull without an account with source='ibm', because your account can see no device"
+    if device in names:
+        return _RETRY
+    return f"pull a device that your account can see: {', '.join(names)}"
 
 
 def _runtime_version() -> str:

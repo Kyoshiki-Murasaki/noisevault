@@ -74,7 +74,6 @@ _QUBIT_VALUE_NAMES = {
     "prob_meas0_prep1": "readout",
     "prob_meas1_prep0": "readout",
 }
-_VIRTUAL = "rz"
 
 
 class ArchiveSpan(NamedTuple):
@@ -400,7 +399,7 @@ def _stale_note(rows: list[dict[str, Any]], at: datetime | None, cal: Calibratio
         gate, param = _gate_parameter(row["property"]) or (None, row["property"])
         locus = row["qubits"]
         fresh = before - calibrated <= _STALE_AFTER
-        if fresh or gate == _VIRTUAL or (gate, param, locus) not in used:
+        if fresh or (gate, param, locus) not in used:
             continue
         label = gate or _QUBIT_VALUE_NAMES[param]
         if len(locus) == 2 and is_symmetric(label):

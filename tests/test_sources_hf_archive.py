@@ -266,6 +266,21 @@ def _without(rows: list[dict], props: set[str], qubit: int, calibrated: datetime
         (lambda rows: _to_may_24(rows, "T1", 1, _JUNE_1, value=0.0), []),
         (lambda rows: _to_may_24(rows, "T2", 1, _JUNE_1, value=float("nan")), []),
         (lambda rows: _to_may_24(rows, "T1", 1, _JUNE_1, value=None), []),
+        (lambda rows: _to_may_24(rows, "rz_gate_error", 0, _JUNE_1), []),
+        (
+            lambda rows: _to_may_24(rows, "rz_gate_error", 0, _JUNE_1, value=1.0),
+            [
+                "IBM calibrated these values more than 7 days before the newest calibration, the"
+                " oldest on 2026-05-24: rz on qubit 0."
+            ],
+        ),
+        (
+            lambda rows: _to_may_24(rows, "rz_gate_error", 0, _JUNE_1, value=1e-4),
+            [
+                "IBM calibrated these values more than 7 days before the newest calibration, the"
+                " oldest on 2026-05-24: rz on qubit 0."
+            ],
+        ),
     ],
     ids=[
         "disabled-gate-length",
@@ -275,6 +290,9 @@ def _without(rows: list[dict], props: set[str], qubit: int, calibrated: datetime
         "zero-t1",
         "nonfinite-t2",
         "null-t1",
+        "virtual-rz",
+        "disabling-rz-error",
+        "nonzero-rz-error",
     ],
 )
 def test_the_note_names_only_rows_that_give_the_profile_a_value(

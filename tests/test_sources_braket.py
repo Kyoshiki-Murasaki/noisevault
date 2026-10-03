@@ -125,6 +125,62 @@ def test_v3_from_one_never_places_a_circuit_on_index_zero() -> None:
         probabilities(profile, [Op("r", (0,), (np.pi / 2, 0.0))], 1, layout=[0])
 
 
+_DEVICE_WIDE = "v3 values are device-wide, so every qubit and pair gets the same values"
+
+
+def _ionq_with_fidelities(fidelities: dict[int, tuple[str, float]]) -> dict:
+    data = json.loads(IONQ.read_text())
+    data["standardized"]["oneQubitProperties"] = {
+        str(q): {
+            "oneQubitFidelity": [
+                {"fidelityType": {"name": kind}, "fidelity": value, "unit": "fraction"}
+            ]
+        }
+        for q, (kind, value) in fidelities.items()
+    }
+    return data
+
+
+_PER_QUBIT = {q: ("RANDOMIZED_BENCHMARKING", 0.9991 if q == 0 else 0.9996) for q in range(4)}
+
+
+def test_v3_per_qubit_input_is_a_valid_braket_document() -> None:
+    require("braket.device_schema")
+    v3 = pytest.importorskip(
+        "braket.device_schema.standardized_gate_model_qpu_device_properties_v3",
+        reason="the installed amazon-braket-schemas predates standardized v3",
+    )
+    v3.StandardizedGateModelQpuDeviceProperties.parse_obj(
+        _ionq_with_fidelities(_PER_QUBIT)["standardized"]
+    )
+
+
+def test_v3_per_qubit_fidelity_overrides_the_device_value_and_the_note_says_so() -> None:
+    profile = from_braket(_ionq_with_fidelities(_PER_QUBIT), device="per_qubit")
+    errors = [profile.table.gate("r", (q,)).avg_infidelity for q in range(4)]
+    assert errors == [0.0009, 0.0004, 0.0004, 0.0004]
+    notes = [n for n in profile.provenance.notes if n.startswith("v3 values")]
+    assert notes == [
+        "v3 values are device-wide defaults, except that qubits [0, 1, 2, 3] use their"
+        " oneQubitProperties fidelity for the one-qubit native gates (r)"
+    ]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        json.loads(IONQ.read_text()),
+        _ionq_with_fidelities({q: ("UNKNOWN_BENCHMARK", 0.9991) for q in range(4)}),
+    ],
+    ids=["no-per-qubit-entry", "no-known-per-qubit-type"],
+)
+def test_v3_with_no_per_qubit_value_keeps_the_device_wide_note(data: dict) -> None:
+    profile = from_braket(data, device="device_wide")
+    errors = {profile.table.gate("r", (q,)).avg_infidelity for q in range(4)}
+    assert errors == {0.0004}
+    assert [n for n in profile.provenance.notes if n.startswith("v3 values")] == [_DEVICE_WIDE]
+
+
 def test_v3_without_qubit_ids_numbers_the_qubits_from_zero() -> None:
     profile = from_braket(IONQ)
     assert profile.qubits == ()

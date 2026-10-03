@@ -594,8 +594,9 @@ def used_parameters(cal: Calibration) -> set[tuple[str | None, str, tuple[int, .
     """Each BackendProperties value of ``cal`` that its profile uses, as (gate, parameter, qubits).
 
     ``gate`` is None for a value of a qubit. A disabled gate uses only the error that disables it.
+    A virtual gate uses no value.
     """
-    used = _in_use(cal)
+    used, _ = _in_use(cal)
     found = {
         (None, name, (index,))
         for index, qubit in used.qubits.items()
@@ -614,12 +615,13 @@ def used_parameters(cal: Calibration) -> set[tuple[str | None, str, tuple[int, .
     return found
 
 
-def _in_use(cal: Calibration) -> Calibration:
-    """``cal`` with None in place of each value that its profile does not use.
+def _in_use(cal: Calibration) -> tuple[Calibration, frozenset[str]]:
+    """``cal`` with None in each value that its profile does not use, and the virtual gates.
 
     A readout pair has priority over the readout error. A readout duration needs one of the two.
     A disabled gate keeps only the error that disables it. A T1 or T2 that is not a positive
-    finite number is missing.
+    finite number is missing. A gate is virtual when each working entry has error 0 and no
+    duration. ``virtual: true`` then replaces the values of each entry that is not disabled.
     """
     qubits, _ = _without_invalid_coherence(cal)
     paired = {i for i, q in qubits.items() if q.p1_given_0 is not None and q.p0_given_1 is not None}
@@ -647,12 +649,30 @@ def _in_use(cal: Calibration) -> Calibration:
                 error = inst.error if sentinel else None
                 inst = replace(inst, error=error, duration_ns=None, operational=False)
         instructions.append(inst)
-    return replace(cal, qubits=qubits, instructions=tuple(instructions))
+    disabled_qubits = {i for i, q in cal.qubits.items() if not q.operational}
+    working: dict[str, list[Instruction]] = {}
+    for inst in instructions:
+        if inst.name != "measure":
+            working.setdefault(inst.name, [])
+            if inst.operational and disabled_qubits.isdisjoint(inst.qubits):
+                working[inst.name].append(inst)
+    virtual = frozenset(
+        name
+        for name, entries in working.items()
+        if entries and all(e.error == 0 and not e.duration_ns for e in entries)
+    )
+    instructions = [
+        replace(inst, error=None, duration_ns=None)
+        if inst.name in virtual and inst.operational
+        else inst
+        for inst in instructions
+    ]
+    return replace(cal, qubits=qubits, instructions=tuple(instructions)), virtual
 
 
 def _profile_data(cal: _Checked, provenance: Mapping[str, Any]) -> dict[str, Any]:
     ibm = cal.vendor == "ibm"
-    used = _in_use(cal)
+    used, virtual = _in_use(cal)
     by_name: dict[str, list[Instruction]] = {}
     for inst in used.instructions:
         by_name.setdefault(inst.name, []).append(inst)
@@ -672,7 +692,9 @@ def _profile_data(cal: _Checked, provenance: Mapping[str, Any]) -> dict[str, Any
             unpublished = []
         else:
             unpublished = unlisted
-        definition, gate_records = _gate(name, arity, entries, ibm, disabled_qubits)
+        definition, gate_records = _gate(
+            name, arity, entries, ibm, disabled_qubits, virtual=name in virtual
+        )
         definitions[name] = definition
         records += gate_records
         unpublished += [e.qubits for e in entries if e.operational and e.error is None]
@@ -808,6 +830,8 @@ def _gate(
     entries: Sequence[Instruction],
     ibm: bool,
     disabled_qubits: set[int],
+    *,
+    virtual: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     dead = [not e.operational for e in entries]
     working = [
@@ -815,7 +839,6 @@ def _gate(
         for e, is_dead in zip(entries, dead, strict=True)
         if not is_dead and disabled_qubits.isdisjoint(e.qubits)
     ]
-    virtual = bool(working) and all(e.error == 0 and not e.duration_ns for e in working)
     definition: dict[str, Any] = {} if gates.lookup(name) else {"qubits": arity}
     if virtual:
         definition["virtual"] = True

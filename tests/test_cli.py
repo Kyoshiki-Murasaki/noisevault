@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1557,6 +1558,22 @@ def test_every_command_names_a_damaged_file_and_what_is_wrong(
     first, *rest = result.stderr.splitlines()
     assert first.startswith(f"error: {path}") and error in first
     assert rest == ([f"hint: {hint.format(path=path)}"] if hint else [])
+
+
+@pytest.mark.parametrize("command", [c for c in _COMMANDS if c != "validate"])
+def test_the_validate_hint_runs_as_printed_for_a_path_with_a_space(
+    tmp_path: Path, command: str
+) -> None:
+    path = tmp_path / "my run" / "toy.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(toy(gates=None)))
+    result = runner.invoke(app, _COMMANDS[command](str(path)), env={"COLUMNS": "80"})
+    hint = result.stderr.splitlines()[-1]
+    assert hint == f"hint: run nv validate '{path}' to list them"
+    nv_, *args = shlex.split(hint.removeprefix("hint: run ").removesuffix(" to list them"))
+    followed = runner.invoke(app, args)
+    assert (nv_, followed.exit_code, followed.stdout) == ("nv", 1, "")
+    assert followed.stderr == "error: gates: Input should be a valid dictionary\n"
 
 
 @pytest.mark.parametrize("command", list(_COMMANDS))

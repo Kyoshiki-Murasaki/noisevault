@@ -1337,7 +1337,8 @@ def _unreadable(path: Path, exc: BaseException) -> _FileProblem:
     if isinstance(exc, ValidationError):
         problems = plural(exc.error_count(), "problem")
         return _FileProblem(
-            f"{path} is not a valid profile ({problems})", f"run nv validate {path} to list them"
+            f"{path} is not a valid profile ({problems})",
+            f"run nv validate {shlex.quote(str(path))} to list them",
         )
     if isinstance(exc, IsADirectoryError):
         return _FileProblem(f"{path} is a folder", _PROFILE_FILE)

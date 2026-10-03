@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import threading
@@ -967,6 +968,22 @@ def test_odd_vault_entries_are_skipped_with_one_line_each(vault: Path) -> None:
     assert all("\n" not in m for m in messages)
     assert f"links to {vault.parent / 'moved_away.json.gz'}, which does not exist" in messages[2]
     assert messages[0].endswith(f". Run nv validate {vault / 'empty.json'}")
+
+
+def test_the_command_for_a_skipped_entry_runs_as_printed_for_a_name_with_a_space(
+    vault: Path,
+) -> None:
+    vault.mkdir(parents=True)
+    damaged = vault / "my run.json"
+    damaged.write_text("{}")
+    with pytest.warns(nv.NoiseVaultWarning) as caught:
+        nv.profiles()
+    (message,) = {str(w.message) for w in caught}
+    assert message.endswith(f". Run nv validate '{damaged}'")
+    nv_, *args = shlex.split(message.rpartition(". Run ")[2])
+    result = CliRunner().invoke(app, args)
+    assert (nv_, result.exit_code, result.stdout) == ("nv", 1, "")
+    assert result.stderr.startswith("error: noisevault: missing. Format 1.0 requires this key\n")
 
 
 def test_a_link_to_an_unreadable_file_is_skipped_and_the_rest_still_list(

@@ -740,6 +740,11 @@ _USE_EDITS: dict[str, Callable[[dict[str, Any]], None]] = {
     "operational-0-gate": lambda p: _set(_gate(p, "cx", [1, 2]), "operational", 0),
     "operational-0-qubit": lambda p: _set(p["qubits"][1], "operational", 0),
     "rz-not-virtual": lambda p: _set(_gate(p, "rz", [0]), "gate_error", 1e-4),
+    "rz-disabled": lambda p: _set(_gate(p, "rz", [0]), "gate_error", 1.0),
+    "rz-on-disabled-qubit": lambda p: (
+        _set(p["qubits"][1], "operational", 0),
+        _set(_gate(p, "rz", [1]), "gate_error", 1e-4),
+    ),
 }
 
 
@@ -762,7 +767,7 @@ def _holds(
     spec = profile.gates[gate]
     [record] = [r for r in profile.calibrations if (r.gate, r.qubits) == (gate, qubits)] or [None]
     if record is None:
-        return bool(spec.virtual) and value == 0
+        return False
     if name == "gate_error" and record.disabled:
         return value >= max_avg_infidelity(len(qubits))
     if name == "gate_error":

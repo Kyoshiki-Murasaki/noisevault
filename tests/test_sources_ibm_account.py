@@ -4,6 +4,7 @@ import statistics
 import sys
 import warnings
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -121,15 +122,40 @@ def test_missing_account_explains_the_setup(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
-def test_device_the_account_cannot_see(calls: list[Any]) -> None:
+_RETRY = "try again later, or pull without an account with source='ibm'"
+
+
+@pytest.mark.parametrize(
+    ("visible", "hint"),
+    [
+        (
+            ["ibm_torino", "ibm_manila"],
+            "pull a device that your account can see: ibm_manila, ibm_torino",
+        ),
+        ([], "pull without an account with source='ibm', because your account can see no device"),
+        (["ibm_nowhere"], _RETRY),
+        (ConnectionError("connection reset"), _RETRY),
+    ],
+    ids=["visible", "none-visible", "listed-but-not-opened", "listing-fails"],
+)
+def test_device_the_account_cannot_see(
+    calls: list[Any],
+    monkeypatch: pytest.MonkeyPatch,
+    visible: list[str] | Exception,
+    hint: str,
+) -> None:
+    def backends(self: _Service) -> list[Any]:
+        if isinstance(visible, Exception):
+            raise visible
+        return [SimpleNamespace(name=name) for name in visible]
+
+    monkeypatch.setattr(_Service, "backends", backends, raising=False)
     with pytest.raises(nv.SourceUnavailable) as info:
         ibm_account.pull("ibm_nowhere")
     assert info.value.message == (
         "your IBM account cannot open ibm_nowhere (No backend matches the criteria: ibm_nowhere)"
     )
-    assert info.value.hint == (
-        "list the devices your account can see with QiskitRuntimeService().backends()"
-    )
+    assert info.value.hint == hint
 
 
 @pytest.mark.parametrize(

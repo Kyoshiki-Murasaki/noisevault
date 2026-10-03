@@ -12,6 +12,7 @@ import importlib
 import json
 import os
 import re
+import shlex
 import warnings
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -235,7 +236,10 @@ def _skipped(path: Path, exc: Exception) -> str:
         why = f"it links to {dangling}, which does not exist. Remove the link"
     elif isinstance(exc, ValidationError):
         n = exc.error_count()
-        why = f"not a valid profile ({n} problem{'s' * (n != 1)}). Run nv validate {path}"
+        why = (
+            f"not a valid profile ({n} problem{'s' * (n != 1)})."
+            f" Run nv validate {shlex.quote(str(path))}"
+        )
     elif isinstance(exc, OSError):
         why = exc.strerror or str(exc)
     else:

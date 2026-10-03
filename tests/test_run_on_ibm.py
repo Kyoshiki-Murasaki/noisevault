@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -153,6 +154,18 @@ def _recording_sampler(
 
 def _no_job(job_id: str) -> Any:
     raise AssertionError(f"the script opened job {job_id} instead of submitting one")
+
+
+def _hinted(err: str) -> list[str]:
+    hint = err.rpartition("hint: run the same command with ")[2]
+    return shlex.split(re.split(" to collect | and a new -o ", hint, maxsplit=1)[0])
+
+
+def _new_job(pending: Path) -> str:
+    return (
+        f"To submit a new job, delete {pending}. Then run the command without --collect and"
+        " --job-id"
+    )
 
 
 @dataclass
@@ -714,9 +727,7 @@ def test_a_disk_that_refuses_the_counts_leaves_the_job_to_collect_again(
         "could not collect the counts of job job-1 ([Errno 28] No space left on device:"
         f" '{tmp_path / 'fez.counts.json'}')"
     )
-    assert info.value.hint == (
-        f"run the same command again to collect them, or delete {pending} to submit a new job"
-    )
+    assert info.value.hint == f"run the same command again to collect them. {_new_job(pending)}"
     assert sorted(tmp_path.iterdir()) == [pending]
 
 
@@ -893,6 +904,7 @@ def test_the_saved_files_hold_the_bytes_that_save_writes(
 class Account:
     pulled_at: list[datetime | None]
     opened: list[bool]
+    jobs: list[str]
 
 
 def _account(
@@ -900,7 +912,7 @@ def _account(
 ) -> Account:
     runtime = require("qiskit_ibm_runtime")
     snapshot = fake.properties()
-    seen = Account([], [])
+    seen = Account([], [], [])
 
     class Calibrated:
         name = "ibm_fez"
@@ -921,6 +933,7 @@ def _account(
             return fake
 
         def job(self, job_id: str) -> Any:
+            seen.jobs.append(job_id)
             return next(s.job for s in submissions or () if s.job.job_id() == job_id)
 
     monkeypatch.setattr(runtime, "QiskitRuntimeService", Service)
@@ -960,8 +973,7 @@ def test_running_the_same_command_again_collects_a_job_whose_wait_failed(
         job_id = submission.job.job_id()
         assert capsys.readouterr().err == (
             f"error: could not collect the counts of job {job_id} (network is unreachable)\n"
-            "hint: run the same command again to collect them, or delete"
-            f" {pending} to submit a new job\n"
+            f"hint: run the same command again to collect them. {_new_job(pending)}\n"
         )
         assert (pending.exists(), output.exists()) == (True, False)
         del submission.job.result
@@ -973,6 +985,66 @@ def test_running_the_same_command_again_collects_a_job_whose_wait_failed(
     assert printed.startswith(f"collecting job {job_id}, submitted earlier for {output}\n{WAITING}")
 
 
+@pytest.mark.parametrize("step", ["collect again", "submit a new job"])
+@pytest.mark.parametrize("failing", ["open", "wait"])
+def test_each_step_of_the_hint_after_a_failed_collect_works_with_collect_given(
+    failing: str,
+    step: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    submissions = _recording_sampler(monkeypatch, lose_the_first_wait=True)
+    seen = _account(monkeypatch, _fractional_fez(), submissions)
+    service = require("qiskit_ibm_runtime").QiskitRuntimeService
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    output, pending = folder / "fez.counts.json", folder / "fez.job.json"
+    command = ["ibm_fez", "--yes", "-o", str(output)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert script.main(command) == 1
+        (submission,) = submissions
+        job_id = submission.job.job_id()
+        capsys.readouterr()
+        if failing == "open":
+            del submission.job.result
+            job = service.job
+
+            def offline(self: Any, job_id: str) -> Any:
+                raise ConnectionError("network is unreachable")
+
+            monkeypatch.setattr(service, "job", offline)
+        collect = [*command, "--collect", str(pending), "--job-id", job_id]
+        assert script.main(collect) == 1
+        problem, hint = {
+            "open": (f"could not open job {job_id}", f"collect job {job_id}"),
+            "wait": (f"could not collect the counts of job {job_id}", "collect them"),
+        }[failing]
+        assert capsys.readouterr().err == (
+            f"error: {problem} (network is unreachable)\n"
+            f"hint: run the same command again to {hint}. {_new_job(pending)}\n"
+        )
+        assert sorted(folder.iterdir()) == [pending]
+        if failing == "open":
+            monkeypatch.setattr(service, "job", job)
+        else:
+            del submission.job.result
+        if step == "collect again":
+            assert script.main(collect) == 0
+        else:
+            pending.unlink()
+            assert script.main(command) == 0
+    collected = submissions[-1].job.job_id()
+    assert (len(submissions), collected == job_id) == (
+        (1, True) if step == "collect again" else (2, False)
+    )
+    assert load_counts(output).execution.job_ids == (collected,)
+    opened = {"open": 0, "wait": 1}[failing] + (step == "collect again")
+    assert seen.jobs == [job_id] * opened
+    assert sorted(folder.iterdir()) == [output]
+
+
 @pytest.mark.parametrize("collect_to", ["another file", "the same file after a move"])
 def test_a_file_that_appears_at_the_output_while_the_job_waits_is_kept_with_the_job(
     collect_to: str,
@@ -980,7 +1052,7 @@ def test_a_file_that_appears_at_the_output_while_the_job_waits_is_kept_with_the_
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    folder = tmp_path / "counts"
+    folder = tmp_path / "my counts"
     folder.mkdir()
     output, pending = folder / "fez.counts.json", folder / "fez.job.json"
     submissions = _recording_sampler(
@@ -989,8 +1061,8 @@ def test_a_file_that_appears_at_the_output_while_the_job_waits_is_kept_with_the_
     _account(monkeypatch, _fractional_fez(), submissions)
     command = ["ibm_fez", "--yes", "-o", str(output)]
     hint = (
-        f"hint: run the same command with --collect {pending} and a new -o file name. The script"
-        " never replaces a file\n"
+        f"hint: run the same command with --collect '{pending}' and a new -o file name. The"
+        " script never replaces a file\n"
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -1003,11 +1075,12 @@ def test_a_file_that_appears_at_the_output_while_the_job_waits_is_kept_with_the_
         assert sorted(folder.iterdir()) == [output, pending]
         assert output.read_text() == "another experiment\n"
         assert script.main(command) == 1
-        assert capsys.readouterr().err == f"error: {output} exists\n{hint}"
+        err = capsys.readouterr().err
+        assert err == f"error: {output} exists\n{hint}"
         del submission.job.result
         if collect_to == "another file":
             saved = folder / "fez-2.counts.json"
-            assert script.main([*command[:-1], str(saved), "--collect", str(pending)]) == 0
+            assert script.main([*command[:-1], str(saved), *_hinted(err)]) == 0
             assert output.read_text() == "another experiment\n"
         else:
             output.rename(folder / "other.counts.json")
@@ -1061,7 +1134,7 @@ def test_a_job_file_that_changes_while_the_job_is_submitted_keeps_the_job_in_a_n
 ) -> None:
     submissions = _recording_sampler(monkeypatch, lose_the_first_wait=True)
     _account(monkeypatch, _fractional_fez(), submissions)
-    folder = tmp_path / "counts"
+    folder = tmp_path / "my counts"
     folder.mkdir()
     output, pending, moved = (
         folder / "fez.counts.json",
@@ -1087,17 +1160,18 @@ def test_a_job_file_that_changes_while_the_job_is_submitted_keeps_the_job_in_a_n
         (submission,) = submissions
         job_id = submission.job.job_id()
         kept = folder / f"fez.{job_id}.job.json"
-        assert capsys.readouterr().err == (
+        err = capsys.readouterr().err
+        assert err == (
             f"error: {pending} changed while the script submitted job {job_id}. The script saved"
             f" job {job_id} to {kept}\n"
-            f"hint: run the same command with --collect {kept} to collect the job\n"
+            f"hint: run the same command with --collect '{kept}' to collect the job\n"
         )
         assert pending.read_text() == "another run\n"
         assert kept.read_bytes() == planned[0] + script._line({"job_id": job_id})
         if change == "moved":
             assert moved.read_bytes() == planned[0]
         del submission.job.result
-        assert script.main([*command, "--collect", str(kept)]) == 0
+        assert script.main([*command, *_hinted(err)]) == 0
     assert len(submissions) == 1
     assert load_counts(output).execution.job_ids == (job_id,)
     assert not kept.exists()
@@ -1147,7 +1221,7 @@ def test_a_failed_job_id_write_that_leaves_no_job_file_to_collect_keeps_the_job_
 ) -> None:
     submissions = _recording_sampler(monkeypatch)
     _account(monkeypatch, _fractional_fez(), submissions)
-    folder = tmp_path / "counts"
+    folder = tmp_path / "my counts"
     folder.mkdir()
     output, pending = folder / "fez.counts.json", folder / "fez.job.json"
     another_run = tmp_path / "another.job.json"
@@ -1194,13 +1268,14 @@ def test_a_failed_job_id_write_that_leaves_no_job_file_to_collect_keeps_the_job_
                 planned[0] + job_line[:5],
             ),
         }[fault]
-        assert capsys.readouterr().err == (
+        err = capsys.readouterr().err
+        assert err == (
             f"error: {problem}. The script saved job {job_id} to {kept}\n"
-            f"hint: run the same command with --collect {kept} to collect the job\n"
+            f"hint: run the same command with --collect '{kept}' to collect the job\n"
         )
         assert kept.read_bytes() == planned[0] + job_line
         assert pending.read_bytes() == left
-        assert script.main([*command, "--collect", str(kept)]) == 0
+        assert script.main([*command, *_hinted(err)]) == 0
     assert len(submissions) == 1
     assert load_counts(output).execution.job_ids == (job_id,)
     assert not kept.exists()
@@ -1279,14 +1354,15 @@ def test_a_disk_that_fills_when_the_job_is_submitted_keeps_the_job_for_the_next_
         assert script.main(command) == 1
         (submission,) = submissions
         job_id = submission.job.job_id()
-        assert capsys.readouterr().err == (
+        err = capsys.readouterr().err
+        assert err == (
             f"error: could not save job {job_id} to {pending} ([Errno 28] No space left on"
             " device)\n"
             f"hint: run the same command with --job-id {job_id} to collect the job\n"
         )
         assert sorted(folder.iterdir()) == [pending]
         disk.bytes_left = None
-        assert script.main([*command, "--job-id", job_id]) == 0
+        assert script.main([*command, *_hinted(err)]) == 0
     assert len(submissions) == 1
     assert load_counts(output).execution.job_ids == (job_id,)
     assert not pending.exists()
@@ -1300,7 +1376,8 @@ def test_a_disk_that_fills_when_the_job_is_submitted_keeps_the_job_for_the_next_
             [],
             "{pending} has no job id",
             "give --job-id the job id that the script printed or that your IBM Quantum account"
-            " shows. If IBM has no new job, delete {pending} to submit a new job",
+            " shows. To submit a new job, delete {pending}. Then run the command without --collect"
+            " and --job-id",
         ),
         (
             True,
@@ -1347,6 +1424,17 @@ def _second_circuit_named_ghz_chain(data: dict[str, Any]) -> str:
     return json.dumps(data) + "\n"
 
 
+def _ghz_chain_on_qubit_156(data: dict[str, Any]) -> str:
+    data["planned"][0]["qubits"][0] = 156
+    return json.dumps(data) + "\n"
+
+
+def _ghz_chain_with_cx(data: dict[str, Any]) -> str:
+    ops = data["planned"][0]["ops"]
+    ops[[op[0] for op in ops].index("cz")][0] = "cx"
+    return json.dumps(data) + "\n"
+
+
 _TOO_MANY_OUTCOMES = [{"name": f"wide_{i}", "qubits": list(range(10)), "ops": []} for i in range(5)]
 
 
@@ -1364,6 +1452,16 @@ _TOO_MANY_OUTCOMES = [{"name": f"wide_{i}", "qubits": list(range(10)), "ops": []
         (_with(job_id=""), "the job id is empty", None),
         (_second_circuit_named_ghz_chain, 'circuits[1] repeats the name "ghz_chain"', "job-1"),
         (_with(planned=_TOO_MANY_OUTCOMES), "the circuits have 5120 outcomes in all", "job-1"),
+        (
+            _ghz_chain_on_qubit_156,
+            "circuit ghz_chain measures qubit 156, but ibm_fez has qubits 0..155",
+            "job-1",
+        ),
+        (
+            _ghz_chain_with_cx,
+            "circuit ghz_chain: cx on qubits 136-143: cx is not defined in this profile",
+            "job-1",
+        ),
     ],
     ids=[
         "options not an object",
@@ -1373,6 +1471,8 @@ _TOO_MANY_OUTCOMES = [{"name": f"wide_{i}", "qubits": list(range(10)), "ops": []
         "no job id",
         "two circuits with one name",
         "too many outcomes",
+        "a qubit the device does not have",
+        "a gate the profile does not define",
     ],
 )
 def test_a_damaged_job_file_stops_before_the_calibration_pull_and_names_its_job(
@@ -1392,15 +1492,16 @@ def test_a_damaged_job_file_stops_before_the_calibration_pull_and_names_its_job(
     assert script.main(["ibm_fez", "--yes", "-o", str(output)]) == 1
     printed = capsys.readouterr().err
     hint = (
-        "delete it to submit a new job"
+        "the script cannot collect a job from the damaged job file. Look for the job in your IBM"
+        " Quantum account"
         if named is None
         else f"the script cannot collect job {named} from the damaged job file. Find job {named}"
-        " in your IBM Quantum account. To submit a new job, delete the job file"
+        " in your IBM Quantum account"
     )
     assert printed.startswith(f"error: {pending} is damaged (")
     assert problem in printed
-    assert printed.endswith(f")\nhint: {hint}\n")
-    assert (submissions, seen.pulled_at, seen.opened) == ([], [], [])
+    assert printed.endswith(f")\nhint: {hint}. {_new_job(pending)}\n")
+    assert (submissions, seen.pulled_at, seen.opened, seen.jobs) == ([], [], [], [])
     assert sorted(tmp_path.iterdir()) == [pending]
     assert pending.read_bytes() == record
 

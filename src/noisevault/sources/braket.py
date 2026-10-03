@@ -361,7 +361,13 @@ def _device_level(
         best = _preferred(props.get("oneQubitFidelity") or [], 1, skipped)
         records += [_record(g, [index[label]], best, 1) for g in one_natives if best]
     _note_skipped(skipped, notes)
-    notes.append("v3 values are device-wide, so every qubit and pair gets the same values")
+    own = sorted({record["qubits"][0] for record in records})
+    notes.append(
+        f"v3 values are device-wide defaults, except that qubits {own} use their"
+        f" oneQubitProperties fidelity for the one-qubit native gates ({', '.join(one_natives)})"
+        if own
+        else "v3 values are device-wide, so every qubit and pair gets the same values"
+    )
     readout = std.get("readoutFidelity") or []
     readout_spec = None
     if readout:
