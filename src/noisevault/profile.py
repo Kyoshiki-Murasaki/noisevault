@@ -1337,7 +1337,8 @@ def publish(held: Held, path: Path) -> bool:
     at ``path``, also when another file replaced ``held`` at its own name.
 
     A hard link makes the whole file appear at once. exFAT and FAT have no hard links, so there
-    the bytes go into a file that ``O_EXCL`` creates at ``path``.
+    the bytes go into a file that ``O_EXCL`` creates at ``path``. Another writer can replace that
+    file after the last check, and no portable call can rename a file without replacing a file.
     """
     try:
         os.link(held.path, path)
@@ -1374,14 +1375,19 @@ def _hidden_copy(path: Path, data: bytes, mode: int) -> tuple[int, Held]:
 
 
 def _write_created(path: Path, data: bytes) -> bool:
-    """Write ``data`` into a file that ``O_EXCL`` creates at ``path``. False if a file is there."""
+    """Write ``data`` into a file that ``O_EXCL`` creates at ``path``. False if a file is there,
+    also when another file replaced the new file during the write."""
     try:
         fd = os.open(path, _NEW_FILE, 0o666)
     except FileExistsError:
         return False
-    _fill(fd, path, data)
-    os.close(fd)
-    return True
+    identity = _fill(fd, path, data)
+    try:
+        return os.path.samestat(os.lstat(path), identity)
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(fd)
 
 
 def _fill(fd: int, path: Path, data: bytes) -> os.stat_result:

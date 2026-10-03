@@ -444,13 +444,11 @@ def pull_and_save(
     profile = module.pull(device, at=when)
     if output is not None:
         return Pulled(profile, profile.save(output), written=True)
-    listed = vault_profiles()
-    same_id = [i for i in listed if i.id == profile.id]
+    same_id = [i for i in vault_profiles() if i.id == profile.id]
     held = next((i for i in same_id if i.fingerprint == profile.fingerprint), None)
-    if held is not None:
-        return Pulled(profile, Path(str(held.path)), written=False)
     old = next((i for i in same_id if i.calibrated_at == profile.device.calibrated_at), None)
-    path = vault_path(profile) if old is None else Path(str(old.path))  # can have an older name
+    known = held or old  # can have an older name
+    path = vault_path(profile) if known is None else Path(str(known.path))
     return Pulled(profile, path, _save_in_vault(profile, path))
 
 
@@ -459,32 +457,49 @@ def _save_in_vault(profile: Profile, path: Path) -> bool:
 
     The pull replaces only a file that imports the same calibration differently, and warns. It
     first moves that file to a hidden name. If the moved file is not the file that the pull read,
-    the pull moves it back and reads ``path`` again.
+    the pull moves it back and reads ``path`` again. The pull deletes a moved file only after it
+    saves. If the save fails, the pull moves the file back to an empty ``path``, or keeps the file
+    and names it in the error.
     """
     data = file_bytes(profile, path)
-    replaced: list[tuple[Held, str]] = []
+    moved: list[Held] = []
+    replaced: list[str] = []
     try:
-        written = write_new(path, data)
-        while not written:
-            raw, fingerprint = _same_calibration_at(path, profile)
+        while True:
+            there = _same_calibration_at(path, profile)
+            if there is None:
+                if write_new(path, data):
+                    written = True
+                    break
+                continue
+            raw, fingerprint = there
             if fingerprint == profile.fingerprint:
+                written = False
                 break
             taken = take(path)
-            if taken is not None and taken.data == raw:
-                replaced.append((taken, fingerprint))
-            elif taken is not None:
-                if not publish(taken, path):
-                    raise _FileInTheWay(
-                        f"{path} changed during the pull. The pull saved nothing and moved the"
-                        f" file that was there to {taken.path.name}",
-                        hint=f"move {taken.path.name} out of {path.parent}, then pull again",
-                    )
-                drop(taken)
-            written = write_new(path, data)
-    finally:
-        for taken, _ in replaced:
-            drop(taken)
-    for _, fingerprint in replaced:
+            if taken is None:
+                continue
+            moved.append(taken)
+            if taken.data == raw:
+                replaced.append(fingerprint)
+            elif _put_back(taken, path):
+                moved.pop()
+            else:
+                raise _FileInTheWay(f"{path} changed during the pull")
+    except BaseException as exc:
+        kept = [held.path.name for held in moved if not _put_back(held, path)]
+        if not kept or not isinstance(exc, Exception):
+            raise
+        names = ", ".join(kept)
+        reason = exc.message if isinstance(exc, NoiseVaultError) else str(exc)
+        kind = _FileInTheWay if isinstance(exc, FileExistsError) else _NotSaved
+        raise kind(
+            f"{reason}. The pull saved nothing and moved the file that was there to {names}",
+            hint=f"move {names} out of {path.parent}, then pull again",
+        ) from exc
+    for held in moved:
+        drop(held)
+    for fingerprint in replaced:
         warnings.warn(
             f"replaced {path.name} (nv:{fingerprint[:12]}) with this pull"
             f" ({profile.short_fingerprint}), which imports the same calibration differently."
@@ -495,9 +510,28 @@ def _save_in_vault(profile: Profile, path: Path) -> bool:
     return written
 
 
-def _same_calibration_at(path: Path, profile: Profile) -> tuple[bytes, str]:
-    """The bytes and fingerprint of the vault file at ``path``. Raises _FileInTheWay unless the
-    file holds the calibration of ``profile``."""
+class _NotSaved(NoiseVaultError, OSError): ...
+
+
+def _put_back(held: Held, path: Path) -> bool:
+    """Give ``held`` the name ``path`` again only if no file is there, and remove its hidden name.
+    False if ``held`` keeps its hidden name."""
+    try:
+        if not publish(held, path):
+            return False
+    except OSError:
+        return False
+    drop(held)
+    return True
+
+
+def _same_calibration_at(path: Path, profile: Profile) -> tuple[bytes, str] | None:
+    """The bytes and fingerprint of the vault file at ``path``, or None if no file is there.
+    Raises _FileInTheWay unless the file holds the calibration of ``profile``."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return None
     try:
         if not S_ISREG(path.stat().st_mode):
             raise OSError("not a regular file")

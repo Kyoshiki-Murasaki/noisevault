@@ -1333,6 +1333,135 @@ def test_a_pull_keeps_every_file_when_its_vault_path_changes_twice(
     assert (nv.load(moved), nv.load(path)) == (later, third)
 
 
+def _moved_aside(vault: Path, path: Path) -> list[Path]:
+    return [p for p in vault.iterdir() if p.name.startswith(f".{path.name}.")]
+
+
+@pytest.mark.parametrize(
+    ("links", "put_back"),
+    [("hard links", True), ("no hard links", False), ("exFAT", False)],
+    indirect=["links"],
+)
+def test_a_pull_that_cannot_write_its_replacement_keeps_the_import_it_moved(
+    monkeypatch: pytest.MonkeyPatch, vault: Path, links: None, put_back: bool
+) -> None:
+    manila, old = nv.load("ibm_manila"), _changed_manila(5e-4)
+    _serve(monkeypatch, manila)
+    path = old.save(vault_path(manila))
+    real_open = os.open
+    full: list[bool] = []
+
+    def no_space_once_moved(file: str | Path, *args: Any, **kwargs: Any) -> int:
+        if full and Path(file).parent == vault:
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+        return real_open(file, *args, **kwargs)
+
+    _saved_when_the_pull_moves(monkeypatch, path, lambda path: None, lambda path: full.append(True))
+    monkeypatch.setattr(os, "open", no_space_once_moved)
+    with pytest.raises(OSError) as info:
+        catalog.pull_and_save("ibm_manila", source="ibm")
+    if put_back:
+        assert (str(info.value), _moved_aside(vault, path)) == (
+            "[Errno 28] No space left on device",
+            [],
+        )
+        assert nv.load(path) == old
+    else:
+        [moved] = _moved_aside(vault, path)
+        assert isinstance(info.value, nv.NoiseVaultError)
+        assert (info.value.message, info.value.hint, path.exists()) == (
+            "[Errno 28] No space left on device. The pull saved nothing and moved the file that"
+            f" was there to {moved.name}",
+            f"move {moved.name} out of {vault}, then pull again",
+            False,
+        )
+        assert nv.load(moved) == old
+
+
+@pytest.mark.usefixtures("links")
+def test_a_pull_keeps_the_import_it_moved_when_another_calibration_takes_its_path(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    manila, old, later = nv.load("ibm_manila"), _changed_manila(5e-4), _later_manila()
+    _serve(monkeypatch, manila)
+    path = old.save(vault_path(manila))
+    _saved_when_the_pull_moves(monkeypatch, path, lambda path: None, later.save)
+    with pytest.raises(FileExistsError) as info:
+        catalog.pull_and_save("ibm_manila", source="ibm")
+    [moved] = _moved_aside(vault, path)
+    assert (info.value.message, info.value.hint) == (
+        f"{path} already holds ibm_manila@2024-06-03T10:00:00Z, another calibration. The pull"
+        f" saved nothing and moved the file that was there to {moved.name}",
+        f"move {moved.name} out of {vault}, then pull again",
+    )
+    assert (nv.load(moved), nv.load(path)) == (old, later)
+
+
+def _changed_after_the_listing(
+    monkeypatch: pytest.MonkeyPatch, change: Callable[[], object]
+) -> None:
+    listing = catalog.vault_profiles
+
+    def list_then_change(*, reread: bool = False) -> list[catalog.ProfileInfo]:
+        listed = listing(reread=reread)
+        change()
+        return listed
+
+    monkeypatch.setattr(catalog, "vault_profiles", list_then_change)
+
+
+def test_a_pull_reads_the_listed_copy_of_its_profile_again_before_it_reports_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manila, later = nv.load("ibm_manila"), _later_manila()
+    _serve(monkeypatch, manila)
+    path = manila.save(vault_path(manila))
+    _changed_after_the_listing(monkeypatch, lambda: later.save(path))
+    with pytest.raises(FileExistsError) as info:
+        catalog.pull_and_save("ibm_manila", source="ibm")
+    assert info.value.message == (
+        f"{path} already holds ibm_manila@2024-06-03T10:00:00Z, another calibration"
+    )
+    assert nv.load(path) == later
+
+
+def test_a_pull_saves_its_profile_again_when_the_listed_copy_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manila = nv.load("ibm_manila")
+    _serve(monkeypatch, manila)
+    path = manila.save(vault_path(manila))
+    _changed_after_the_listing(monkeypatch, path.unlink)
+    assert catalog.pull_and_save("ibm_manila", source="ibm") == (manila, path, True)
+    assert nv.load(path) == manila
+
+
+@pytest.mark.parametrize("links", ["no hard links", "exFAT"], indirect=True)
+def test_a_pull_without_hard_links_never_reports_a_file_that_replaced_its_vault_file(
+    monkeypatch: pytest.MonkeyPatch, vault: Path, links: None
+) -> None:
+    manila, later = nv.load("ibm_manila"), _later_manila()
+    _serve(monkeypatch, manila)
+    path = vault_path(manila)
+    real_open = os.open
+    pending = [later.save]
+
+    def replaced_once_created(file: str | Path, *args: Any, **kwargs: Any) -> int:
+        fd = real_open(file, *args, **kwargs)
+        if pending and Path(file) == path:
+            pending.pop()(path)
+        return fd
+
+    monkeypatch.setattr(os, "open", replaced_once_created)
+    with pytest.raises(FileExistsError) as info:
+        catalog.pull_and_save("ibm_manila", source="ibm")
+    assert info.value.message == (
+        f"{path} already holds ibm_manila@2024-06-03T10:00:00Z, another calibration"
+    )
+    assert nv.load(path) == later
+    assert [p.name for p in vault.iterdir() if p.name != ".index.json"] == [path.name]
+
+
 @pytest.mark.parametrize(
     ("links", "error"),
     [
