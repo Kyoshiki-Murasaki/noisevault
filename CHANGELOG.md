@@ -62,9 +62,10 @@ This file lists all notable changes to NoiseVault. Versions follow
   - `scripts/run_on_ibm.py` runs the `nv compare` circuits on an IBM device through your IBM
     Quantum account. It writes a counts file bound to the calibration in effect when the job ran.
   - `scripts/run_on_ibm.py` never replaces a file that it did not write: the counts file and its
-    `.timing.json`, `.profile.json` and `.job.json` files. `--collect JOB_FILE` saves a submitted
-    job's counts to a new `-o`. A failed IBM request while the script opens the device gives an
-    error and a retry hint, not a traceback.
+    `.timing.json`, `.profile.json` and `.job.json` files. The script deletes only a file that it
+    created. `--collect JOB_FILE` saves a submitted job's counts to a new `-o` and never submits a
+    job. If the script cannot save a job id, `--job-id JOB_ID` collects that job. A failed IBM
+    request while the script opens the device gives an error and a retry hint, not a traceback.
 
   See [Counts format](docs/counts-format.md),
   [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware) and
@@ -82,6 +83,13 @@ This file lists all notable changes to NoiseVault. Versions follow
   - `'ibm_fez@2025-13-40': 2025-13-40 is not a calendar date; give one such as 2025-02-26` is now
     `'ibm_fez@2025-13-40': 2025-13-40 is not a calendar date. Give one such as 2025-02-26`.
   - `nv list --help` says `for example trapped_ion` in place of `e.g. trapped_ion`.
+- **Profile ids that end in `.json` or `.gz`.** Validation now refuses such a profile id, because
+  `nv.load` and the `nv` commands read the id as a file path. The error suggests an id that loads.
+- **`nv check --json` and `CheckResult.to_dict()`.** Each framework now gives `reports`, with one
+  full export report for each export configuration that the check ran. Each report names every
+  affected qubit. NoiseVault removes the `report` key and its `approximated`, `omitted`, `unknown`
+  and `summary` keys. It also removes the `FrameworkCheck` fields `approximated`, `omitted`,
+  `unknown` and `report`. Each circuit entry and `worst` also give `deviation`.
 
 ### Fixed
 
@@ -176,6 +184,19 @@ This file lists all notable changes to NoiseVault. Versions follow
   - An IonQ backend listing with no `qpu.` backend in it. The error ended with "it lists" and
     named nothing. The error now says that the listing "names no QPU", and the hint says to try
     again later.
+- **IBM parameters with two values.** When IBM calibration data gave one parameter of a qubit or
+  gate two different values, `nv pull` and the importers used the last value. They now raise
+  `nv.SourceDataError`, which names the parameter, the qubit or gate, and both values. An
+  identical repeat counts once.
+- **Archive note on old values.** The provenance note from `nv.from_calibration_archive` no
+  longer names `readout_error` on a qubit that has both asymmetric readout errors. The profile
+  does not use that value.
+- **A vault file saved during `nv pull`.** `nv pull` never replaces a vault file that another
+  process saves during the pull, also on exFAT and FAT drives. The pull applies the usual vault
+  rules to that file.
+- **Braket device names that are not a profile id.** A Braket file name or `device=` can give a
+  name that is not a valid profile id. The hint then says to rename the file or to pass `device=`
+  with another name.
 - **Format 0.1 files that mark a gate or qubit not operational with a string.** The upgrade read
   `operational` by truthiness, so `"false"`, `"no"`, `"off"` and `"0"` left the gate or qubit
   enabled. The upgrade now reads the flag as NoiseVault 0.1 did, so these values disable the gate
@@ -215,6 +236,10 @@ This file lists all notable changes to NoiseVault. Versions follow
   - In a narrow terminal, `nv check` wrapped cells such as "exact + 20000 shots" over several
     lines. It now leaves out the tolerance column, then the circuits column, and keeps each cell
     on one line.
+  - A sampled `nv check` passes only when each outcome is within its own tolerance. Each row
+    showed the TVD and one tolerance for all outcomes, so a FAIL row could show a TVD below its
+    tolerance. The table column is now `deviation`. Each row shows the deviation and the
+    tolerance that decide the result.
 
 ## 0.2.0 (2026-10-01)
 
