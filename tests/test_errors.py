@@ -11,8 +11,10 @@ import noisevault as nv
 from noisevault.errors import (
     FingerprintMismatch,
     LayoutError,
+    LociText,
     NoiseVaultError,
     did_you_mean,
+    qubit_loci,
     unreadable,
 )
 
@@ -69,3 +71,20 @@ def test_a_damaged_gzip_file_gives_its_reason_in_lower_case() -> None:
     assert message.startswith("cut.json.gz is a damaged gzip file (")
     reason = message.removeprefix("cut.json.gz is a damaged gzip file (")
     assert reason[0].islower() and reason.lower() == f"{str(cut).lower()})"
+
+
+def test_qubit_loci_names_four_loci_and_counts_the_rest_unless_the_limit_is_none() -> None:
+    five = [(q,) for q in range(5)]
+    assert qubit_loci(*five[:4]) == "qubits 0, 1, 2 and 3"
+    assert qubit_loci(*five) == "qubits 0, 1, 2 and 2 more"
+    assert qubit_loci(*five, limit=None) == "qubits 0, 1, 2, 3 and 4"
+    assert qubit_loci((7,), limit=None) == "qubit 7"
+    assert qubit_loci((0, 1), limit=None) == "qubits 0-1"
+
+
+def test_joined_loci_text_names_every_locus_and_its_short_form_counts_the_rest() -> None:
+    six = [(q,) for q in range(6)]
+    text = LociText("; ").join(["gate errors x2", LociText("readout of ", six, " is not scaled")])
+    assert text == "gate errors x2; readout of qubits 0, 1, 2, 3, 4 and 5 is not scaled"
+    assert text.short == "gate errors x2; readout of qubits 0, 1, 2 and 3 more is not scaled"
+    assert LociText("; ").join([]) == ""

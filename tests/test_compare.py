@@ -498,6 +498,27 @@ def test_notes_name_what_the_factors_cannot_scale_or_charge() -> None:
     ]
 
 
+def test_a_saved_comparison_names_every_qubit_and_its_summary_shortens_the_list() -> None:
+    profile = one_qubit("odd", {"x": {"pauli": [0.1, 0.0, 0.1]}}, readout={"error": 0.01})
+    profile = profile.model_copy(
+        update={"device": {**profile.to_dict()["device"], "num_qubits": 6}}
+    )
+    ops = (*(Op("x", (q,)) for q in range(6)), *(Op("delay", (q,), (100.0,)) for q in range(6)))
+    result = compare(profile, written(profile, [("six_x", ops, {"111111": 4000})]))
+    assert result.to_dict()["notes"] == [
+        "x on qubits 0, 1, 2, 3, 4 and 5 is not scaled (it has a negative Pauli-Lindblad rate)",
+        "delays on qubits 0, 1, 2, 3, 4 and 5 add no idle error (no T1 or T2 stated)",
+    ]
+    assert {type(note) for note in result.to_dict()["notes"]} == {str}
+    lines = str(result).split("\n")
+    note = lines.index("note            x on qubits 0, 1, 2 and 3 more is not scaled")
+    assert lines[note + 1 : note + 4] == [
+        "                (it has a negative Pauli-Lindblad rate)",
+        "                delays on qubits 0, 1, 2 and 3 more add no idle error",
+        "                (no T1 or T2 stated)",
+    ]
+
+
 def excess_readout(seed: int) -> MeasuredCounts:
     kingston = nv.load(KINGSTON)
     data = kingston.to_dict()

@@ -434,10 +434,6 @@ def fmt_error(value: float | None) -> str:
     return "-" if value is None else f"{value:.2e}"
 
 
-def fmt_time(value: float | None) -> str:
-    return "-" if value is None else f"{value:.4g}"
-
-
 def fmt_us(value: float | None) -> str:
     return "-" if value is None else f"{value:.1f}"
 

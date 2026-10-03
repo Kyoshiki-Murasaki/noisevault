@@ -335,11 +335,17 @@ def test_a_readout_factor_scales_each_readout_pair_and_names_the_pairs_it_cannot
     assert toy_table.qubit(0) == replace(table_of(**QUBIT_FIELDS).qubit(0), readout=scaled)
 
 
-def test_unscaled_lists_three_qubits_and_counts_the_rest() -> None:
+def test_unscaled_names_every_qubit_and_its_short_form_counts_the_rest() -> None:
     cusco = nv.load("ibm_cusco")
     table = cusco.model_copy(update={"unmodeled_error": {"readout": {"factor": 2.0}}}).table
-    assert table.unscaled() == (
-        "readout of qubits 0, 14, 18 and 24 more is not scaled (no better than chance)",
+    (phrase,) = table.unscaled()
+    every = (
+        "0, 14, 18, 37, 39, 52, 56, 57, 71, 75, 76, 78, 90, 94, 95, 96, 97, 101, 109, 113, 114,"
+        " 115, 116, 117, 118, 119 and 120"
+    )
+    assert phrase == f"readout of qubits {every} is not scaled (no better than chance)"
+    assert phrase.short == (
+        "readout of qubits 0, 14, 18 and 24 more is not scaled (no better than chance)"
     )
 
 

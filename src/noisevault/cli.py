@@ -45,6 +45,7 @@ from .diff import (
 )
 from .errors import (
     REPOSITORY,
+    LociText,
     NoiseVaultError,
     ProfileNotFound,
     did_you_mean,
@@ -614,7 +615,7 @@ def _print_card(
     grid.add_row("readout", _readout(data))
     if data["disabled_qubits"]:
         grid.add_row("disabled", "qubits " + ", ".join(map(str, data["disabled_qubits"])))
-    _add_lines(grid, "unmodeled", data["unmodeled_note"])
+    _add_lines(grid, "unmodeled", [LociText(line).short for line in data["unmodeled_note"]])
     if not brief:
         _add_lines(grid, "not modeled", [_plain_effect(line) for line in data["effects"]])
     prov = data["provenance"]

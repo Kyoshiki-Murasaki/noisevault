@@ -7,9 +7,9 @@ import pytest
 from conftest import require, toy
 
 import noisevault as nv
-from noisevault.errors import NoiseApproximationWarning, UnsupportedEffect
+from noisevault.errors import LociText, NoiseApproximationWarning, UnsupportedEffect
 from noisevault.profile import Profile
-from noisevault.report import HONESTY, Clamp, LociText, Report
+from noisevault.report import HONESTY, Clamp, Report
 
 
 def _report(**sections) -> tuple[Profile, Report]:
@@ -113,6 +113,22 @@ def test_a_saved_report_names_every_locus_as_plain_text() -> None:
     lines = report.summary().splitlines()
     assert "omitted: native cz: no metric on qubits 0-1, 1-2, 2-3 and 3 more, so none" in lines
     assert "unknown (no noise applied): readout error of qubit 5" in lines
+
+
+def test_a_saved_report_names_every_qubit_that_the_unmodeled_factors_leave_as_stated() -> None:
+    device = toy()["device"] | {"num_qubits": 6}
+    profile = Profile.model_validate(
+        toy(device=device, readout={"error": 0.5}, unmodeled_error={"readout": {"factor": 1.3}})
+    )
+    report = Report.start(profile, "qiskit", "2.5.2")
+    stated = "readout errors x1.3; T1, T2 and preparation error are not scaled; readout of"
+    assert report.to_dict()["unmodeled_error"] == (
+        f"{stated} qubits 0, 1, 2, 3, 4 and 5 is not scaled (no better than chance)"
+    )
+    assert type(report.to_dict()["unmodeled_error"]) is str
+    assert report.summary().splitlines()[1] == (
+        f"unmodeled error: {stated} qubits 0, 1, 2 and 3 more is not scaled (no better than chance)"
+    )
 
 
 def test_calibration_qualifiers_of_used_gates_are_reported() -> None:

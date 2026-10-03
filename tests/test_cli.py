@@ -698,6 +698,21 @@ def test_show_states_the_calibration_and_adds_a_row_for_unmodeled_error(tmp_path
     )
 
 
+def test_show_shortens_a_long_qubit_list_that_its_json_keeps_whole(tmp_path: Path) -> None:
+    device = toy()["device"] | {"num_qubits": 6}
+    path = tmp_path / "chance.json"
+    unmodeled = {"readout": {"factor": 1.3}}
+    path.write_text(
+        json.dumps(toy(device=device, readout={"error": 0.5}, unmodeled_error=unmodeled))
+    )
+    out = _unstyled(runner.invoke(app, ["show", str(path)], env={"COLUMNS": "100"}).stdout)
+    assert "readout of qubits 0, 1, 2 and 3 more is not scaled (no better than chance)" in out
+    data = json.loads(runner.invoke(app, ["show", str(path), "--json"]).stdout)
+    assert data["unmodeled_note"][-1] == (
+        "readout of qubits 0, 1, 2, 3, 4 and 5 is not scaled (no better than chance)"
+    )
+
+
 def test_show_qubits_prints_microseconds_with_one_decimal() -> None:
     out = runner.invoke(app, ["show", "ibm_fez", "--qubits", "0,5"], env={"COLUMNS": "80"}).stdout
     rows = out.splitlines()[-2:]

@@ -13,11 +13,11 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .errors import NoiseApproximationWarning, UnsupportedEffect, joined, qubit_loci
+from .errors import LociText, NoiseApproximationWarning, UnsupportedEffect, qubit_loci
 from .profile import unmodeled_note
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Iterable, Sequence
+    from collections.abc import Collection, Iterable
     from types import FrameType
 
     from .channels import GateChannels
@@ -44,37 +44,6 @@ _EVENTS = {  # event -> how summary() states one key's count
         "the export kept the circuit's own {key} as written, with no noise added, {times}"
     ),
 }
-
-
-_Loci = tuple[tuple[int, ...], ...]
-
-
-class LociText(str):
-    """Report text that names qubit loci.
-
-    The text names every locus. ``short`` shortens a list of more than four loci, as qubit_loci
-    does. A part is text, a sequence of loci, or a LociText. to_dict() keeps the text, so a saved
-    report names every qubit. summary() shows ``short``.
-    """
-
-    parts: tuple[str | _Loci, ...]
-
-    def __new__(cls, *parts: str | Iterable[Sequence[int]]) -> LociText:
-        flat: list[str | _Loci] = []
-        for part in parts:
-            if isinstance(part, LociText):
-                flat += part.parts
-            elif isinstance(part, str):
-                flat.append(part)
-            else:
-                flat.append(tuple(tuple(locus) for locus in part))
-        text = super().__new__(cls, _render(flat, _every_locus))
-        text.parts = tuple(flat)
-        return text
-
-    @property
-    def short(self) -> str:
-        return _render(self.parts, qubit_loci)
 
 
 @dataclass(frozen=True)
@@ -121,7 +90,7 @@ class Report:
             framework=framework,
             framework_version=framework_version,
             noisevault_version=__version__,
-            unmodeled_error="; ".join(unmodeled_note(profile)) or None,
+            unmodeled_error=LociText("; ").join(unmodeled_note(profile)) or None,
             options=options,
         )
 
@@ -197,7 +166,7 @@ class Report:
     # output ---------------------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
-        unmodeled = {"unmodeled_error": self.unmodeled_error} if self.unmodeled_error else {}
+        unmodeled = {"unmodeled_error": str(self.unmodeled_error)} if self.unmodeled_error else {}
         return {
             "profile_id": self.profile_id,
             "fingerprint": self.fingerprint,
@@ -229,7 +198,7 @@ class Report:
             f" {self.profile_id} (nv:{self.fingerprint[:12]})"
         ]
         if self.unmodeled_error:
-            lines.append(f"unmodeled error: {self.unmodeled_error}")
+            lines.append(f"unmodeled error: {LociText(self.unmodeled_error).short}")
         if self.options:
             lines.append("options: " + ", ".join(f"{k}={v!r}" for k, v in self.options.items()))
         if self.exact:
@@ -294,17 +263,6 @@ def _gates(n: int) -> str:
 def _worst(clamps: list[Clamp]) -> str:
     c = max(clamps, key=lambda c: abs(c.achieved - c.requested))
     return f"{c.gate} on {qubit_loci(c.qubits)}, {c.requested:.3g} -> {c.achieved:.3g}"
-
-
-def _render(parts: Iterable[str | _Loci], loci_text: Callable[..., str]) -> str:
-    return "".join(part if isinstance(part, str) else loci_text(*part) for part in parts)
-
-
-def _every_locus(*loci: Sequence[int]) -> str:
-    """The qubit_loci text without its limit of four loci."""
-    labels = ["-".join(map(str, locus)) for locus in loci]
-    single = len(loci) == 1 and len(loci[0]) == 1
-    return f"qubit {joined(labels)}" if single else f"qubits {joined(labels)}"
 
 
 def _count_sentence(event: str, key: str, n: int) -> str:

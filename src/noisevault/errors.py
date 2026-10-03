@@ -124,12 +124,59 @@ def joined(words: Sequence[str], conjunction: str = "and") -> str:
     return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} {conjunction} {words[-1]}"
 
 
-def qubit_loci(*loci: Sequence[int]) -> str:
+def qubit_loci(*loci: Sequence[int], limit: int | None = 4) -> str:
+    """The loci as text. More than ``limit`` loci show as the first ``limit - 1`` and a count.
+
+    ``limit=None`` names every locus.
+    """
     labels = ["-".join(map(str, locus)) for locus in loci]
-    if len(labels) > 4:
-        labels = [*labels[:3], f"{len(labels) - 3} more"]
+    if limit is not None and len(labels) > limit:
+        labels = [*labels[: limit - 1], f"{len(labels) - limit + 1} more"]
     single = len(loci) == 1 and len(loci[0]) == 1
     return f"qubit {joined(labels)}" if single else f"qubits {joined(labels)}"
+
+
+_Loci = tuple[tuple[int, ...], ...]
+
+
+class LociText(str):
+    """Text that names qubit loci.
+
+    The text names every locus. ``short`` shows at most four loci, as qubit_loci does. A part is
+    text, a sequence of loci, or a LociText. Saved data keeps the text, so it names every qubit.
+    Printed output shows ``short``.
+    """
+
+    parts: tuple[str | _Loci, ...]
+
+    def __new__(cls, *parts: str | Iterable[Sequence[int]]) -> LociText:
+        flat: list[str | _Loci] = []
+        for part in parts:
+            if isinstance(part, LociText):
+                flat += part.parts
+            elif isinstance(part, str):
+                flat.append(part)
+            else:
+                flat.append(tuple(tuple(locus) for locus in part))
+        text = super().__new__(cls, _render(flat, None))
+        text.parts = tuple(flat)
+        return text
+
+    @property
+    def short(self) -> str:
+        return _render(self.parts, 4)
+
+    def join(self, texts: Iterable[str]) -> LociText:
+        parts: list[str] = []
+        for text in texts:
+            parts += [self, text] if parts else [text]
+        return LociText(*parts)
+
+
+def _render(parts: Iterable[str | _Loci], limit: int | None) -> str:
+    return "".join(
+        part if isinstance(part, str) else qubit_loci(*part, limit=limit) for part in parts
+    )
 
 
 class NoiseVaultWarning(UserWarning):

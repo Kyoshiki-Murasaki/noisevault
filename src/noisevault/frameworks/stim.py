@@ -23,6 +23,7 @@ import numpy as np
 from ..errors import (
     DisabledGateError,
     LayoutError,
+    LociText,
     MissingCalibrationError,
     NoiseVaultError,
     install_hint,
@@ -39,7 +40,7 @@ from ..channels import ChannelSpec, pauli_twirl
 from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
-from ..report import LociText, Report
+from ..report import Report
 from ..table import GateNoise, Unavailable
 
 Readout = Literal["symmetrize", "exact", "none"]

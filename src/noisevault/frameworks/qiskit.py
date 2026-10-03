@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ..errors import NoiseVaultError, install_hint, qubit_loci
+from ..errors import LociText, NoiseVaultError, install_hint, qubit_loci
 
 try:
     import qiskit
@@ -65,7 +65,7 @@ from qiskit_aer.noise.passes import LocalNoisePass
 from .. import gates
 from ..channels import ChannelSpec, GateChannels, readout_matrix
 from ..conversion import UnknownGates, idle_channel, resolve_op
-from ..report import LociText, Report
+from ..report import Report
 from ..table import GateNoise, NoiseTable, QubitNoise, Unavailable
 
 if TYPE_CHECKING:

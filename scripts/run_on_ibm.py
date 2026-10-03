@@ -465,7 +465,7 @@ def run(
         raise NoiseVaultError(
             f"stopped before the script saved the counts of job {submitted.job_id}", hint=again
         ) from None
-    pending.unlink()
+    pending.unlink(missing_ok=True)
     if binding.warning:
         print(f"warning: {binding.warning}", file=sys.stderr)
         if binding.hint:

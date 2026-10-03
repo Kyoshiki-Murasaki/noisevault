@@ -1393,6 +1393,16 @@ def test_summary_states_the_calibration_and_adds_one_line_for_the_factors() -> N
     )
 
 
+def test_summary_shortens_a_long_qubit_list_that_the_unmodeled_note_keeps_whole() -> None:
+    device = toy()["device"] | {"num_qubits": 6}
+    profile = Profile.model_validate(
+        toy(device=device, readout={"error": 0.5}, unmodeled_error={"readout": {"factor": 1.3}})
+    )
+    chance = "is not scaled (no better than chance)"
+    assert unmodeled_note(profile)[-1] == f"readout of qubits 0, 1, 2, 3, 4 and 5 {chance}"
+    assert profile.summary().endswith(f"; readout of qubits 0, 1, 2 and 3 more {chance}")
+
+
 @pytest.mark.parametrize("source", ["hardware", "simulated"])
 def test_citation_states_the_factors_and_the_counts_they_were_fitted_to(source: str) -> None:
     _, fitted = _fitted(source=source)

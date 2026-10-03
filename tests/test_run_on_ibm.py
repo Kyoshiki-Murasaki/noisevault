@@ -711,6 +711,24 @@ def test_a_defect_after_the_job_ran_raises_instead_of_asking_to_collect_again(
         run()
 
 
+def test_a_job_file_that_another_collect_removed_first_does_not_stop_this_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _collecting_job_1(tmp_path, monkeypatch)
+    pending = tmp_path / "fez.job.json"
+    collect = script.collect
+
+    def the_other_collect_ends_first(*args: Any) -> Any:
+        pending.unlink()
+        return collect(*args)
+
+    monkeypatch.setattr(script, "collect", the_other_collect_ends_first)
+    measured = run()
+    assert measured is not None
+    assert load_counts(tmp_path / "fez.counts.json").execution.job_ids == ("job-1",)
+    assert not pending.exists()
+
+
 @dataclass
 class Account:
     pulled_at: list[datetime | None]

@@ -39,7 +39,15 @@ from pydantic import (
 )
 
 from . import __version__, compat, gates, metrics
-from .errors import MigrationWarning, NoiseVaultError, parse_json, plural, qubit_loci, unreadable
+from .errors import (
+    LociText,
+    MigrationWarning,
+    NoiseVaultError,
+    parse_json,
+    plural,
+    qubit_loci,
+    unreadable,
+)
 from .units import DURATION, T1, T2, normalize_times
 
 if TYPE_CHECKING:
@@ -864,7 +872,7 @@ class Profile(_Model):
         )
         note = unmodeled_note(self)
         if note:
-            lines.append(f"  unmodeled error: {'; '.join(note)}")
+            lines.append(f"  unmodeled error: {LociText('; ').join(note).short}")
         return "\n".join(lines)
 
     def citation(self, style: Literal["text", "bibtex"] = "text") -> str:

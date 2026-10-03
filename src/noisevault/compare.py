@@ -19,6 +19,7 @@ from .errors import (
     CountsError,
     DisabledGateError,
     LayoutError,
+    LociText,
     MissingCalibrationError,
     NoiseVaultError,
     joined,
@@ -223,7 +224,7 @@ class Comparison:
             "resamples": RESAMPLES,
             "impossible_shots": self.impossible_shots,
             "ruled_out": list(self.ruled_out),
-            "notes": list(self.notes),
+            "notes": [str(note) for note in self.notes],
             "note": " ".join(NOTE) if self._fitted else None,
         }
 
@@ -300,7 +301,7 @@ class Comparison:
         if _SAME_WAY in (gate_reason, readout_reason):
             entries.append(("next", list(NEXT_READOUT)))
         if self.notes:
-            entries.append(("note", list(self.notes)))
+            entries.append(("note", [LociText(note).short for note in self.notes]))
         lines = []
         for label, values in entries:
             for i, value in enumerate(values):
@@ -1098,8 +1099,8 @@ def _notes(base: Profile, circuits: Sequence[PlannedCircuit]) -> tuple[str, ...]
         }
     )
     if idle:
-        on = qubit_loci(*((q,) for q in idle))
-        notes.append(f"delays on {on} add no idle error (no T1 or T2 stated)")
+        on = [(q,) for q in idle]
+        notes.append(LociText("delays on ", on, " add no idle error (no T1 or T2 stated)"))
     return tuple(notes)
 
 

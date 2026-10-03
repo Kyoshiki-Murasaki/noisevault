@@ -12,7 +12,7 @@ from itertools import combinations
 from typing import TYPE_CHECKING, Literal
 
 from . import gates, metrics
-from .errors import qubit_loci
+from .errors import LociText, qubit_loci
 from .profile import Connectivity, GateSpec, GateState, Idle, merge_spec
 
 if TYPE_CHECKING:
@@ -325,13 +325,13 @@ def _unscalable(metric: tuple[metrics.MetricKind, Any] | None, num_qubits: int) 
 
 def unscaled_phrases(
     gates: Iterable[tuple[str, tuple[int, ...], str]], readout: Iterable[tuple[int, str]]
-) -> list[str]:
+) -> list[LociText]:
     loci: dict[tuple[str, str], dict[tuple[int, ...], None]] = {}
     for name, qubits, reason in gates:
         loci.setdefault((f"{name} on", reason), {})[qubits] = None
     for qubit, reason in readout:
         loci.setdefault(("readout of", reason), {})[(qubit,)] = None
-    return [f"{what} {qubit_loci(*on)} is not scaled ({why})" for (what, why), on in loci.items()]
+    return [LociText(f"{what} ", on, f" is not scaled ({why})") for (what, why), on in loci.items()]
 
 
 def _without_own_noise(found: GateNoise | Unavailable) -> bool:

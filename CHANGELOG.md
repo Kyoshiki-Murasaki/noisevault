@@ -60,6 +60,10 @@ This file lists all notable changes to NoiseVault. Versions follow
     names the correct order.
   - `scripts/run_on_ibm.py` runs the `nv compare` circuits on an IBM device through your IBM
     Quantum account. It writes a counts file bound to the calibration in effect when the job ran.
+  - `scripts/run_on_ibm.py` never replaces a file that it did not write: the counts file and its
+    `.timing.json`, `.profile.json` and `.job.json` files. `--collect JOB_FILE` saves a submitted
+    job's counts to a new `-o`. A failed IBM request while the script opens the device gives an
+    error and a retry hint, not a traceback.
 
   See [Counts format](docs/counts-format.md),
   [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware) and
