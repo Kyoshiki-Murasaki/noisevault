@@ -165,8 +165,9 @@ for device, span in nv.calibration_archive_devices(path).items():
 fez = nv.from_calibration_archive(path, "ibm_fez", at="2026-06-01")
 ```
 
-`calibration_archive_devices` returns each device with two times. `first` is when the archive
-first recorded the device, and `last` is the device's newest calibration.
+`calibration_archive_devices` returns each device with two times. `first` is the earliest `at`
+that gives a profile. It is the later of two times: when the archive first recorded the device,
+and the device's earliest calibration. `last` is the device's newest calibration.
 `from_calibration_archive` takes the newest calibration at or before `at` for each property. A
 property is, for example, the T1 of one qubit or the `cz` error of one pair. Without `at`, every
 property takes its newest calibration. An `at` before `first` raises `SourceDataError`, because
@@ -201,9 +202,10 @@ The archive has these limits:
   last value. At 2026-09-01, `ibm_fez` has `xslow` errors from 29 May 2026 and a T2 on qubit 72
   from 21 October 2025. IBM's own calibration for that time does not have these values.
   `nv pull ibm_fez --at 2026-09-01` and the archive agree on all 1,132 gate records that both
-  have. `provenance.notes` names every value calibrated more than 7 days before `at`. When you
-  give no `at`, the notes name every value calibrated more than 7 days before the newest
-  calibration. The notes also give the date of the oldest of these values.
+  have. `provenance.notes` names every profile value calibrated more than 7 days before `at`.
+  When you give no `at`, the notes name every profile value calibrated more than 7 days before
+  the newest calibration. The notes also give the date of the oldest of these values. The notes
+  do not name a value that the profile does not use, for example the duration of a disabled gate.
 - The importer disables a qubit whose `prob_meas1_prep0` or `prob_meas0_prep1` is 1, and
   `provenance.notes` names that qubit. A gate error of 1 disables that gate, as in a pull.
 

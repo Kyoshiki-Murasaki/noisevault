@@ -27,7 +27,13 @@ from ..errors import (
 from ..gates import is_symmetric
 from ..profile import Profile, iso_z
 from . import OLDER_HINT, Origin
-from .qiskit_backend import Calibration, as_utc, calibration_from_properties, to_profile
+from .qiskit_backend import (
+    Calibration,
+    _is_sentinel,
+    as_utc,
+    calibration_from_properties,
+    to_profile,
+)
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -72,7 +78,8 @@ _READ_FROM_QUBIT_ROWS_OR_VIRTUAL = frozenset({"measure", "rz"})
 class ArchiveSpan(NamedTuple):
     """The ``at`` times the archive can answer for one device.
 
-    ``first`` is when the archive first recorded the device, the earliest ``at`` accepted.
+    ``first`` is the earliest ``at`` that gives a profile: the later of the time the archive first
+    recorded the device and the device's earliest calibration.
     ``last`` is the device's newest calibration, the default ``at``.
     """
 
@@ -87,13 +94,13 @@ def calibration_archive_devices(path: str | Path) -> dict[str, ArchiveSpan]:
     unnamed = table["backend"].null_count
     if unnamed:
         raise SourceDataError(f"{path.name} has {plural(unnamed, 'row')} with no backend")
-    table = table.append_column("placed", _placed(table))
+    table = table.append_column("usable", _usable(table))
     spans = table.group_by("backend").aggregate(
-        [("observed_time", "min"), ("calibrated_time", "max"), ("placed", "any")]
+        [("observed_time", "min"), ("calibrated_time", "max"), ("usable", "min")]
     )
     return {
         row["backend"]: ArchiveSpan(
-            _first_seen(path, row["backend"], row["observed_time_min"], row["placed_any"]),
+            _first_usable(path, row["backend"], row["observed_time_min"], row["usable_min"]),
             as_utc(row["calibrated_time_max"]),
         )
         for row in spans.sort_by("backend").to_pylist()
@@ -120,14 +127,21 @@ def from_calibration_archive(
             hint=did_you_mean(name, held).strip() or None,
         )
     pc = _pyarrow().compute
-    unplaced = rows.num_rows - pc.sum(_placed(rows)).as_py()
-    first = _first_seen(path, name, pc.min(rows["observed_time"]).as_py(), unplaced < rows.num_rows)
+    usable = _usable(rows)
+    unplaced = usable.null_count
+    recorded = pc.min(rows["observed_time"]).as_py()
+    first = _first_usable(path, name, recorded, pc.min(usable).as_py())
     stamp = None if at is None else as_utc(at, name="at")
     if stamp is not None and stamp < first:
+        problem = (
+            f"has no complete {name} calibration before {iso_z(first)}, when the archive first"
+            f" recorded {name}"
+            if first == as_utc(recorded)
+            else f"has no {name} calibration before {iso_z(first)}, the earliest calibrated_time"
+            f" of the {name} rows"
+        )
         raise SourceDataError(
-            f"{path.name} has no complete {name} calibration before {iso_z(first)},"
-            f" when the archive first recorded {name}",
-            hint="pass an at= time on or after that time",
+            f"{path.name} {problem}", hint="pass an at= time on or after that time"
         )
     origin = Origin(f"the {name} rows of {path.name}", hint=OLDER_HINT)
     picked = _newest(rows, stamp, origin)
@@ -254,24 +268,30 @@ def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa
         ) from None
 
 
-def _placed(rows: pa.Table) -> pa.ChunkedArray:
-    """For each row, whether it has a property and a calibrated_time, so a profile can use it."""
+def _usable(rows: pa.Table) -> pa.ChunkedArray:
+    """For each row, its calibrated_time, or null when the row has no property, so a profile
+    cannot use it.
+    """
     pc = _pyarrow().compute
-    return pc.and_(pc.is_valid(rows["property"]), pc.is_valid(rows["calibrated_time"]))
+    return pc.if_else(pc.is_valid(rows["property"]), rows["calibrated_time"], None)
 
 
-def _first_seen(path: Path, device: str, first: datetime | None, placed: bool) -> datetime:
-    """``first``, the earliest observed_time of ``device``, in UTC.
+def _first_usable(
+    path: Path, device: str, recorded: datetime | None, calibrated: datetime | None
+) -> datetime:
+    """The earliest ``at`` that gives ``device`` a profile, in UTC. It is the later of
+    ``recorded``, the earliest observed_time, and ``calibrated``, the earliest calibrated_time of
+    a usable row.
 
     A SourceDataError names the column when no row of ``device`` has a value in it.
     """
-    if first is None:
+    if recorded is None:
         raise SourceDataError(f"{path.name} has no {device} row with an observed_time")
-    if not placed:
+    if calibrated is None:
         raise SourceDataError(
             f"{path.name} has no {device} row with both a property and a calibrated_time"
         )
-    return as_utc(first)
+    return max(as_utc(recorded), as_utc(calibrated))
 
 
 def _is(types: Any, kind: Any, expected: str) -> bool:
@@ -359,23 +379,16 @@ def _gate_parameter(name: str) -> tuple[str, str] | None:
 def _stale_note(rows: list[dict[str, Any]], at: datetime | None, cal: Calibration) -> str | None:
     """The note on the rows that IBM calibrated more than 7 days before ``at``.
 
-    Only rows that give the profile a value count. A qubit with both asymmetric readout errors
-    does not use its readout_error row.
+    Only rows that give the profile a value count.
     """
     before = at or max(row["calibrated_time"] for row in rows)
-    paired = {
-        index
-        for index, qubit in cal.qubits.items()
-        if qubit.p1_given_0 is not None and qubit.p0_given_1 is not None
-    }
+    unread = _unread(cal)
     oldest: dict[str, datetime] = {}
     loci: dict[str, set[tuple[int, ...]]] = {}
     for row in rows:
         calibrated = row["calibrated_time"]
-        if before - calibrated <= _STALE_AFTER:
-            continue
         name = row["property"]
-        if name == "readout_error" and row["qubits"][0] in paired:
+        if before - calibrated <= _STALE_AFTER or (name, row["qubits"]) in unread:
             continue
         split = _gate_parameter(name)
         if split is None:
@@ -402,6 +415,28 @@ def _stale_note(rows: list[dict[str, Any]], at: datetime | None, cal: Calibratio
         f"IBM calibrated these values more than {_STALE_AFTER.days} days before {when}, the"
         f" oldest on {stale[0][0].date().isoformat()}: {'; '.join(named)}."
     )
+
+
+def _unread(cal: Calibration) -> set[tuple[str, tuple[int, ...]]]:
+    """The property and qubits of each row that gives the profile no value.
+
+    A qubit with both asymmetric readout errors uses them and not its readout_error. A qubit
+    without both uses its readout_error, and its readout_length only with that error. A disabled
+    gate keeps only the error that disables it.
+    """
+    unread: set[tuple[str, tuple[int, ...]]] = set()
+    readout = {i.qubits[0]: i.error for i in cal.instructions if i.name == "measure"}
+    for index, qubit in cal.qubits.items():
+        if qubit.p1_given_0 is not None and qubit.p0_given_1 is not None:
+            unread.add(("readout_error", (index,)))
+            continue
+        unread |= {(name, (index,)) for name in _READOUT_PAIR.values()}
+        if readout.get(index) is None:
+            unread.add(("readout_length", (index,)))
+    for i in cal.instructions:
+        if not i.operational or _is_sentinel(i.error, len(i.qubits)):
+            unread.add((f"{i.name}_gate_length", i.qubits))
+    return unread
 
 
 def _revision(path: Path) -> tuple[str, str] | None:

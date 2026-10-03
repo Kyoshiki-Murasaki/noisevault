@@ -216,6 +216,66 @@ def test_the_note_names_readout_error_only_where_the_readout_uses_it(
     assert _stale(_fez(path=_rewritten(tmp_path, rows))) == stale
 
 
+_MAY_24 = datetime(2026, 5, 24, 8, tzinfo=UTC)
+_JUNE_1 = datetime(2026, 6, 1, 8, tzinfo=UTC)
+_JUNE_2 = datetime(2026, 6, 2, 8, tzinfo=UTC)
+_READOUT = {"readout_error", "prob_meas0_prep1", "prob_meas1_prep0"}
+
+
+def _to_may_24(rows: list[dict], prop: str, qubit: int, calibrated: datetime) -> list[dict]:
+    key = ("ibm_fez", prop, qubit, calibrated)
+    [row] = [
+        r for r in rows if (r["backend"], r["property"], r["qubit_a"], r["calibrated_time"]) == key
+    ]
+    row["calibrated_time"] = _MAY_24
+    return rows
+
+
+def _without(rows: list[dict], props: set[str], qubit: int, calibrated: datetime | None = None):
+    return [
+        r
+        for r in rows
+        if (r["backend"], r["qubit_a"]) != ("ibm_fez", qubit)
+        or r["property"] not in props
+        or calibrated not in (None, r["calibrated_time"])
+    ]
+
+
+@pytest.mark.parametrize(
+    ("edit", "stale"),
+    [
+        (lambda rows: _to_may_24(rows, "sx_gate_length", 2, _JUNE_1), []),
+        (
+            lambda rows: _to_may_24(
+                _without(rows, {"sx_gate_error"}, 2, _JUNE_1), "sx_gate_error", 2, _JUNE_2
+            ),
+            [
+                "IBM calibrated these values more than 7 days before the newest calibration, the"
+                " oldest on 2026-05-24: sx on qubit 2."
+            ],
+        ),
+        (
+            lambda rows: _to_may_24(
+                _without(rows, {"prob_meas0_prep1"}, 0), "prob_meas1_prep0", 0, _JUNE_1
+            ),
+            [],
+        ),
+        (lambda rows: _to_may_24(_without(rows, _READOUT, 0), "readout_length", 0, _JUNE_1), []),
+    ],
+    ids=[
+        "disabled-gate-length",
+        "disabling-gate-error",
+        "lone-readout-probability",
+        "readout-length-without-error",
+    ],
+)
+def test_the_note_names_only_rows_that_give_the_profile_a_value(
+    tmp_path: Path, edit, stale: list[str]
+) -> None:
+    rows = edit(pq.read_table(FIXTURE).to_pylist())
+    assert _stale(_fez(path=_rewritten(tmp_path, rows))) == stale
+
+
 def test_two_values_for_one_property_at_one_time_are_refused(tmp_path: Path) -> None:
     rows = pq.read_table(FIXTURE).to_pylist()
     t1 = [r for r in rows if (r["backend"], r["property"], r["qubit_a"]) == ("ibm_fez", "T1", 0)]
@@ -309,6 +369,21 @@ def test_a_time_before_the_first_snapshot_is_refused() -> None:
         " when the archive first recorded ibm_fez"
     )
     assert caught.value.hint == "pass an at= time on or after that time"
+
+
+def test_the_listing_starts_at_the_first_time_that_gives_a_profile(tmp_path: Path) -> None:
+    calibrated = datetime(2026, 6, 2, 9, 0, 14, 800000, tzinfo=UTC)
+    rows = [r for r in pq.read_table(FIXTURE).to_pylist() if r["calibrated_time"] == calibrated]
+    path = _rewritten(tmp_path, rows)
+    assert nv.calibration_archive_devices(path)["ibm_fez"].first == calibrated
+    assert _qubit(_fez(at="2026-06-02T09:00:14.8Z", path=path), 2).t2_us == 90.0
+    with pytest.raises(nv.SourceDataError) as caught:
+        _fez(at="2026-06-02T09:00:05Z", path=path)
+    assert (caught.value.message, caught.value.hint) == (
+        f"{path.name} has no ibm_fez calibration before 2026-06-02T09:00:14.800000Z, the earliest"
+        " calibrated_time of the ibm_fez rows",
+        "pass an at= time on or after that time",
+    )
 
 
 LFS_POINTER = (
