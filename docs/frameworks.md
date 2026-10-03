@@ -242,6 +242,15 @@ When readout noise is on, `qml.add_noise` keeps only part of a shot vector's res
 (`shots=[100, 200]`). The model therefore raises an error for shot vectors instead of returning
 wrong numbers. Run each shot count separately. You can also pass `readout=False`.
 
+With shots, `default.mixed` gives the same shots to Pauli words that commute on each wire. Such
+words have the same Pauli letter on each wire that they share, for example
+`qml.sample(qml.Z(0))` and `qml.sample(qml.X(1))`. The model gives these measurements one set of
+readout operations, so they stay on one tape and their samples stay correlated. Two words that
+read one wire in different bases, such as `qml.Z(0)` and `qml.X(0)`, get separate shots. If a
+third word commutes with both, `default.mixed` decides which shots that word shares. The model
+cannot see that decision, so the model raises an error. To fix the error, wrap the QNode in
+`qml.transforms.split_non_commuting` before `qml.add_noise`.
+
 PennyLane has no operation named after the `r`, `zz` and `ms` natives of trapped-ion profiles.
 A `qml.Rot(a, theta, -a)` gets the profile's `r` noise, and `qml.IsingZZ(pi/2)` gets its `zz`
 noise. On a profile with an `ms` native, `qml.IsingXX(±pi/2)` and `qml.IsingYY(±pi/2)` get its

@@ -15,6 +15,7 @@ from noisevault.errors import (
     LayoutError,
     MissingCalibrationError,
     NoiseApproximationWarning,
+    NoiseVaultError,
     UnsupportedEffect,
 )
 from noisevault.gates import GATES
@@ -581,6 +582,111 @@ def test_readout_without_wires_does_not_depend_on_measurement_order(qml, wireles
     expected = probabilities(profile, [Op("sx", (0,))], 2)
     assert every_wire == pytest.approx(expected, abs=1e-12)
     assert wire_1 == pytest.approx(expected.reshape(2, 2).sum(axis=0), abs=1e-12)
+
+
+BELL_THEN_H = [Op("h", (0,)), Op("cx", (0, 1)), Op("h", (1,))]
+
+
+def _ideal_gates(readout_error: float) -> Profile:
+    data = toy(
+        gates={"h": {"avg_infidelity": 0.0}, "cx": {"avg_infidelity": 0.0}},
+        qubits=[
+            {"index": q, "readout": {"p1_given_0": readout_error, "p0_given_1": readout_error}}
+            for q in range(2)
+        ],
+    )
+    return Profile.model_validate(data)
+
+
+@pytest.mark.parametrize("readout_error", [0.01, 0.0])
+def test_commuting_pauli_samples_come_from_the_same_shots(qml, readout_error) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    profile = _ideal_gates(readout_error)
+    shots = 100_000
+
+    @qml.qnode(qml.device("default.mixed", wires=2, seed=19))
+    def circuit():
+        _pl_ops(qml, BELL_THEN_H)
+        return qml.sample(qml.Z(0)), qml.sample(qml.X(1))
+
+    z0, x1 = qml.set_shots(qml.add_noise(circuit, to_pennylane(profile)), shots=shots)()
+    expected = probabilities(profile, BELL_THEN_H + [Op("h", (1,))], 2) @ [1, -1, -1, 1]
+    product = np.mean(np.asarray(z0) * np.asarray(x1))
+    assert product == pytest.approx(expected, abs=5 / np.sqrt(shots))
+
+
+def test_samples_that_share_a_wire_get_one_readout_in_the_shared_basis(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    profile = _asymmetric_toy()
+    ops = [Op("sx", (0,)), Op("cz", (0, 1)), Op("sx", (1,))]
+    shots = 100_000
+
+    @qml.qnode(qml.device("default.mixed", wires=2, seed=23))
+    def circuit():
+        _pl_ops(qml, ops)
+        return qml.sample(qml.X(0)), qml.sample(qml.X(0) @ qml.Y(1))
+
+    x0, x0y1 = qml.set_shots(qml.add_noise(circuit, to_pennylane(profile)), shots=shots)()
+    in_x0_y1 = probabilities(profile, ops + [Op("h", (0,)), Op("sdg", (1,)), Op("h", (1,))], 2)
+    sigma = 5 / np.sqrt(shots)
+    assert np.mean(x0) == pytest.approx(float(in_x0_y1 @ [1, 1, -1, -1]), abs=sigma)
+    product = np.mean(np.asarray(x0) * np.asarray(x0y1))
+    assert product == pytest.approx(float(in_x0_y1 @ [1, -1, 1, -1]), abs=sigma)
+
+
+@pytest.mark.parametrize("measure", ["expval", "var", "probs", "counts", "sample"])
+def test_commuting_pauli_measurements_of_every_kind_share_shots(qml, measure) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    @qml.qnode(qml.device("default.mixed", wires=2, seed=29))
+    def circuit():
+        _pl_ops(qml, BELL_THEN_H)
+        if measure == "probs":
+            return qml.probs(op=qml.Z(0)), qml.probs(op=qml.X(1))
+        return getattr(qml, measure)(qml.Z(0)), getattr(qml, measure)(qml.X(1))
+
+    noisy = qml.add_noise(circuit, to_pennylane(_ideal_gates(0.0)))
+    z0, x1 = qml.set_shots(noisy, shots=1000)()
+    if measure == "counts":
+        assert z0 == x1
+    else:
+        np.testing.assert_array_equal(z0, x1)
+
+
+def test_shots_refuse_pauli_words_whose_shared_shots_default_mixed_decides(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    shots = 20_000
+    model = to_pennylane(_ideal_gates(0.01))
+
+    def run(measurements, transform=lambda qnode: qnode):
+        @qml.qnode(qml.device("default.mixed", wires=2, seed=31))
+        def circuit():
+            _pl_ops(qml, BELL_THEN_H)
+            return measurements()
+
+        return qml.set_shots(qml.add_noise(transform(circuit), model), shots=shots)()
+
+    def ambiguous():
+        return qml.sample(qml.Z(0)), qml.sample(qml.X(1)), qml.sample(qml.X(0))
+
+    with pytest.raises(NoiseVaultError, match="read wire 0 in different bases") as raised:
+        run(ambiguous)
+    assert "qml.transforms.split_non_commuting" in raised.value.hint
+    split = run(ambiguous, qml.transforms.split_non_commuting)
+    assert [np.asarray(r).shape for r in split] == [(shots,)] * 3
+
+    x0, z0, probs_1 = run(
+        lambda: (qml.expval(qml.X(0)), qml.expval(qml.Z(0)), qml.probs(wires=[1]))
+    )
+    in_x0 = probabilities(_ideal_gates(0.01), BELL_THEN_H + [Op("h", (0,))], 2)
+    in_z0 = probabilities(_ideal_gates(0.01), BELL_THEN_H, 2)
+    sigma = 5 / np.sqrt(shots)
+    assert float(x0) == pytest.approx(in_x0 @ [1, 1, -1, -1], abs=sigma)
+    assert float(z0) == pytest.approx(in_z0 @ [1, 1, -1, -1], abs=sigma)
+    assert np.asarray(probs_1) == pytest.approx(in_z0.reshape(2, 2).sum(axis=0), abs=sigma)
 
 
 def test_shot_vectors_with_readout_raise_instead_of_dropping_results(qml) -> None:

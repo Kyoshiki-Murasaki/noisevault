@@ -5,9 +5,11 @@ channels that the shared conversion rules give the gate on its physical qubits, 
 ``qml.QubitChannel`` operations after the gate. Readout confusion goes directly before each
 computational-basis measurement, on every wire that the circuit's operations or measurements use.
 Thus all these measurements share one simulation. Readout confusion also goes before each Pauli
-measurement, in its measured basis. A measurement without wires (``qml.probs()``,
-``qml.sample()``, ``qml.counts()``) reads every device wire. Such a measurement gets readout
-confusion on the wires that the circuit uses, because a noise model never sees the device's wires.
+measurement, in its measured basis. With shots, Pauli words that commute on each wire get one
+set of readout operations, so they share one simulation and its shots. A measurement without
+wires (``qml.probs()``, ``qml.sample()``, ``qml.counts()``) reads every device wire. Such a
+measurement gets readout confusion on the wires that the circuit uses, because a noise model
+never sees the device's wires.
 """
 
 from __future__ import annotations
@@ -15,13 +17,14 @@ from __future__ import annotations
 import sys
 from collections import Counter
 from collections.abc import Callable, Container, Hashable, Mapping, Sequence
+from itertools import compress
 from math import pi
 from types import FrameType
 from typing import Any, NamedTuple
 
 import numpy as np
 
-from ..errors import LayoutError, install_hint
+from ..errors import LayoutError, NoiseVaultError, install_hint
 
 try:
     import pennylane as qml
@@ -284,16 +287,14 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
                 "ideal rotation around the readout confusion",
                 "add the rotation to the circuit to give it gate noise",
             )
-        tape_wires = list(self._noised_tape().wires)
-        for wire in mp.wires or tape_wires:
+        tape = self._noised_tape()
+        for wire in mp.wires or tape.wires:
             if self._readout_matrix(wire) is None:
                 self.report.mark_unknown(f"readout on qubit {self.physical_qubit(wire)}")
-        # Confusion on an unmeasured wire leaves the measured marginals alone, and identical
-        # noise lets add_noise keep all computational-basis measurements on one tape.
-        wires = mp.wires if basis else tape_wires
+        rotations, wires = _shared_readout(mp, basis, tape)
         with qml.QueuingManager.stop_recording():
-            undo = [qml.adjoint(gate, lazy=False) for gate in reversed(basis)]
-        for gate in basis:
+            undo = [qml.adjoint(gate, lazy=False) for gate in reversed(rotations)]
+        for gate in rotations:
             qml.apply(gate)
         for wire in wires:
             matrix = self._readout_matrix(wire)
@@ -543,6 +544,73 @@ def _pauli_basis(words: qml.pauli.PauliSentence) -> tuple[Operator, ...] | None:
             if letter != "Z"
             for gate in _ROTATED_PAULIS[letter]([wire]).diagonalizing_gates()
         )
+
+
+def _shared_readout(
+    mp: Any, basis: tuple[Operator, ...], tape: qml.tape.QuantumScript
+) -> tuple[tuple[Operator, ...], list[Hashable]]:
+    """Rotations into the measured basis, and the wires that get readout confusion.
+
+    qml.add_noise puts measurements with different readout operations on separate tapes, and
+    separate tapes get separate shots. With shots, default.mixed gives Pauli words that commute
+    on each wire the same shots. Thus each such word gets the readout of its whole group.
+    Confusion on a wire that a measurement does not read leaves its results alone. Thus
+    computational-basis readout goes on every tape wire, and those measurements share a tape.
+    """
+    rotations, wires = basis, list(mp.wires)
+    if tape.shots and _word(mp):
+        rotations, wires = _shot_group(mp, [m for m in tape.measurements if _word(m)])
+    return rotations, wires if rotations else list(tape.wires)
+
+
+def _shot_group(mp: Any, words: list[Any]) -> tuple[tuple[Operator, ...], list[Hashable]]:
+    """The rotations and wires of the Pauli words that share shots with ``mp``, in tape order.
+
+    A chain of words that commute on each wire joins the words of one group. When two words of
+    a group read a wire in different bases, default.mixed decides how to split the group. A
+    noise model cannot see that decision.
+    """
+    letters = [_word(m) for m in words]
+    inside = [_commute(_word(mp), word) for word in letters]
+    grown = True
+    while grown:
+        joined = [
+            not member and any(_commute(word, other) for other in compress(letters, inside))
+            for member, word in zip(inside, letters, strict=True)
+        ]
+        grown = any(joined)
+        inside = [a or b for a, b in zip(inside, joined, strict=True)]
+    reader: dict[Hashable, tuple[int, Any, str]] = {}
+    rotations: list[Operator] = []
+    wires: list[Hashable] = []
+    for i, (m, word) in enumerate(compress(zip(words, letters, strict=True), inside)):
+        for wire, letter in word.items():
+            _, other, other_letter = reader.setdefault(wire, (i, m, letter))
+            if other_letter != letter:
+                raise NoiseVaultError(
+                    f"with shots, {other} and {m} read wire {wire!r} in different bases, and"
+                    " other measurements commute with both of them. default.mixed decides which"
+                    " of these measurements share shots, and a noise model cannot see that"
+                    " decision",
+                    hint="wrap the QNode in qml.transforms.split_non_commuting before"
+                    " qml.add_noise",
+                )
+        rotations += [g for g in _pauli_basis(m.obs.pauli_rep) if reader[g.wires[0]][0] == i]
+        wires += [wire for wire in m.wires if wire not in wires]
+    return tuple(rotations), wires
+
+
+def _word(mp: Any) -> qml.pauli.PauliWord | None:
+    """The Pauli letter of each wire of ``mp``'s observable, or None if the observable is not
+    one Pauli word with at least one letter."""
+    words = getattr(mp.obs, "pauli_rep", None)
+    if not _reads_out(mp) or words is None or len(words) != 1:
+        return None
+    return next(iter(words)) or None
+
+
+def _commute(a: Mapping[Hashable, str], b: Mapping[Hashable, str]) -> bool:
+    return all(a[wire] == b[wire] for wire in a.keys() & b.keys())
 
 
 def _added_events(before: dict[str, Counter[str]], after: dict[str, Counter[str]]) -> EventCounts:
