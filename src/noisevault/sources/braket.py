@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError
 
 from .. import __version__, gates, units
 from ..errors import SourceDataError
@@ -70,10 +71,17 @@ _ASSUMPTION = (
     " Braket SDK's local emulator does"
 )
 _SAVE = "save AwsDevice(arn).properties.json() and pass that file"
+_QUBIT_ID = "0|[1-9][0-9]*"
+_QubitId = Annotated[str, StringConstraints(pattern=f"^(?:{_QUBIT_ID})$")]
 
 
 class _Shape(BaseModel):
     model_config = ConfigDict(strict=True, allow_inf_nan=False)
+
+
+class _Header(_Shape):
+    name: str | None = None
+    version: str | None = None
 
 
 class _Time(_Shape):
@@ -115,8 +123,12 @@ class _Pair(_Shape):
     twoQubitGateFidelity: list[_GateFidelity] | None = None
 
 
-class _PerElement(_Shape):
-    oneQubitProperties: dict[str, _Qubit] | None = None
+class _Standardized(_Shape):
+    braketSchemaHeader: _Header
+
+
+class _PerElement(_Standardized):
+    oneQubitProperties: dict[_QubitId, _Qubit] | None = None
     twoQubitProperties: dict[str, _Pair] | None = None
 
 
@@ -124,8 +136,8 @@ class _DeviceLevelQubit(_Shape):
     oneQubitFidelity: list[_Fidelity] | None = None
 
 
-class _DeviceLevel(_Shape):
-    oneQubitProperties: dict[str, _DeviceLevelQubit] | None = None
+class _DeviceLevel(_Standardized):
+    oneQubitProperties: dict[_QubitId, _DeviceLevelQubit] | None = None
     T1: _Time | None = None
     T2: _Time | None = None
     readoutFidelity: list[_Fidelity] | None = None
@@ -138,13 +150,19 @@ class _DeviceLevel(_Shape):
 
 class _Connectivity(_Shape):
     fullyConnected: bool | None = None
-    connectivityGraph: dict[str, list[str]] | None = None
+    connectivityGraph: dict[_QubitId, list[_QubitId]] | None = None
 
 
 class _Paradigm(_Shape):
     qubitCount: int | None = None
     nativeGateSet: list[str] | None = None
     connectivity: _Connectivity | None = None
+
+
+class _Capabilities(_Shape):
+    braketSchemaHeader: _Header | None = None
+    service: dict[str, Any] | None = None
+    paradigm: _Paradigm | None = None
 
 
 def bundled_profiles() -> list[Profile]:
@@ -193,12 +211,12 @@ def from_braket(
     origin = _origin(source)
     shape, build = (_DeviceLevel, _device_level) if version == "3" else (_PerElement, _per_element)
     prefix = ("standardized",) if whole else ()
-    paradigm = caps.get("paradigm") or {}
-    for checked, at, model in ((std, prefix, shape), (paradigm, ("paradigm",), _Paradigm)):
+    for checked, at, model in ((std, prefix, shape), (caps, (), _Capabilities)):
         try:
             model.model_validate(checked)
         except ValidationError as exc:
             raise _shape_error(exc, at, source, origin) from None
+    paradigm = caps.get("paradigm") or {}
     problem = _pair_problem(std, prefix)
     if problem:
         raise origin.refuse(problem)
@@ -245,8 +263,8 @@ def _calibrated_at(
     back without one. NoiseVault reads such a value as UTC.
     """
     std_at, service_at = std.get("updatedAt"), (caps.get("service") or {}).get("updatedAt")
-    where, value = ("standardized", std_at) if std_at else ("service", service_at)
-    if not value:
+    where, value = ("standardized", std_at) if std_at is not None else ("service", service_at)
+    if value is None:
         return None
     try:
         when = value if isinstance(value, datetime) else datetime.fromisoformat(value)
@@ -365,8 +383,8 @@ def _layout(
 ) -> tuple[dict[str, int], int, str | dict[str, Any]]:
     """Braket qubit ids -> profile indices, the qubit count and the connectivity.
 
-    When every id is an integer the id is the index, so a Braket circuit's qubit numbers are the
-    profile's physical qubits. The caller disables indices with no id (IQM counts from 1).
+    Each id is its index, so a Braket circuit's qubit numbers are the profile's physical qubits.
+    The caller disables indices with no id (IQM counts from 1).
     """
     connectivity = paradigm.get("connectivity") or {}
     graph: Mapping[str, list[str]] | None = connectivity.get("connectivityGraph")
@@ -374,13 +392,8 @@ def _layout(
     edges_by_id = pairs if graph is None else graph_edges
     all_to_all = connectivity.get("fullyConnected") or (graph is None and not pairs)
     labels = labels | set(graph or {}) | {q for edge in edges_by_id for q in edge}
-    count = paradigm.get("qubitCount") or 0
-    if all(label.isdigit() for label in labels):
-        index = {label: int(label) for label in labels}
-        num_qubits = max([count, *(i + 1 for i in index.values())])
-    else:
-        index = {label: i for i, label in enumerate(sorted(labels))}
-        num_qubits = max(count, len(index))
+    index = {label: int(label) for label in labels}
+    num_qubits = max([paradigm.get("qubitCount") or 0, *(i + 1 for i in index.values())])
     if all_to_all:
         return index, num_qubits, "all_to_all"
     if not edges_by_id:
@@ -530,7 +543,7 @@ def _pair_problem(std: Mapping[str, Any], prefix: tuple[str, ...]) -> str | None
     """Why a two-qubit key or direction does not name one pair of qubits, or None."""
     for key, props in (std.get("twoQubitProperties") or {}).items():
         pair = key.split("-")
-        if len(pair) != 2:
+        if len(pair) != 2 or not all(re.fullmatch(_QUBIT_ID, q) for q in pair):
             where = json_path([*prefix, "twoQubitProperties"])
             return f"{where} has the key {key!r}, not a pair of qubit ids such as '0-1'"
         for i, entry in enumerate(props.get("twoQubitGateFidelity") or []):
@@ -549,6 +562,7 @@ _EXPECTED = {
     "finite_number": "a finite number",
     "float_type": "a number",
     "int_type": "an integer",
+    "string_pattern_mismatch": "a qubit id such as '0'",
     "string_type": "a string",
 }
 

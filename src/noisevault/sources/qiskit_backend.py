@@ -179,7 +179,7 @@ def calibration_from_target(target: Any, *, name: str) -> Calibration:
     from qiskit.circuit import Gate
 
     instructions, skipped, supported = [], set(), {}
-    for op_name in target.operation_names:
+    for op_name in sorted(target.operation_names):
         operation = target.operation_from_name(op_name)
         keep = isinstance(operation, Gate) or op_name in ("measure", "reset")
         if op_name in _NOT_GATES or not keep:
@@ -422,7 +422,8 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
     The readout error and length on each qubit become its ``measure`` instruction. The
     ``measure`` entries of the gate list repeat those numbers, so this function skips them. A
     time in an unknown unit raises a SourceDataError from ``origin``. A value that is not a number
-    and a gate on the wrong number of qubits also raise one.
+    also raises one. A gate on the wrong number of qubits, or on a qubit that ``qubits`` does not
+    list, also raises one.
     """
     qubits: dict[int, QubitCalibration] = {}
     instructions: list[Instruction] = []
@@ -448,6 +449,7 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
     arities: dict[str, int] = {}
     for entry in props.get("gates") or []:
         name = entry["gate"]
+        _check_indices(name, entry["qubits"], len(qubits), origin)
         if name == "measure":
             continue
         if name in _NOT_GATES:
@@ -494,16 +496,28 @@ def _parameters(
     return values
 
 
+def _check_indices(name: str, qubits: Sequence[Any], num_qubits: int, origin: Origin) -> None:
+    """``origin`` refuses a qubit that is not an integer from 0 to ``num_qubits - 1``.
+
+    The check includes the entries that the importer skips and the virtual gates that a profile
+    does not record.
+    """
+    if any(isinstance(q, bool) or not isinstance(q, int) or q < 0 for q in qubits):
+        raise origin.refuse(
+            f"gate {name} is on {list(qubits)}; a qubit index is an integer 0 or more"
+        )
+    if any(q >= num_qubits for q in qubits):
+        raise origin.refuse(
+            f"gate {name} is on {list(qubits)}; the calibration has {plural(num_qubits, 'qubit')}"
+        )
+
+
 def _locus(
     name: str, canonical: str, qubits: Sequence[Any], arities: dict[str, int], origin: Origin
 ) -> tuple[int, ...]:
     """``qubits`` of one gate entry; a gate the registry does not know keeps the qubit count of
     its first entry.
     """
-    if any(isinstance(q, bool) or not isinstance(q, int) or q < 0 for q in qubits):
-        raise origin.refuse(
-            f"gate {name} is on {list(qubits)}; a qubit index is an integer 0 or more"
-        )
     info = gates.lookup(canonical)
     arity = arities.setdefault(canonical, len(qubits)) if info is None else info.arity
     if len(qubits) != arity:

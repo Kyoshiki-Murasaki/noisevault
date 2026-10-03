@@ -82,13 +82,19 @@ class ArchiveSpan(NamedTuple):
 
 def calibration_archive_devices(path: str | Path) -> dict[str, ArchiveSpan]:
     """Each device in a local copy of the dataset's parquet file, with its ``at`` range."""
-    table = _read(Path(path), ("backend", "observed_time", "calibrated_time"))
+    path = Path(path)
+    table = _read(path, ("backend", "property", "observed_time", "calibrated_time"))
+    unnamed = table["backend"].null_count
+    if unnamed:
+        raise SourceDataError(f"{path.name} has {plural(unnamed, 'row')} with no backend")
+    table = table.append_column("placed", _placed(table))
     spans = table.group_by("backend").aggregate(
-        [("observed_time", "min"), ("calibrated_time", "max")]
+        [("observed_time", "min"), ("calibrated_time", "max"), ("placed", "any")]
     )
     return {
         row["backend"]: ArchiveSpan(
-            as_utc(row["observed_time_min"]), as_utc(row["calibrated_time_max"])
+            _first_seen(path, row["backend"], row["observed_time_min"], row["placed_any"]),
+            as_utc(row["calibrated_time_max"]),
         )
         for row in spans.sort_by("backend").to_pylist()
     }
@@ -114,7 +120,8 @@ def from_calibration_archive(
             hint=did_you_mean(name, held).strip() or None,
         )
     pc = _pyarrow().compute
-    first = as_utc(pc.min(rows["observed_time"]).as_py())
+    unplaced = rows.num_rows - pc.sum(_placed(rows)).as_py()
+    first = _first_seen(path, name, pc.min(rows["observed_time"]).as_py(), unplaced < rows.num_rows)
     stamp = None if at is None else as_utc(at, name="at")
     if stamp is not None and stamp < first:
         raise SourceDataError(
@@ -129,8 +136,6 @@ def from_calibration_archive(
         "The dataset is CC-BY-4.0, but its numbers are IBM Quantum calibrations under IBM's"
         " terms, so redistributable is unknown, as for nv pull."
     ]
-    blank = pc.or_(pc.is_null(rows["property"]), pc.is_null(rows["calibrated_time"]))
-    unplaced = pc.sum(blank).as_py()
     if unplaced:
         notes.append(
             f"This profile does not use {plural(unplaced, 'row')} of {name} with no property or"
@@ -212,6 +217,9 @@ def _pyarrow() -> ModuleType:
 
 
 def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa.Table:
+    """The ``columns`` of ``path``, with each timestamp in UTC. The dataset stores UTC, so a
+    timestamp with no time zone is UTC.
+    """
     arrow = _pyarrow()
     try:
         schema = arrow.parquet.read_schema(path)
@@ -228,7 +236,14 @@ def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa
                     f"{path.name}: column {column} holds {kind}, expected a {expected}"
                 )
         filters = None if device is None else [("backend", "=", device)]
-        return arrow.parquet.read_table(path, columns=list(columns), filters=filters)
+        table = arrow.parquet.read_table(path, columns=list(columns), filters=filters)
+        in_utc = [
+            arrow.field(f.name, arrow.timestamp(f.type.unit, "UTC"))
+            if arrow.types.is_timestamp(f.type)
+            else f
+            for f in table.schema
+        ]
+        return table.cast(arrow.schema(in_utc))
     except FileNotFoundError:
         raise
     except (arrow.ArrowException, OSError) as exc:
@@ -237,6 +252,26 @@ def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa
             hint=f"get the data file with {DOWNLOAD}. A git clone without Git LFS gives only a"
             " small pointer file",
         ) from None
+
+
+def _placed(rows: pa.Table) -> pa.ChunkedArray:
+    """For each row, whether it has a property and a calibrated_time, so a profile can use it."""
+    pc = _pyarrow().compute
+    return pc.and_(pc.is_valid(rows["property"]), pc.is_valid(rows["calibrated_time"]))
+
+
+def _first_seen(path: Path, device: str, first: datetime | None, placed: bool) -> datetime:
+    """``first``, the earliest observed_time of ``device``, in UTC.
+
+    A SourceDataError names the column when no row of ``device`` has a value in it.
+    """
+    if first is None:
+        raise SourceDataError(f"{path.name} has no {device} row with an observed_time")
+    if not placed:
+        raise SourceDataError(
+            f"{path.name} has no {device} row with both a property and a calibrated_time"
+        )
+    return as_utc(first)
 
 
 def _is(types: Any, kind: Any, expected: str) -> bool:

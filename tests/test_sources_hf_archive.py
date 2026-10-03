@@ -14,6 +14,7 @@ import noisevault as nv
 from noisevault.errors import install_hint
 
 pa = require("pyarrow")
+pc = require("pyarrow.compute")
 pq = require("pyarrow.parquet")
 
 FIXTURE = Path(__file__).parent / "fixtures" / "hf_archive" / "train-00000-of-00001.parquet"
@@ -302,6 +303,44 @@ def test_a_column_of_the_wrong_type_is_named(tmp_path: Path) -> None:
     assert caught.value.message == (
         "strings.parquet: column calibrated_time holds string, expected a timestamp"
     )
+
+
+@pytest.mark.parametrize("at", [None, "2026-06-01T20:00:00Z", "2026-02-01"])
+def test_a_timestamp_with_no_time_zone_is_utc(tmp_path: Path, at: str | None) -> None:
+    table = pq.read_table(FIXTURE)
+    for column in ("observed_time", "calibrated_time"):
+        index = table.schema.get_field_index(column)
+        table = table.set_column(index, column, table[column].cast(pa.timestamp("us")))
+    naive = tmp_path / FIXTURE.name
+    pq.write_table(table, naive)
+    assert nv.calibration_archive_devices(naive) == nv.calibration_archive_devices(FIXTURE)
+    profile, expected = _fez(at, naive), _fez(at)
+    assert (profile.fingerprint, _stale(profile)) == (expected.fingerprint, _stale(expected))
+
+
+@pytest.mark.parametrize(
+    ("column", "problem"),
+    [
+        ("observed_time", "has no ibm_fez row with an observed_time"),
+        ("calibrated_time", "has no ibm_fez row with both a property and a calibrated_time"),
+        ("property", "has no ibm_fez row with both a property and a calibrated_time"),
+        ("backend", "has 170 rows with no backend"),
+    ],
+    ids=["observed_time", "calibrated_time", "property", "backend"],
+)
+def test_a_device_with_no_value_in_a_column_names_the_column(
+    tmp_path: Path, column: str, problem: str
+) -> None:
+    table = pq.read_table(FIXTURE)
+    index = table.schema.get_field_index(column)
+    empty = pa.nulls(table.num_rows, table.schema.field(column).type)
+    fez = pc.equal(table["backend"], "ibm_fez")
+    path = tmp_path / FIXTURE.name
+    pq.write_table(table.set_column(index, column, pc.if_else(fez, empty, table[column])), path)
+    for read in (lambda: _fez(path=path), lambda: nv.calibration_archive_devices(path)):
+        with pytest.raises(nv.SourceDataError) as caught:
+            read()
+        assert caught.value.message == f"{FIXTURE.name} {problem}"
 
 
 def test_without_pyarrow_the_error_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:

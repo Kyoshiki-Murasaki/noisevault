@@ -387,6 +387,9 @@ def _parent(doc: Any, path: tuple[str | int, ...]) -> Any:
             {"fidelityType": {"name": "RANDOMIZED_BENCHMARKING"}, "fidelity": 0.99},
             "oneQubitProperties['0'].oneQubitFidelity is not a JSON array",
         ),
+        (IONQ, ("service",), "maintenance", "service is not a JSON object"),
+        (IQM, ("paradigm",), False, "paradigm is not a JSON object"),
+        (IQM, ("braketSchemaHeader",), "iqm", "braketSchemaHeader is not a JSON object"),
     ],
     ids=[
         "T1-value",
@@ -400,6 +403,9 @@ def _parent(doc: Any, path: tuple[str | int, ...]) -> Any:
         "two-qubit-fidelity-type",
         "object",
         "array",
+        "service",
+        "paradigm",
+        "header",
     ],
 )
 def test_a_file_missing_a_value_the_reader_needs_names_where(
@@ -571,6 +577,12 @@ def _rekey(doc: Any) -> None:
     pairs["1-2-3"] = pairs.pop("1-2")
 
 
+def _relabel(kind: str, old: str, new: str) -> Callable[[Any], None]:
+    return lambda doc: doc["standardized"][kind].__setitem__(
+        new, doc["standardized"][kind].pop(old)
+    )
+
+
 _RIGETTI_DIRECTION = ("twoQubitProperties", "0-1", "twoQubitGateFidelity", 0, "direction")
 
 
@@ -625,6 +637,42 @@ _RIGETTI_DIRECTION = ("twoQubitProperties", "0-1", "twoQubitGateFidelity", 0, "d
             _set(("service", "updatedAt"), "2026-13-01"),
             "the service updatedAt is '2026-13-01', not an ISO 8601 time",
         ),
+        (
+            IONQ,
+            _set(("standardized", "updatedAt"), False),
+            "the standardized updatedAt is False, not an ISO 8601 time",
+        ),
+        (
+            IQM,
+            _set(("service", "updatedAt"), ""),
+            "the service updatedAt is '', not an ISO 8601 time",
+        ),
+        (
+            IONQ,
+            _set(("braketSchemaHeader", "name"), 7),
+            "braketSchemaHeader.name is 7, not a string",
+        ),
+        (
+            IQM,
+            _set(("standardized", "braketSchemaHeader", "version"), 1),
+            "standardized.braketSchemaHeader.version is 1, not a string",
+        ),
+        (
+            IQM,
+            _relabel("oneQubitProperties", "1", "\u00b2"),
+            "a key of standardized.oneQubitProperties is '\u00b2', not a qubit id such as '0'",
+        ),
+        (
+            IQM,
+            _set(("paradigm", "connectivity", "connectivityGraph", "1", 0), "q2"),
+            "paradigm.connectivity.connectivityGraph['1'][0] is 'q2', not a qubit id such as '0'",
+        ),
+        (
+            IQM,
+            _relabel("twoQubitProperties", "1-2", "1-02"),
+            "standardized.twoQubitProperties has the key '1-02', not a pair of qubit ids such as"
+            " '0-1'",
+        ),
     ],
     ids=[
         "bool-T1",
@@ -636,6 +684,13 @@ _RIGETTI_DIRECTION = ("twoQubitProperties", "0-1", "twoQubitGateFidelity", 0, "d
         "key",
         "standardized-time",
         "service-time",
+        "false-time",
+        "empty-time",
+        "number-header-name",
+        "number-version",
+        "superscript-id",
+        "named-id",
+        "padded-pair",
     ],
 )
 def test_a_value_of_the_wrong_kind_names_the_file_the_field_and_the_value(

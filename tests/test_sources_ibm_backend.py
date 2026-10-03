@@ -3,8 +3,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import shutil
 import statistics
+import subprocess
+import sys
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
@@ -469,3 +472,36 @@ def test_a_backend_value_it_cannot_read_names_the_backend_and_the_value(case: st
     with pytest.raises(nv.SourceDataError) as info:
         nv.from_qiskit_backend(backend)
     assert (info.value.message, info.value.hint) == (f"backend {backend.name}: {problem}", None)
+
+
+_SAVE_EACH = """
+import sys, warnings
+from pathlib import Path
+import noisevault as nv
+from qiskit_ibm_runtime import fake_provider
+fixtures, out = Path(sys.argv[1]), Path(sys.argv[2])
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    nv.from_qiskit_backend(fake_provider.FakeFez()).save(out / "fez.json")
+archive = fixtures / "hf_archive" / "train-00000-of-00001.parquet"
+nv.from_calibration_archive(archive, "ibm_fez").save(out / "archive.json")
+nv.from_braket(fixtures / "braket" / "iqm_capabilities_v1.json").save(out / "braket.json")
+"""
+
+
+def test_a_profile_saves_the_same_bytes_under_any_hash_seed(tmp_path: Path) -> None:
+    require("qiskit_ibm_runtime")
+    require("pyarrow")
+    saved = []
+    for seed in ("1", "2"):
+        out = tmp_path / seed
+        out.mkdir()
+        fixtures = Path(__file__).parent / "fixtures"
+        subprocess.run(
+            [sys.executable, "-c", _SAVE_EACH, str(fixtures), str(out)],
+            check=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        saved.append({path.name: path.read_bytes() for path in sorted(out.iterdir())})
+    assert sorted(saved[0]) == ["archive.json", "braket.json", "fez.json"]
+    assert saved[0] == saved[1]

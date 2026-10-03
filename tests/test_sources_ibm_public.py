@@ -520,6 +520,37 @@ def test_a_value_a_profile_cannot_hold_names_the_reply_and_the_value(
     )
 
 
+def _moved_rz(props: dict[str, Any]) -> None:
+    next(g for g in props["gates"] if g["gate"] == "rz")["qubits"] = [99]
+
+
+def _skipped(gate: str) -> Callable[[dict[str, Any]], None]:
+    return lambda props: props["gates"].append({"gate": gate, "qubits": [5], "parameters": []})
+
+
+@pytest.mark.parametrize(
+    ("edit", "problem"),
+    [
+        (_moved_rz, "gate rz is on [99]; the calibration has 5 qubits"),
+        (_skipped("measure"), "gate measure is on [5]; the calibration has 5 qubits"),
+        (_skipped("delay"), "gate delay is on [5]; the calibration has 5 qubits"),
+    ],
+    ids=["virtual-rz", "measure", "delay"],
+)
+def test_a_gate_on_a_qubit_the_calibration_does_not_have_is_named(
+    monkeypatch: pytest.MonkeyPatch, edit: Callable[[dict[str, Any]], None], problem: str
+) -> None:
+    props = json.loads(PROPERTIES)
+    edit(props)
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: json.dumps(props).encode())
+    with pytest.raises(nv.SourceDataError) as info:
+        ibm_public.pull("ibm_manila")
+    assert (info.value.message, info.value.hint) == (
+        f"IBM's public endpoint ({ibm_public.properties_url('ibm_manila')}): {problem}",
+        "pass an earlier at= to use an older calibration",
+    )
+
+
 _ERROR = [{"name": "gate_error", "value": 0.001}]
 
 

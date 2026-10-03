@@ -112,16 +112,26 @@ This file lists all notable changes to NoiseVault. Versions follow
     empty first zone gave 0.5. The importer now refuses a shot count that is not a positive whole
     number and a count outside 0 to the shot count. It also refuses a sequence length that is
     not a whole number, a zone with no sequence lengths, and an empty or misshapen map.
-- **Vendor numbers and qubit indices of the wrong type or value.** The Braket, IonQ, IBM and
+- **Gate order of a profile from a Qiskit backend.** `nv.from_qiskit_backend` wrote the gates in
+  an order that changed from one Python process to the next. As a result, one calibration could
+  give different file bytes. The importer now reads the backend's gates in name order. The
+  fingerprint and the bundled files do not change.
+- **Vendor values and qubit indices of the wrong type or value.** The Braket, IonQ, IBM and
   Hugging Face importers used some values with no check. Such a value could change with no
   error, go missing with no note, or stop the import with an unexpected Python error. A Braket
   T1 of `true` became 1 s. An archive `qubit_b` of 2.5 became qubit 2. A negative IonQ gate time
   gave no gate time. An IBM gate on the wrong number of qubits stopped `nv pull` with a
-  `ValueError`. Each importer now checks these values where it reads them. A bad value raises
-  `nv.SourceDataError`, which names the source, the field and the value. A value of the wrong
-  type in an IonQ reply gives the error for a reply of the wrong shape. An IonQ median above 1
-  is corrupt data, and a provenance note says so. A provenance note also counts the archive
-  rows with no property or no `calibrated_time`, which the profile does not use.
+  `ValueError`. An IBM `rz` gate on qubit 99 of a 5-qubit device gave no error. A Braket
+  `updatedAt` of `false` gave the time of the service refresh. Each importer now checks these
+  values where it reads them, also in metadata, headers, timestamps and the gates that it skips.
+  A bad value raises `nv.SourceDataError`, which names the source, the field and the value. A
+  Braket qubit id that is not a whole number, such as `q1`, raises the error. A value of the
+  wrong type in an IonQ reply gives the error for a reply of the wrong shape. An IonQ median
+  above 1 is corrupt data, and a provenance note says so. A provenance note also counts the
+  archive rows with no property or no `calibrated_time`, which the profile does not use. An
+  archive device with no such row, or with no `observed_time`, raises the error. Archive rows
+  with no `backend` also raise the error. An archive timestamp with no time zone is UTC, as the
+  dataset stores it. Before, such a timestamp stopped an import with `at=` with a `TypeError`.
 - **Damaged profiles and vendor replies.** Each case below now gives one error that names the
   damaged input. Before, a command printed an unexpected error and asked for a bug report, or
   printed a message such as `Expecting value: line 1 column 1 (char 0)` that named nothing.
