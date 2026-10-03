@@ -32,8 +32,11 @@ This file lists all notable changes to NoiseVault. Versions follow
   at=...)` reads a local copy of the Hugging Face dataset `phanerozoic/qiskit-calibration-drift`.
   The function returns the IBM calibration of `ibm_fez`, `ibm_kingston`, `ibm_marrakesh` or
   `ibm_torino` that was in effect at `at`. A provenance note names the values calibrated more
-  than 7 days before `at`, or before the newest calibration when you give no `at`.
-  `nv.calibration_archive_devices(path)` gives the range of times each device covers. Install
+  than 7 days before `at`, or before the newest calibration when you give no `at`. The note
+  leaves out values that the profile does not use, such as the duration of a disabled gate.
+  `nv.calibration_archive_devices(path)` gives the times `first` and `last` of each device.
+  `first` is the earliest `at` that gives a profile. An earlier `at` raises `nv.SourceDataError`,
+  which names that time. Install
   `noisevault[hf]` (pyarrow 14.0.1 or later). `nv doctor` lists pyarrow. See
   [IBM calibration archive on Hugging Face](docs/data-sources.md#ibm-calibration-archive-on-hugging-face).
 - **Scoring a profile on counts from a device.** `nv compare REF COUNTS` scores a profile on counts
@@ -56,6 +59,9 @@ This file lists all notable changes to NoiseVault. Versions follow
   - `load_counts` raises `nv.CountsError` for a file it refuses. The message names the file and
     the field, and `hint` says how to correct the file.
   - A circuit in a counts file has at most 10^10 shots. `simulate` refuses more shots.
+  - The fit finds the maximum and each interval end to within 0.001 in log-likelihood, at every
+    number of shots that a counts file accepts. At each interval end, the fit finds the other
+    factor to the same limit.
   - When a command that takes a profile gets a counts file, the error says that the file is a
     counts file and not a profile. When the two arguments are in the wrong order, `nv compare`
     names the correct order.
@@ -66,6 +72,9 @@ This file lists all notable changes to NoiseVault. Versions follow
     created. `--collect JOB_FILE` saves a submitted job's counts to a new `-o` and never submits a
     job. If the script cannot save a job id, `--job-id JOB_ID` collects that job. A failed IBM
     request while the script opens the device gives an error and a retry hint, not a traceback.
+  - If the job file exists when the script starts, the same command collects that job and never
+    submits another. If another program changes the job file while the script submits the job,
+    the script saves the job to `<stem>.<job id>.job.json` and prints the `--collect` command.
 
   See [Counts format](docs/counts-format.md),
   [Measure a profile against hardware](docs/recipes.md#measure-a-profile-against-hardware) and
@@ -90,6 +99,14 @@ This file lists all notable changes to NoiseVault. Versions follow
   affected qubit. NoiseVault removes the `report` key and its `approximated`, `omitted`, `unknown`
   and `summary` keys. It also removes the `FrameworkCheck` fields `approximated`, `omitted`,
   `unknown` and `report`. Each circuit entry and `worst` also give `deviation`.
+- **Qubit placement in the Cirq and Stim exports.** A Cirq `layout` with both `i` and
+  `cirq.LineQubit(i)` as keys now raises `LayoutError`. Automatic placement in the Cirq export
+  and `noisevault.stim.layout_from_coords` raise `LayoutError` when two enabled qubits have the
+  coords of a circuit qubit. The error names the qubits, and the hint says to give a layout.
+- **PennyLane measurements that share shots.** With shots, two Pauli words can read one wire in
+  different bases while a third word commutes with both. The PennyLane noise model now raises
+  `NoiseVaultError` for such measurements, because `default.mixed` decides which shots the third
+  word shares. The hint says to wrap the QNode in `qml.transforms.split_non_commuting`.
 
 ### Fixed
 
@@ -188,12 +205,16 @@ This file lists all notable changes to NoiseVault. Versions follow
   gate two different values, `nv pull` and the importers used the last value. They now raise
   `nv.SourceDataError`, which names the parameter, the qubit or gate, and both values. An
   identical repeat counts once.
-- **Archive note on old values.** The provenance note from `nv.from_calibration_archive` no
-  longer names `readout_error` on a qubit that has both asymmetric readout errors. The profile
-  does not use that value.
-- **A vault file saved during `nv pull`.** `nv pull` never replaces a vault file that another
-  process saves during the pull, also on exFAT and FAT drives. The pull applies the usual vault
-  rules to that file.
+- **A vault file saved during `nv pull`.** `nv pull` never replaces or deletes a vault file that
+  another process saves during the pull, also on exFAT and FAT drives. The pull applies the usual
+  vault rules to that file. If another process replaces the hidden copy that `profile.save`
+  writes first, `profile.save` writes nothing and raises a `NoiseVaultError`, which is also a
+  `FileExistsError`.
+- **Cirq placement next to a disabled qubit.** When a disabled qubit has the same coords as an
+  enabled qubit, `GridQubit` placement now uses the enabled qubit.
+- **Correlated PennyLane samples.** With shots, Pauli words that commute on each wire, such as
+  `qml.sample(qml.Z(0))` and `qml.sample(qml.X(1))`, now share one set of readout operations and
+  one tape. Their samples stay correlated.
 - **Braket device names that are not a profile id.** A Braket file name or `device=` can give a
   name that is not a valid profile id. The hint then says to rename the file or to pass `device=`
   with another name.
