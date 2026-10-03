@@ -17,7 +17,8 @@ import pytest
 from conftest import deeper_than_the_parser_takes
 
 import noisevault as nv
-from noisevault.sources import ibm_public
+from noisevault.metrics import max_avg_infidelity
+from noisevault.sources import Origin, ibm_public, qiskit_backend
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ibm"
 # FakeManilaV2's packaged BackendProperties (Apache-2.0), the shape the endpoint returns
@@ -713,3 +714,85 @@ def test_a_gate_on_the_wrong_number_of_qubits_names_the_gate_and_its_qubits(
         f"IBM's public endpoint ({ibm_public.properties_url('ibm_manila')}): {problem}",
         "pass an earlier at= to use an older calibration",
     )
+
+
+def _set(params: list[dict[str, Any]], name: str, value: float) -> None:
+    found = [p for p in params if p["name"] == name]
+    if found:
+        found[0]["value"] = value
+    else:
+        params.append({"name": name, "value": value, "unit": ""})
+
+
+def _drop(props: dict[str, Any], qubit: int, names: set[str]) -> None:
+    props["qubits"][qubit] = [p for p in props["qubits"][qubit] if p["name"] not in names]
+
+
+_PAIR = {"prob_meas0_prep1", "prob_meas1_prep0"}
+_USE_EDITS: dict[str, Callable[[dict[str, Any]], None]] = {
+    "as-given": lambda p: None,
+    "lone-probability": lambda p: _drop(p, 2, {"prob_meas0_prep1"}),
+    "readout-error-only": lambda p: _drop(p, 3, _PAIR),
+    "readout-length-only": lambda p: _drop(p, 4, _PAIR | {"readout_error"}),
+    "zero-t1": lambda p: _set(p["qubits"][0], "T1", 0.0),
+    "infinite-t2": lambda p: _set(p["qubits"][1], "T2", math.inf),
+    "sentinel-error": lambda p: _set(_gate(p, "cx", [0, 1]), "gate_error", 1.0),
+    "operational-0-gate": lambda p: _set(_gate(p, "cx", [1, 2]), "operational", 0),
+    "operational-0-qubit": lambda p: _set(p["qubits"][1], "operational", 0),
+    "rz-not-virtual": lambda p: _set(_gate(p, "rz", [0]), "gate_error", 1e-4),
+}
+
+
+def _holds(
+    profile: nv.Profile, gate: str | None, name: str, qubits: tuple[int, ...], value: float
+) -> bool:
+    if gate is None:
+        [record] = [q for q in profile.qubits if q.index == qubits[0]] or [None]
+        readout = record and record.readout
+        held = {
+            "T1": record and record.t1_us,
+            "T2": record and record.t2_us,
+            "prob_meas1_prep0": readout and readout.p1_given_0,
+            "prob_meas0_prep1": readout and readout.p0_given_1,
+            "readout_error": readout and readout.error,
+            "readout_length": readout and readout.duration_ns,
+            "init_error": record and record.prep and record.prep.error,
+        }.get(name)
+        return held == pytest.approx(value)
+    spec = profile.gates[gate]
+    [record] = [r for r in profile.calibrations if (r.gate, r.qubits) == (gate, qubits)] or [None]
+    if record is None:
+        return bool(spec.virtual) and value == 0
+    if name == "gate_error" and record.disabled:
+        return value >= max_avg_infidelity(len(qubits))
+    if name == "gate_error":
+        return record.avg_infidelity == pytest.approx(value)
+    if name == "gate_length" and (record.disabled or record.duration_ns is not None):
+        return record.duration_ns == pytest.approx(value)
+    return name == "gate_length" and spec.duration_ns == pytest.approx(value)
+
+
+@pytest.mark.parametrize("edit", list(_USE_EDITS))
+def test_used_parameters_name_exactly_the_values_the_profile_holds(edit: str) -> None:
+    props = json.loads(PROPERTIES)
+    for qubit, prep in zip(props["qubits"], (0.01, 0.02, 0.03, 0.04, 0.05), strict=True):
+        _set(qubit, "init_error", prep)
+    _USE_EDITS[edit](props)
+    origin = Origin("ibm_manila")
+    cal = qiskit_backend.calibration_from_properties(props, origin=origin)
+    profile = qiskit_backend.to_profile(cal, {"source": "ibm_manila"}, origin=origin)
+    given = [
+        (None, p["name"], (index,), p["value"])
+        for index, qubit in enumerate(props["qubits"])
+        for p in qubit
+    ] + [
+        (g["gate"], p["name"], tuple(g["qubits"]), p["value"])
+        for g in props["gates"]
+        for p in g["parameters"]
+    ]
+    held = {
+        (gate, name, on)
+        for gate, name, on, value in given
+        if _holds(profile, gate, name, on, value)
+    }
+    assert qiskit_backend.used_parameters(cal) == held

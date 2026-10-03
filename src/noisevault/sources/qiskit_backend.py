@@ -415,6 +415,16 @@ def _model_caveat(backend: Any, shipped: bytes, version: str) -> str | None:
 
 # BackendProperties JSON ------------------------------------------------------------------------
 
+_QUBIT_PARAMETERS = {
+    "t1_us": "T1",
+    "t2_us": "T2",
+    "p1_given_0": "prob_meas1_prep0",
+    "p0_given_1": "prob_meas0_prep1",
+    "prep_error": "init_error",
+}
+_READOUT_PARAMETERS = {"error": "readout_error", "duration_ns": "readout_length"}
+_GATE_PARAMETERS = {"error": "gate_error", "duration_ns": "gate_length"}
+
 
 def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> Calibration:
     """Read IBM BackendProperties as a dict (``properties().to_dict()`` or the REST JSON).
@@ -580,10 +590,71 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any], *, origin: Origi
     return origin.profile(_profile_data(_checked(cal, origin), provenance))
 
 
+def used_parameters(cal: Calibration) -> set[tuple[str | None, str, tuple[int, ...]]]:
+    """Each BackendProperties value of ``cal`` that its profile uses, as (gate, parameter, qubits).
+
+    ``gate`` is None for a value of a qubit. A disabled gate uses only the error that disables it.
+    """
+    used = _in_use(cal)
+    found = {
+        (None, name, (index,))
+        for index, qubit in used.qubits.items()
+        for field, name in _QUBIT_PARAMETERS.items()
+        if getattr(qubit, field) is not None
+    }
+    for inst in used.instructions:
+        gate, names = (
+            (None, _READOUT_PARAMETERS) if inst.name == "measure" else (inst.name, _GATE_PARAMETERS)
+        )
+        found |= {
+            (gate, name, inst.qubits)
+            for field, name in names.items()
+            if getattr(inst, field) is not None
+        }
+    return found
+
+
+def _in_use(cal: Calibration) -> Calibration:
+    """``cal`` with None in place of each value that its profile does not use.
+
+    A readout pair has priority over the readout error. A readout duration needs one of the two.
+    A disabled gate keeps only the error that disables it. A T1 or T2 that is not a positive
+    finite number is missing.
+    """
+    qubits, _ = _without_invalid_coherence(cal)
+    paired = {i for i, q in qubits.items() if q.p1_given_0 is not None and q.p0_given_1 is not None}
+    qubits = {
+        i: q if i in paired else replace(q, p1_given_0=None, p0_given_1=None)
+        for i, q in qubits.items()
+    }
+    arity = {inst.name: len(inst.qubits) for inst in cal.instructions}
+    runs_on = {
+        name: _both_ways(name, arity[name], support)
+        for name, support in cal.supported.items()
+        if name in arity
+    }
+    instructions = []
+    for inst in cal.instructions:
+        if inst.name == "measure":
+            if inst.qubits[0] in paired:
+                inst = replace(inst, error=None)
+            elif inst.error is None:
+                inst = replace(inst, duration_ns=None)
+        else:
+            sentinel = _is_sentinel(inst.error, len(inst.qubits))
+            unsupported = inst.name in runs_on and inst.qubits not in runs_on[inst.name]
+            if sentinel or unsupported or not inst.operational:
+                error = inst.error if sentinel else None
+                inst = replace(inst, error=error, duration_ns=None, operational=False)
+        instructions.append(inst)
+    return replace(cal, qubits=qubits, instructions=tuple(instructions))
+
+
 def _profile_data(cal: _Checked, provenance: Mapping[str, Any]) -> dict[str, Any]:
     ibm = cal.vendor == "ibm"
+    used = _in_use(cal)
     by_name: dict[str, list[Instruction]] = {}
-    for inst in cal.instructions:
+    for inst in used.instructions:
         by_name.setdefault(inst.name, []).append(inst)
     measure = {inst.qubits[0]: inst for inst in by_name.pop("measure", [])}
     connectivity = _connectivity(cal.instructions)
@@ -596,14 +667,11 @@ def _profile_data(cal: _Checked, provenance: Mapping[str, Any]) -> dict[str, Any
         arity = len(entries[0].qubits)
         listed = _both_ways(name, arity, (e.qubits for e in entries))
         unlisted = _unlisted(arity, listed, cal.num_qubits, connectivity)
-        support = cal.supported.get(name)
-        if support is None:
-            unpublished = unlisted
-        else:
-            runs_on = _both_ways(name, arity, support)
-            entries = [e if e.qubits in runs_on else replace(e, operational=False) for e in entries]
-            entries += [Instruction(name, locus, operational=False) for locus in unlisted]
+        if name in cal.supported:
+            entries = entries + [Instruction(name, locus, operational=False) for locus in unlisted]
             unpublished = []
+        else:
+            unpublished = unlisted
         definition, gate_records = _gate(name, arity, entries, ibm, disabled_qubits)
         definitions[name] = definition
         records += gate_records
@@ -611,9 +679,9 @@ def _profile_data(cal: _Checked, provenance: Mapping[str, Any]) -> dict[str, Any
         note = _unpublished_note(name, arity, unpublished, definition, disabled_qubits)
         gate_notes += [note] if note else []
 
-    qubits, invalid = _without_invalid_coherence(cal)
+    _, invalid = _without_invalid_coherence(cal)
     qubit_records = [
-        _qubit_record(i, qubits.get(i, QubitCalibration()), measure.get(i))
+        _qubit_record(i, used.qubits.get(i, QubitCalibration()), measure.get(i))
         for i in range(cal.num_qubits)
     ]
     working = [q for q in qubit_records if not q.get("disabled")]
@@ -741,7 +809,7 @@ def _gate(
     ibm: bool,
     disabled_qubits: set[int],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    dead = [not e.operational or _is_sentinel(e.error, arity) for e in entries]
+    dead = [not e.operational for e in entries]
     working = [
         e
         for e, is_dead in zip(entries, dead, strict=True)
@@ -847,13 +915,14 @@ def _qubit_record(
         record["t1_us"] = _clean(qubit.t1_us)
     if qubit.t2_us is not None:
         record["t2_us"] = _clean(qubit.t2_us)
-    readout: dict[str, Any] = {}
-    if qubit.p1_given_0 is not None and qubit.p0_given_1 is not None:
-        readout = {"p1_given_0": qubit.p1_given_0, "p0_given_1": qubit.p0_given_1}
-    elif measure is not None and measure.error is not None:
-        readout = {"error": measure.error}
-    if readout and measure is not None and measure.duration_ns is not None:
-        readout["duration_ns"] = _clean(measure.duration_ns)
+    error, duration = (None, None) if measure is None else (measure.error, measure.duration_ns)
+    readout = {
+        "p1_given_0": qubit.p1_given_0,
+        "p0_given_1": qubit.p0_given_1,
+        "error": error,
+        "duration_ns": None if duration is None else _clean(duration),
+    }
+    readout = {key: value for key, value in readout.items() if value is not None}
     if readout:
         record["readout"] = readout
     if qubit.prep_error is not None:

@@ -31,11 +31,10 @@ from ..profile import Profile, iso_z
 from . import OLDER_HINT, Origin
 from .qiskit_backend import (
     Calibration,
-    _is_sentinel,
-    _without_invalid_coherence,
     as_utc,
     calibration_from_properties,
     to_profile,
+    used_parameters,
 )
 
 if TYPE_CHECKING:
@@ -64,7 +63,6 @@ _PROCESSORS = {
     "ibm_torino": "Heron r1",
 }
 _READOUT_PAIR = {"p1_given_0": "prob_meas1_prep0", "p0_given_1": "prob_meas0_prep1"}
-_COHERENCE_ROWS = {"t1_us": "T1", "t2_us": "T2"}
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _STALE_AFTER = timedelta(days=7)
 _QUBIT_VALUE_NAMES = {
@@ -76,7 +74,7 @@ _QUBIT_VALUE_NAMES = {
     "prob_meas0_prep1": "readout",
     "prob_meas1_prep0": "readout",
 }
-_READ_FROM_QUBIT_ROWS_OR_VIRTUAL = frozenset({"measure", "rz"})
+_VIRTUAL = "rz"
 
 
 class ArchiveSpan(NamedTuple):
@@ -182,18 +180,18 @@ def from_calibration_archive(
                 f"This profile has no {joined(missing, 'or')} gate. The archive calibrates"
                 f" {joined(missing, 'and')} on {name} only after {iso_z(stamp)}."
             )
-    stale = _stale_note(picked, stamp, cal)
-    if stale:
-        notes.append(stale)
-    dead = {}
+    dead, stuck_notes = {}, []
     for index, qubit in sorted(cal.qubits.items()):
         stuck = [label for field, label in _READOUT_PAIR.items() if getattr(qubit, field) == 1]
         if stuck:
             dead[index] = replace(qubit, operational=False)
-            notes.append(
+            stuck_notes.append(
                 f"Qubit {index} is disabled: its readout calibration gives {stuck[0]} = 1."
             )
     cal = replace(cal, processor=_PROCESSORS.get(name), qubits={**cal.qubits, **dead})
+    stale = _stale_note(picked, stamp, cal)
+    notes += [stale] if stale else []
+    notes += stuck_notes
     digest = hashlib.sha256(data).hexdigest()
     revision = _revision(path.absolute())
     source = f"Hugging Face dataset {DATASET} (CC-BY-4.0)"
@@ -394,24 +392,17 @@ def _gate_parameter(name: str) -> tuple[str, str] | None:
 
 def _stale_note(rows: list[dict[str, Any]], at: datetime | None, cal: Calibration) -> str | None:
     before = at or max(row["calibrated_time"] for row in rows)
-    unread = _unread(cal)
+    used = used_parameters(cal)
     oldest: dict[str, datetime] = {}
     loci: dict[str, set[tuple[int, ...]]] = {}
     for row in rows:
         calibrated = row["calibrated_time"]
-        name = row["property"]
-        if before - calibrated <= _STALE_AFTER or (name, row["qubits"]) in unread:
-            continue
-        split = _gate_parameter(name)
-        if split is None:
-            label = _QUBIT_VALUE_NAMES.get(name)
-        elif split[0] not in _READ_FROM_QUBIT_ROWS_OR_VIRTUAL:
-            label = split[0]
-        else:
-            continue
-        if label is None or label in cal.skipped:
-            continue
+        gate, param = _gate_parameter(row["property"]) or (None, row["property"])
         locus = row["qubits"]
+        fresh = before - calibrated <= _STALE_AFTER
+        if fresh or gate == _VIRTUAL or (gate, param, locus) not in used:
+            continue
+        label = gate or _QUBIT_VALUE_NAMES[param]
         if len(locus) == 2 and is_symmetric(label):
             locus = tuple(sorted(locus))
         loci.setdefault(label, set()).add(locus)
@@ -427,25 +418,6 @@ def _stale_note(rows: list[dict[str, Any]], at: datetime | None, cal: Calibratio
         f"IBM calibrated these values more than {_STALE_AFTER.days} days before {when}, the"
         f" oldest on {stale[0][0].date().isoformat()}: {'; '.join(named)}."
     )
-
-
-def _unread(cal: Calibration) -> set[tuple[str, tuple[int, ...]]]:
-    _, invalid = _without_invalid_coherence(cal)
-    unread: set[tuple[str, tuple[int, ...]]] = {
-        (prop, (index,)) for key, prop in _COHERENCE_ROWS.items() for index, _ in invalid[key]
-    }
-    readout = {i.qubits[0]: i.error for i in cal.instructions if i.name == "measure"}
-    for index, qubit in cal.qubits.items():
-        if qubit.p1_given_0 is not None and qubit.p0_given_1 is not None:
-            unread.add(("readout_error", (index,)))
-            continue
-        unread |= {(name, (index,)) for name in _READOUT_PAIR.values()}
-        if readout.get(index) is None:
-            unread.add(("readout_length", (index,)))
-    for i in cal.instructions:
-        if not i.operational or _is_sentinel(i.error, len(i.qubits)):
-            unread.add((f"{i.name}_gate_length", i.qubits))
-    return unread
 
 
 def _revision(path: Path) -> tuple[str, str] | None:

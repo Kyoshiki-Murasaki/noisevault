@@ -265,6 +265,7 @@ def _without(rows: list[dict], props: set[str], qubit: int, calibrated: datetime
         (lambda rows: _to_may_24(_without(rows, _READOUT, 0), "readout_length", 0, _JUNE_1), []),
         (lambda rows: _to_may_24(rows, "T1", 1, _JUNE_1, value=0.0), []),
         (lambda rows: _to_may_24(rows, "T2", 1, _JUNE_1, value=float("nan")), []),
+        (lambda rows: _to_may_24(rows, "T1", 1, _JUNE_1, value=None), []),
     ],
     ids=[
         "disabled-gate-length",
@@ -273,6 +274,7 @@ def _without(rows: list[dict], props: set[str], qubit: int, calibrated: datetime
         "readout-length-without-error",
         "zero-t1",
         "nonfinite-t2",
+        "null-t1",
     ],
 )
 def test_the_note_names_only_rows_that_give_the_profile_a_value(
