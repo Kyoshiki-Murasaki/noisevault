@@ -283,9 +283,9 @@ def to_qiskit(
 ) -> NoiseVaultSimulator:
     """A noisy AerSimulator for ``profile``. Transpile circuits for the simulator before ``run``.
 
-    The Target leaves out disabled qubits and gates, the way Qiskit models faulty ones. Qiskit's
-    ``optimization_level=0`` still puts circuit qubit i on physical qubit i. Levels 1-3 do not
-    check that a chosen qubit has the 1-qubit gates that a circuit needs. On a profile with
+    The Target leaves out disabled qubits, gates and resets, the way Qiskit models faulty ones.
+    Qiskit's ``optimization_level=0`` still puts circuit qubit i on physical qubit i. Levels 1-3
+    do not check that a chosen qubit has the 1-qubit gates that a circuit needs. On a profile with
     disabled parts, transpile with ``initial_layout=list(profile.suggest_layout(n).values())``.
     ``suggest_layout`` picks connected qubits that each have every 1-qubit native usable
     anywhere on the device. ``suggest_layout`` warns when no chain of ``n`` such qubits exists.
@@ -293,8 +293,9 @@ def to_qiskit(
     ``unknown_gates`` applies to natives with no error metric on a locus. ``"typical"``
     (default) gives them the noise of the typical native, with a report entry and a warning.
     ``"error"`` leaves those loci out of the Target, so transpile never uses them.
-    ``readout=False`` leaves measurements noiseless. Raises UnsupportedDevice when Qiskit has no
-    one-qubit or no two-qubit native left to compile to.
+    ``readout=False`` leaves measurements noiseless and gives ``measure`` an error of 0 in the
+    Target. Raises UnsupportedDevice when Qiskit has no one-qubit or no two-qubit native left to
+    compile to.
     """
     if not isinstance(readout, bool):
         raise ValueError(
@@ -320,7 +321,7 @@ def to_qiskit(
         report.omit(LociText(f"native {name}: ", why))
     _require_natives(profile, placements, omitted, enabled)
     report.events.clear()  # locus bookkeeping. Events count applications as circuits run
-    target = _target(profile, placements, enabled)
+    target = _target(profile, placements, enabled, readout)
     noise_model = _noise_model(table, placements, enabled, target, readout)
     _report_fixed(table, enabled, readout, report)
     return NoiseVaultSimulator(
@@ -533,7 +534,9 @@ def _event_totals(report: Report) -> Counter[tuple[str, str]]:
 # target -------------------------------------------------------------------------------------
 
 
-def _target(profile: Profile, placements: Sequence[Placement], enabled: Sequence[int]) -> Target:
+def _target(
+    profile: Profile, placements: Sequence[Placement], enabled: Sequence[int], readout: bool
+) -> Target:
     table = profile.table
     target = Target(
         description=f"NoiseVault {profile.id} (nv:{profile.fingerprint[:12]})",
@@ -543,20 +546,38 @@ def _target(profile: Profile, placements: Sequence[Placement], enabled: Sequence
     by_gate: dict[str, tuple[qiskit.circuit.Gate, dict]] = {}
     for p in placements:
         props = by_gate.setdefault(p.export.name, (p.export.gate, {}))[1]
-        props[p.qargs] = InstructionProperties(error=p.built.achieved, duration=_seconds(p.built))
+        duration = _seconds(p.built.gate)
+        props[p.qargs] = InstructionProperties(error=p.built.achieved, duration=duration)
     for gate, props in by_gate.values():
         target.add_instruction(gate, props)
-    measure = {(q,): _measure_properties(profile, q) for q in enabled}
+    measure = {(q,): _measure_properties(profile, q, readout) for q in enabled}
     target.add_instruction(Measure(), measure)
-    target.add_instruction(Reset(), {(q,): None for q in enabled})
+    reset = _reset_properties(table, enabled)
+    if reset:
+        target.add_instruction(Reset(), reset)
     target.add_instruction(Delay(Parameter("t")), {(q,): None for q in enabled})
     return target
 
 
-def _seconds(built: GateChannels) -> float | None:
-    if built.gate.duration_ns is None:
-        return 0.0 if built.gate.state == "ideal" else None  # virtual gates take no time
-    return built.gate.duration_ns * 1e-9
+def _seconds(gate: GateNoise) -> float | None:
+    if gate.duration_ns is None:
+        return 0.0 if gate.state == "ideal" else None  # virtual gates take no time
+    return gate.duration_ns * 1e-9
+
+
+def _reset_properties(
+    table: NoiseTable, enabled: Sequence[int]
+) -> dict[tuple[int, ...], InstructionProperties | None]:
+    """Reset on every enabled qubit where the profile does not disable it, with its duration."""
+    out: dict[tuple[int, ...], InstructionProperties | None] = {}
+    for q in enabled:
+        found = table.gate("reset", (q,))
+        if isinstance(found, Unavailable):
+            out[(q,)] = None
+        elif found.state != "disabled":
+            seconds = _seconds(found)
+            out[(q,)] = None if seconds is None else InstructionProperties(duration=seconds)
+    return out
 
 
 def _qubit_properties(table: NoiseTable, q: int) -> QubitProperties:
@@ -566,8 +587,8 @@ def _qubit_properties(table: NoiseTable, q: int) -> QubitProperties:
     return QubitProperties(t1=t1, t2=t2)
 
 
-def _measure_properties(profile: Profile, q: int) -> InstructionProperties:
-    pair = profile.table.qubit(q).readout
+def _measure_properties(profile: Profile, q: int, readout: bool) -> InstructionProperties:
+    pair = profile.table.qubit(q).readout if readout else (0.0, 0.0)
     record = next((r for r in profile.qubits if r.index == q and r.readout), None)
     spec = record.readout if record else profile.readout
     duration = spec.duration_ns if spec and spec.duration_ns is not None else None

@@ -30,6 +30,7 @@ from qiskit.circuit import Parameter  # noqa: E402
 from qiskit.circuit.library import iSwapGate  # noqa: E402
 from qiskit.quantum_info import SuperOp  # noqa: E402
 from qiskit.transpiler import CouplingMap, PassManager  # noqa: E402
+from qiskit.transpiler.exceptions import TranspilerError  # noqa: E402
 from qiskit_aer import AerSimulator  # noqa: E402
 from qiskit_aer.noise.passes import RelaxationNoisePass  # noqa: E402
 
@@ -637,6 +638,73 @@ def test_reset_flips_with_the_preparation_error() -> None:
     assert aer_probabilities(sim, circuit, [2]) == pytest.approx([0.98, 0.02], abs=1e-12)
 
 
+@pytest.mark.parametrize("level", [0, 1, 2, 3])
+def test_scheduling_gives_a_reset_the_profile_reset_duration(level: int) -> None:
+    profile = nv.load("ibm_manila")
+    sim = quiet_export(profile)
+    circuit = QuantumCircuit(1, 1)
+    circuit.x(0)
+    circuit.reset(0)
+    circuit.measure(0, 0)
+    scheduled = transpile(
+        circuit,
+        sim,
+        initial_layout=[3],
+        scheduling_method="alap",
+        optimization_level=level,
+        seed_transpiler=1,
+    )
+    x, reset = (profile.table.gate(name, (3,)) for name in ("x", "reset"))
+    readout = next(r.readout for r in profile.qubits if r.index == 3)
+    assert reset.duration_ns == pytest.approx(5514.66666667)
+    expected_ns = x.duration_ns + reset.duration_ns + readout.duration_ns
+    assert scheduled.estimate_duration(sim.target, unit="s") == pytest.approx(expected_ns * 1e-9)
+
+
+def _reset_off(*qubits: int) -> Profile:
+    return Profile.model_validate(
+        toy(
+            device={
+                "name": "two",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 2,
+            },
+            connectivity="all_to_all",
+            gates={**_LINE_GATES, "reset": {"duration_ns": 1000}},
+            calibrations=[{"gate": "reset", "qubits": [q], "disabled": True} for q in qubits],
+        )
+    )
+
+
+def _x_reset_measure(q: int) -> QuantumCircuit:
+    circuit = QuantumCircuit(2, 1)
+    circuit.x(q)
+    circuit.reset(q)
+    circuit.measure(q, 0)
+    return circuit
+
+
+def test_a_reset_the_profile_disables_on_a_qubit_is_refused_there() -> None:
+    sim = quiet_export(_reset_off(0))
+    assert list(sim.target["reset"]) == [(1,)]
+    assert sim.target["reset"][(1,)].duration == pytest.approx(1e-6)
+    assert sim.run(_x_reset_measure(1), shots=10).result().get_counts() == {"0": 10}
+    with pytest.raises(CircuitNotNativeError, match="reset on qubit 0 is not available"):
+        sim.run(_x_reset_measure(0), shots=10)
+    with pytest.raises(TranspilerError):
+        transpile(_x_reset_measure(0), sim, initial_layout=[0, 1], optimization_level=0)
+
+
+def test_a_reset_the_profile_disables_everywhere_is_refused() -> None:
+    sim = quiet_export(_reset_off(0, 1))
+    assert "reset" not in sim.target.operation_names
+    with pytest.raises(CircuitNotNativeError, match="reset on qubit 1 is not available"):
+        sim.run(_x_reset_measure(1), shots=10)
+    with pytest.raises(TranspilerError):
+        transpile(_x_reset_measure(1), sim, optimization_level=0)
+
+
 def _delayed(prepare: str, ns: float) -> QuantumCircuit:
     circuit = QuantumCircuit(4)
     getattr(circuit, prepare)(1)
@@ -1039,6 +1107,36 @@ def test_profile_method_forwards_options(manila: Profile) -> None:
     assert isinstance(sim, NoiseVaultSimulator) and sim.profile is manila
     assert "readout error (readout=False)" in sim.report.omitted
     assert not [e for e in sim.noise_model.to_dict()["errors"] if e["type"] == "roerror"]
+
+
+@pytest.mark.parametrize("level", [2, 3])
+def test_readout_false_places_circuits_by_the_gate_noise_alone(level: int) -> None:
+    profile = Profile.model_validate(
+        toy(
+            device={
+                "name": "two",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": 2,
+            },
+            connectivity="all_to_all",
+            gates=_LINE_GATES,
+            calibrations=[{"gate": "x", "qubits": [1], "avg_infidelity": 0.1}],
+            qubits=[
+                {"index": 0, "readout": {"error": 0.49, "duration_ns": 900}},
+                {"index": 1, "readout": {"error": 0.0, "duration_ns": 900}},
+            ],
+        )
+    )
+    sim = quiet_export(profile, readout=False)
+    measure = sim.target["measure"]
+    assert [(p.error, p.duration) for p in measure.values()] == [(0.0, pytest.approx(9e-7))] * 2
+    circuit = QuantumCircuit(1, 1)
+    circuit.x(0)
+    circuit.measure(0, 0)
+    compiled = transpile(circuit, sim, optimization_level=level, seed_transpiler=1)
+    assert compiled.layout.initial_index_layout(filter_ancillas=True) == [0]
+    assert quiet_export(profile).target["measure"][(0,)].error == pytest.approx(0.49)
 
 
 # sqrt_iswap ----------------------------------------------------------------------------------
