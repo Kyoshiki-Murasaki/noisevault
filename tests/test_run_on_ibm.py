@@ -813,7 +813,7 @@ def test_a_defect_after_the_job_ran_raises_instead_of_asking_to_collect_again(
     def defect(*args: Any) -> Any:
         raise TypeError("a defect in the script")
 
-    monkeypatch.setattr(script, "counts_file", defect)
+    monkeypatch.setattr(script, "bind", defect)
     with pytest.raises(TypeError, match="a defect in the script"):
         run()
 
@@ -853,6 +853,25 @@ def test_a_job_file_that_a_new_run_saved_while_the_job_waited_is_kept(
     assert run() is not None
     assert load_counts(tmp_path / "fez.counts.json").execution.job_ids == ("job-1",)
     assert json.loads(pending.read_text())["job_id"] == "job-2"
+
+
+def test_a_link_that_replaces_the_job_file_while_the_job_waits_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _collecting_job_1(tmp_path, monkeypatch)
+    pending, saved = tmp_path / "fez.job.json", tmp_path / "saved.job.json"
+    collect = script.collect
+
+    def another_program_links_the_job_file_to_a_new_name(*args: Any) -> Any:
+        pending.rename(saved)
+        pending.symlink_to(saved.name)
+        return collect(*args)
+
+    monkeypatch.setattr(script, "collect", another_program_links_the_job_file_to_a_new_name)
+    assert run() is not None
+    assert load_counts(tmp_path / "fez.counts.json").execution.job_ids == ("job-1",)
+    assert pending.is_symlink()
+    assert os.readlink(pending) == saved.name
 
 
 def test_the_saved_files_hold_the_bytes_that_save_writes(
@@ -1323,6 +1342,14 @@ def _plan_line_cut_short(data: dict[str, Any]) -> str:
     return '{"profile": {\n' + json.dumps({"job_id": data["job_id"]}) + "\n"
 
 
+def _second_circuit_named_ghz_chain(data: dict[str, Any]) -> str:
+    data["planned"][1]["name"] = "ghz_chain"
+    return json.dumps(data) + "\n"
+
+
+_TOO_MANY_OUTCOMES = [{"name": f"wide_{i}", "qubits": list(range(10)), "ops": []} for i in range(5)]
+
+
 @pytest.mark.parametrize(
     ("damage", "problem", "named"),
     [
@@ -1335,6 +1362,8 @@ def _plan_line_cut_short(data: dict[str, Any]) -> str:
         (_plan_line_cut_short, "Expecting property name", "job-1"),
         (_with(job_id=5), "Input should be a valid string", None),
         (_with(job_id=""), "the job id is empty", None),
+        (_second_circuit_named_ghz_chain, 'circuits[1] repeats the name "ghz_chain"', "job-1"),
+        (_with(planned=_TOO_MANY_OUTCOMES), "the circuits have 5120 outcomes in all", "job-1"),
     ],
     ids=[
         "options not an object",
@@ -1342,6 +1371,8 @@ def _plan_line_cut_short(data: dict[str, Any]) -> str:
         "plan line cut short",
         "job id a number",
         "no job id",
+        "two circuits with one name",
+        "too many outcomes",
     ],
 )
 def test_a_damaged_job_file_stops_before_the_calibration_pull_and_names_its_job(

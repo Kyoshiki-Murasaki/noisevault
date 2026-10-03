@@ -48,7 +48,6 @@ from noisevault.counts import (  # noqa: E402
     _RUN_RULES,
     COUNTS_FORMAT,
     SAMPLER_V2_OPTIONS,
-    Execution,
     MeasuredCounts,
     PlannedCircuit,
     _duration,
@@ -593,7 +592,9 @@ def _submitted(pending: Path, record: int, job_id: str | None) -> Submitted:
         planned = tuple(PlannedCircuit.model_validate(c) for c in data["planned"])
         options = data["options"]
         recorded = data.get("job_id")
-        Execution.model_validate(_execution(options, recorded))
+        counts = tuple({"0" * len(c.qubits): 1} for c in planned)
+        ran = Ran(recorded, "hardware", datetime.now(UTC), counts, {})
+        counts_file(profile, Submitted(recorded, profile, planned, options), ran)
         if recorded == "":
             raise ValueError("the job id is empty")
     except Exception as exc:
@@ -821,12 +822,8 @@ def _files(output: Path) -> tuple[Path, Path, Path]:
 
 
 def _create(files: dict[Path, bytes]) -> dict[Path, int]:
-    """Create every file or none, and return the open descriptor of each file.
-
-    Raise FileExistsError for a path that exists or that another program replaced, and keep that
-    program's file. ``os.link`` would make each full file appear at once, but exFAT does not
-    support hard links.
-    """
+    """``os.link`` would make each full file appear at once, but exFAT does not support hard
+    links."""
     created: dict[Path, int] = {}
     try:
         for path in files:
@@ -852,7 +849,7 @@ def _write(fd: int, data: bytes) -> None:
 
 def _ours(path: Path, fd: int) -> bool:
     try:
-        return os.path.samestat(os.stat(path), os.fstat(fd))
+        return os.path.samestat(os.lstat(path), os.fstat(fd))
     except OSError:
         return False
 
