@@ -1250,7 +1250,6 @@ _NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
 
 
 def file_bytes(profile: Profile, path: Path) -> bytes:
-    """The bytes that :meth:`Profile.save` writes to ``path``."""
     if path.suffix == ".gz":
         text = json.dumps(profile.to_dict(), separators=(",", ":"), ensure_ascii=False)
         return gzip_reproducibly(text.encode("utf-8"))
@@ -1258,9 +1257,6 @@ def file_bytes(profile: Profile, path: Path) -> bytes:
 
 
 class Held(NamedTuple):
-    """A file that this process holds: its name, its identity when this process got it, and its
-    bytes. ``data`` is None when this process cannot read the file."""
-
     path: Path
     identity: os.stat_result
     data: bytes | None
@@ -1270,12 +1266,8 @@ class _FileInTheWay(NoiseVaultError, FileExistsError): ...
 
 
 def write_atomically(path: Path, data: bytes) -> None:
-    """Replace ``path`` with ``data``: a failed write leaves the old file whole.
-
-    Python can read the umask only by setting it, and all threads share one umask, so this
-    function never touches the umask. If another file replaced the hidden copy, the save raises
-    a ``NoiseVaultError`` that is also a ``FileExistsError`` and writes nothing.
-    """
+    """Python can read the umask only by setting it, and all threads share one umask, so this
+    function never touches the umask."""
     try:
         mode = stat.S_IMODE(os.stat(path).st_mode)
     except FileNotFoundError:
@@ -1301,11 +1293,8 @@ def write_atomically(path: Path, data: bytes) -> None:
 
 
 def write_new(path: Path, data: bytes) -> bool:
-    """Write ``data`` to ``path`` only if no file is there. False means that another file is there.
-
-    While its descriptor is open, no other file can get the inode number of the hidden copy. The
-    check that ``path`` holds the copy compares that number.
-    """
+    """While its descriptor is open, no other file can get the inode number of the hidden copy. The
+    check that ``path`` holds the copy compares that number."""
     fd, hidden = _hidden_copy(path, data, 0o666)
     try:
         return publish(hidden, path)
@@ -1315,10 +1304,6 @@ def write_new(path: Path, data: bytes) -> bool:
 
 
 def take(path: Path) -> Held | None:
-    """Move the file at ``path`` to a new hidden name and read the file. None if no file is there.
-
-    After the move, a writer that saves to ``path`` cannot replace the file.
-    """
     hidden_path = _hidden_name(path)
     try:
         os.rename(path, hidden_path)
@@ -1333,10 +1318,7 @@ def take(path: Path) -> Held | None:
 
 
 def publish(held: Held, path: Path) -> bool:
-    """Give ``held`` the name ``path`` only if no file is there. False means that another file is
-    at ``path``, also when another file replaced ``held`` at its own name.
-
-    A hard link makes the whole file appear at once. exFAT and FAT have no hard links, so there
+    """A hard link makes the whole file appear at once. exFAT and FAT have no hard links, so there
     the bytes go into a file that ``O_EXCL`` creates at ``path``. Another writer can replace that
     file after the last check, and no portable call can rename a file without replacing a file.
     """
@@ -1350,8 +1332,6 @@ def publish(held: Held, path: Path) -> bool:
 
 
 def drop(held: Held) -> None:
-    """Remove the name of ``held`` while that name still names the file. Another writer's file
-    stays."""
     with contextlib.suppress(FileNotFoundError):
         if os.path.samestat(os.lstat(held.path), held.identity):
             held.path.unlink()
@@ -1362,7 +1342,6 @@ def _hidden_name(path: Path) -> Path:
 
 
 def _hidden_copy(path: Path, data: bytes, mode: int) -> tuple[int, Held]:
-    """A new hidden file next to ``path`` that holds ``data``, and its open descriptor."""
     path.parent.mkdir(parents=True, exist_ok=True)
     while True:
         hidden_path = _hidden_name(path)
@@ -1375,8 +1354,6 @@ def _hidden_copy(path: Path, data: bytes, mode: int) -> tuple[int, Held]:
 
 
 def _write_created(path: Path, data: bytes) -> bool:
-    """Write ``data`` into a file that ``O_EXCL`` creates at ``path``. False if a file is there,
-    also when another file replaced the new file during the write."""
     try:
         fd = os.open(path, _NEW_FILE, 0o666)
     except FileExistsError:
@@ -1391,11 +1368,8 @@ def _write_created(path: Path, data: bytes) -> bool:
 
 
 def _fill(fd: int, path: Path, data: bytes) -> os.stat_result:
-    """Write ``data`` to the new file ``fd`` at ``path``, and return the file's identity.
-
-    exFAT gives a file its inode number at the first write, so the identity comes after the
-    write. A failed write closes ``fd`` and removes ``path`` while ``path`` names the file.
-    """
+    """exFAT gives a file its inode number at the first write, so the identity comes after the
+    write."""
     try:
         with open(fd, "wb", closefd=False) as handle:
             handle.write(data)

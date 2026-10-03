@@ -374,11 +374,8 @@ def same_check(shown: str, current: str) -> bool:
 
 
 def same_line(shown: str, current: str) -> bool:
-    """Equal, except that a result row's deviation and tolerance need only agree within 10x.
-
-    Exact rows differ in roundoff between library versions. Sampled rows differ between
-    platforms for the same seed (Stim's sampling depends on the CPU's SIMD width). The samples
-    also decide which outcome a sampled row shows, and so the tolerance shown.
+    """Exact rows differ in roundoff between library versions. Sampled rows differ between
+    platforms for the same seed (Stim's sampling depends on the CPU's SIMD width).
     """
     if shown == current:
         return True

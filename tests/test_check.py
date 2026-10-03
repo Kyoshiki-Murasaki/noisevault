@@ -86,7 +86,6 @@ def test_an_export_that_drops_gate_noise_fails(monkeypatch: pytest.MonkeyPatch) 
 def _one_pauli_error(
     mix: str, native: str, error: str, loci: list[list[int]], **connectivity: object
 ) -> Profile:
-    """Ideal gates on a line of 4 qubits, except a 5% ``error`` on ``native`` at ``loci``."""
     pauli = [0.05 if label == error else 0.0 for label in metrics.PAULI_2Q]
     four = {"name": "blind", "vendor": "test", "technology": "superconducting", "num_qubits": 4}
     data = toy(

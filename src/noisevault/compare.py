@@ -134,7 +134,8 @@ class Comparison:
 
     @property
     def dispersion(self) -> float:
-        """How far the deviance exceeds its degrees of freedom, or 1 with no degrees of freedom."""
+        """The deviance divided by its degrees of freedom, and at least 1. With no degrees of
+        freedom, the dispersion is 1."""
         return _dispersion(self.deviance, self.dof)
 
     @property

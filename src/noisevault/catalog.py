@@ -431,11 +431,6 @@ def pull_and_save(
     source: str | None = None,
     output: str | Path | None = None,
 ) -> Pulled:
-    """:func:`pull`, also saying where the profile is and whether this call wrote it.
-
-    The pull writes a new vault file only at a path where no file is. If another process saves a
-    file at that path during the pull, the pull applies the same rules to that file.
-    """
     source = source.strip().lower() if source else _default_source(device)
     if source not in _PULL_SOURCES:
         raise _unknown_source(source)
@@ -447,20 +442,12 @@ def pull_and_save(
     same_id = [i for i in vault_profiles() if i.id == profile.id]
     held = next((i for i in same_id if i.fingerprint == profile.fingerprint), None)
     old = next((i for i in same_id if i.calibrated_at == profile.device.calibrated_at), None)
-    known = held or old  # can have an older name
+    known = held or old
     path = vault_path(profile) if known is None else Path(str(known.path))
     return Pulled(profile, path, _save_in_vault(profile, path))
 
 
 def _save_in_vault(profile: Profile, path: Path) -> bool:
-    """Save ``profile`` at ``path``. False if the file at ``path`` already holds this import.
-
-    The pull replaces only a file that imports the same calibration differently, and warns. It
-    first moves that file to a hidden name. If the moved file is not the file that the pull read,
-    the pull moves it back and reads ``path`` again. The pull deletes a moved file only after it
-    saves. If the save fails, the pull moves the file back to an empty ``path``, or keeps the file
-    and names it in the error.
-    """
     data = file_bytes(profile, path)
     moved: list[Held] = []
     replaced: list[str] = []
@@ -514,8 +501,6 @@ class _NotSaved(NoiseVaultError, OSError): ...
 
 
 def _put_back(held: Held, path: Path) -> bool:
-    """Give ``held`` the name ``path`` again only if no file is there, and remove its hidden name.
-    False if ``held`` keeps its hidden name."""
     try:
         if not publish(held, path):
             return False
@@ -526,8 +511,6 @@ def _put_back(held: Held, path: Path) -> bool:
 
 
 def _same_calibration_at(path: Path, profile: Profile) -> tuple[bytes, str] | None:
-    """The bytes and fingerprint of the vault file at ``path``, or None if no file is there.
-    Raises _FileInTheWay unless the file holds the calibration of ``profile``."""
     try:
         os.lstat(path)
     except FileNotFoundError:

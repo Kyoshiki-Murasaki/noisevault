@@ -82,16 +82,6 @@ class Circuit:
 
 @dataclass(frozen=True)
 class CircuitCheck:
-    """One circuit run through one framework, compared with the reference.
-
-    ``gates`` are the gates that the framework's version of the circuit uses. The circuit passes
-    when ``deviation`` is at most ``tolerance``. In an exact check, ``deviation`` is the TVD and
-    ``tolerance`` is ``EXACT_TOLERANCE``. In a sampled check, each outcome has a tolerance of
-    ``SIGMAS`` standard errors plus ``SIGMAS / shots``. ``deviation`` is then the difference
-    between the frequency and the reference probability of the outcome with the highest ratio of
-    difference to tolerance. ``tolerance`` is the tolerance of that outcome.
-    """
-
     circuit: str
     num_qubits: int
     gates: tuple[str, ...]
@@ -125,12 +115,6 @@ class NotRun:
 
 @dataclass(frozen=True)
 class FrameworkCheck:
-    """One framework's export run on the check circuits it can express.
-
-    ``reports`` holds one export report for each export configuration that the check ran. Each
-    report has the entries of every circuit that ran with that configuration.
-    """
-
     framework: str
     version: str
     method: str
@@ -144,7 +128,6 @@ class FrameworkCheck:
 
     @property
     def worst(self) -> CircuitCheck:
-        """The circuit with the highest ratio of deviation to tolerance."""
         return max(self.circuits, key=lambda c: c.deviation / c.tolerance)
 
     @property
@@ -293,8 +276,6 @@ def plan_circuits(
     *,
     purpose: Literal["check", "run"],
 ) -> tuple[list[int], tuple[Circuit, ...]]:
-    """The check chain and its circuits. A hardware run (``purpose="run"``) leaves out
-    ``chain_mirror``, so the run keeps the circuits that counts files record."""
     chain, circuits = _chain_and_circuits(profile, layout)
     if not circuits:
         raise NoiseVaultError(
@@ -345,17 +326,6 @@ def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int]) -> 
 def build_circuits(
     profile: Profile, chain: Sequence[int], expressible: Callable[[Op], bool] = lambda op: True
 ) -> tuple[Circuit, ...]:
-    """Check circuits from the calibrated natives on ``chain`` that ``expressible`` accepts.
-
-    Circuit qubit i is ``chain[i]``. The circuits are an entangling chain, a mirror circuit, a
-    single-qubit sequence, and every 2-qubit native on one pair when there are several. The
-    ``chain_mirror`` circuit runs the entangling chain and its inverse twice: first with a
-    superposition on qubit 0 only, then on every qubit. This circuit finds 2-qubit errors that the
-    other circuits do not show, such as an X error on the target of ``cx`` after ``h``. The
-    list also has a fixed phase gate that the profile charges as ``p``, and a measurement-only
-    circuit. Only readout error moves the outcomes of the measurement-only circuit off
-    ``0...0``.
-    """
     table = profile.table
     n = len(chain)
     ones = [
@@ -478,11 +448,10 @@ def _inverse(op: Op) -> list[Op] | None:
 
 
 def _undone(forward: list[Op]) -> list[Op] | None:
-    """``forward`` and then its inverse, or None when a gate of ``forward`` has no inverse."""
     undo = [_inverse(op) for op in reversed(forward)]
     if any(ops is None for ops in undo):
         return None
-    return [*forward, *(op for ops in undo for op in ops)]  # type: ignore[union-attr]
+    return [*forward, *(op for ops in undo for op in ops)]
 
 
 # expected probabilities ---------------------------------------------------------------------
@@ -652,10 +621,6 @@ def _run(
 
 
 def _merged(reports: Sequence[Report]) -> tuple[Report, ...]:
-    """One report for each export configuration, with the entries of every run of it.
-
-    Entries that differ only in their loci become one entry, so each affected qubit appears once.
-    """
     merged: list[Report] = []
     for report in reports:
         into = next((m for m in merged if m.options == report.options), None)

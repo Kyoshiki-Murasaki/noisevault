@@ -1141,8 +1141,6 @@ def test_concurrent_pulls_of_one_calibration_both_succeed_and_one_writes(
 
 @pytest.fixture(params=["hard links", "no hard links", "exFAT"])
 def links(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The vault file system with hard links, or without them. "exFAT" also gives an empty file
-    another inode number than the number after its first write."""
     if request.param == "hard links":
         return
 
@@ -1168,8 +1166,6 @@ def _numbered_at_first_write(real: Callable[..., os.stat_result]) -> Callable[..
 
 
 def _saved_while_pulling(monkeypatch: pytest.MonkeyPatch, save: Callable[[Path], object]) -> Path:
-    """Serve Manila and call ``save(path)`` after the pull lists the vault, when the pull starts
-    to write its vault file ``path``."""
     manila = nv.load("ibm_manila")
     _serve(monkeypatch, manila)
     path = vault_path(manila)
@@ -1246,8 +1242,6 @@ def _saved_when_the_pull_moves(
     before: Callable[[Path], object],
     after: Callable[[Path], object] = lambda path: None,
 ) -> None:
-    """Call ``before(path)`` when the pull first renames or replaces its vault file ``path``, and
-    ``after(path)`` after that rename or replace."""
     pending = [(before, after)]
     for name in ("rename", "replace"):
         real = getattr(os, name)
