@@ -27,7 +27,7 @@ from ..errors import (
 from ..gates import is_symmetric
 from ..profile import Profile, iso_z
 from . import OLDER_HINT, Origin
-from .qiskit_backend import as_utc, calibration_from_properties, to_profile
+from .qiskit_backend import Calibration, as_utc, calibration_from_properties, to_profile
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -159,7 +159,7 @@ def from_calibration_archive(
                 f"This profile has no {joined(missing, 'or')} gate. The archive calibrates"
                 f" {joined(missing, 'and')} on {name} only after {iso_z(stamp)}."
             )
-    stale = _stale_note(picked, stamp, cal.skipped)
+    stale = _stale_note(picked, stamp, cal)
     if stale:
         notes.append(stale)
     dead = {}
@@ -356,10 +356,18 @@ def _gate_parameter(name: str) -> tuple[str, str] | None:
     return None if param is None else (name.removesuffix("_" + param), param)
 
 
-def _stale_note(
-    rows: list[dict[str, Any]], at: datetime | None, unconverted: tuple[str, ...]
-) -> str | None:
+def _stale_note(rows: list[dict[str, Any]], at: datetime | None, cal: Calibration) -> str | None:
+    """The note on the rows that IBM calibrated more than 7 days before ``at``.
+
+    Only rows that give the profile a value count. A qubit with both asymmetric readout errors
+    does not use its readout_error row.
+    """
     before = at or max(row["calibrated_time"] for row in rows)
+    paired = {
+        index
+        for index, qubit in cal.qubits.items()
+        if qubit.p1_given_0 is not None and qubit.p0_given_1 is not None
+    }
     oldest: dict[str, datetime] = {}
     loci: dict[str, set[tuple[int, ...]]] = {}
     for row in rows:
@@ -367,6 +375,8 @@ def _stale_note(
         if before - calibrated <= _STALE_AFTER:
             continue
         name = row["property"]
+        if name == "readout_error" and row["qubits"][0] in paired:
+            continue
         split = _gate_parameter(name)
         if split is None:
             label = _QUBIT_VALUE_NAMES.get(name)
@@ -374,7 +384,7 @@ def _stale_note(
             label = split[0]
         else:
             continue
-        if label is None or label in unconverted:
+        if label is None or label in cal.skipped:
             continue
         locus = row["qubits"]
         if len(locus) == 2 and is_symmetric(label):

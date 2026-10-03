@@ -189,6 +189,55 @@ def test_the_note_leaves_out_rows_the_profile_does_not_read(tmp_path: Path) -> N
     assert _stale(profile) == []
 
 
+@pytest.mark.parametrize(
+    ("kept", "stale"),
+    [
+        ({"prob_meas0_prep1", "prob_meas1_prep0"}, []),
+        (
+            {"prob_meas1_prep0"},
+            [
+                "IBM calibrated these values more than 7 days before the newest calibration, the"
+                " oldest on 2026-05-24: readout on qubit 0."
+            ],
+        ),
+    ],
+    ids=["pair", "no-pair"],
+)
+def test_the_note_names_readout_error_only_where_the_readout_uses_it(
+    tmp_path: Path, kept: set[str], stale: list[str]
+) -> None:
+    rows = pq.read_table(FIXTURE).to_pylist()
+    pair = {"prob_meas0_prep1", "prob_meas1_prep0"}
+    rows = [r for r in rows if r["qubit_a"] != 0 or r["property"] not in pair - kept]
+    june = ("ibm_fez", "readout_error", 0, datetime(2026, 6, 1, 8, tzinfo=UTC))
+    for row in rows:
+        if (row["backend"], row["property"], row["qubit_a"], row["calibrated_time"]) == june:
+            row["calibrated_time"] = datetime(2026, 5, 24, 8, tzinfo=UTC)
+    assert _stale(_fez(path=_rewritten(tmp_path, rows))) == stale
+
+
+def test_two_values_for_one_property_at_one_time_are_refused(tmp_path: Path) -> None:
+    rows = pq.read_table(FIXTURE).to_pylist()
+    t1 = [r for r in rows if (r["backend"], r["property"], r["qubit_a"]) == ("ibm_fez", "T1", 0)]
+    newest = max(t1, key=lambda r: r["calibrated_time"])
+    path = _rewritten(tmp_path, [*rows, {**newest, "value": 240.0}])
+    with pytest.raises(nv.SourceDataError) as info:
+        _fez(path=path)
+    assert (info.value.message, info.value.hint) == (
+        f"the ibm_fez rows of {path.name}: T1 of qubit 0 has two different values, 120.0 us and"
+        " 240.0 us",
+        "pass an earlier at= to use an older calibration",
+    )
+
+
+def test_a_row_given_twice_counts_once(tmp_path: Path) -> None:
+    rows = pq.read_table(FIXTURE).to_pylist()
+    fez = [r for r in rows if r["backend"] == "ibm_fez"]
+    newest = max(fez, key=lambda r: r["calibrated_time"])
+    profile = _fez(path=_rewritten(tmp_path, [*rows, dict(newest)]))
+    assert profile.fingerprint == _fez().fingerprint
+
+
 def test_dynamic_circuit_variants_are_not_converted() -> None:
     profile = _fez()
     assert "measure_2" not in profile.gates

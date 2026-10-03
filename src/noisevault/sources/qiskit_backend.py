@@ -482,18 +482,26 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
 def _parameters(
     params: Iterable[Mapping[str, Any]], origin: Origin, owner: str
 ) -> dict[str, Mapping[str, Any]]:
-    """The parameters by name; ``origin`` refuses a value that is not a number and a unit that is
-    not a string.
+    """The parameters by name. ``origin`` refuses a value that is not a number and a unit that is
+    not a string. It also refuses a name that comes again with a different value or unit.
     """
-    values = {}
+    values: dict[str, Mapping[str, Any]] = {}
     for param in params:
-        value, unit = param.get("value"), param.get("unit")
+        name, value, unit = param["name"], param.get("value"), param.get("unit")
         if value is not None and (isinstance(value, bool) or not isinstance(value, int | float)):
-            raise origin.refuse(f"{param['name']} of {owner} is {value!r}, not a number")
+            raise origin.refuse(f"{name} of {owner} is {value!r}, not a number")
         if unit is not None and not isinstance(unit, str):
-            raise origin.refuse(f"{param['name']} of {owner} has the unit {unit!r}, not a string")
-        values[param["name"]] = param
+            raise origin.refuse(f"{name} of {owner} has the unit {unit!r}, not a string")
+        first = values.setdefault(name, param)
+        if (first.get("value"), first.get("unit") or None) != (value, unit or None):
+            raise origin.refuse(
+                f"{name} of {owner} has two different values, {_shown(first)} and {_shown(param)}"
+            )
     return values
+
+
+def _shown(param: Mapping[str, Any]) -> str:
+    return f"{param.get('value')!r} {param.get('unit') or ''}".rstrip()
 
 
 def _check_indices(name: str, qubits: Sequence[Any], num_qubits: int, origin: Origin) -> None:

@@ -520,6 +520,53 @@ def test_a_value_a_profile_cannot_hold_names_the_reply_and_the_value(
     )
 
 
+_REPEATED = {
+    "T1 of qubit 0": (lambda p: p["qubits"][0], "T1", 99, "131.5286444531517 us", "99 us"),
+    "gate_error of cx on qubits 3-4": (
+        lambda p: _gate(p, "cx", [3, 4]),
+        "gate_error",
+        0.5,
+        "0.005696275468624307",
+        "0.5",
+    ),
+}
+
+
+@pytest.mark.parametrize("field", list(_REPEATED))
+@pytest.mark.parametrize("reverse", [False, True], ids=["appended", "reversed"])
+def test_a_parameter_given_twice_with_two_values_names_both(
+    monkeypatch: pytest.MonkeyPatch, field: str, reverse: bool
+) -> None:
+    params_of, name, value, given, added = _REPEATED[field]
+
+    def repeat(props: dict[str, Any]) -> None:
+        params = params_of(props)
+        params.append({**_param(params, name), "value": value})
+        if reverse:
+            params.reverse()
+
+    raw = _properties(repeat)
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: raw)
+    with pytest.raises(nv.SourceDataError) as info:
+        ibm_public.pull("ibm_fez")
+    url = f"{ibm_public.BASE_URL}/ibm_fez/properties"
+    first, second = (added, given) if reverse else (given, added)
+    assert info.value.message == (
+        f"IBM's public endpoint ({url}): {field} has two different values, {first} and {second}"
+    )
+
+
+@pytest.mark.parametrize("field", list(_REPEATED))
+def test_a_parameter_given_twice_with_one_value_counts_once(
+    served: list[str], monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    params_of, name, *_ = _REPEATED[field]
+    raw = _properties(lambda p: params_of(p).append(dict(_param(params_of(p), name))))
+    serve = ibm_public.fetch
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: raw if "properties" in url else serve(url))
+    assert ibm_public.pull("ibm_manila").fingerprint == nv.load("ibm_manila").fingerprint
+
+
 def _moved_rz(props: dict[str, Any]) -> None:
     next(g for g in props["gates"] if g["gate"] == "rz")["qubits"] = [99]
 
