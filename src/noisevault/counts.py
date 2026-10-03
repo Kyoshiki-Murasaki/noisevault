@@ -34,7 +34,7 @@ from pydantic import (
 )
 
 from . import __version__, check, gates
-from .errors import CountsError, NoiseVaultError, did_you_mean, plural, qubit_loci
+from .errors import CountsError, LayoutError, NoiseVaultError, did_you_mean, plural, qubit_loci
 from .profile import (
     Count,
     CountsSource,
@@ -508,7 +508,8 @@ def plan(
     An explicit delay holds every wait. A delay pads each qubit to the end of the circuit, so no
     gap stays empty and every backend scheduling policy gives the same timeline. Durations come
     from the calibration as stated. A virtual gate or a missing duration takes 0 ns.
-    A profile with unmodeled-error factors plans the run of its calibration.
+    A profile with unmodeled-error factors plans the run of its calibration. A wait on a qubit
+    where the profile disables ``delay`` raises LayoutError.
     """
     base = profile.uncorrected()
     chain, circuits = check.plan_circuits(base, layout, purpose="run")
@@ -531,7 +532,19 @@ def _scheduled(
             free[q] = end
     finish = max(free)
     timed += [Op("delay", (q,), (float(finish - t),)) for q, t in enumerate(free) if t < finish]
+    for op in timed:
+        if op.name == "delay" and _delay_disabled(profile, qubits[op.qubits[0]]):
+            raise LayoutError(
+                f"circuit {name!r}: qubit {qubits[op.qubits[0]]} waits {op.params[0]:g} ns,"
+                f" but {profile.id} disables delay on that qubit",
+                hint="pass layout= with qubits that allow delay",
+            )
     return PlannedCircuit(name=name, qubits=qubits, ops=tuple(timed))
+
+
+def _delay_disabled(profile: Profile, qubit: int) -> bool:
+    found = profile.table.gate("delay", (qubit,))
+    return isinstance(found, GateNoise) and found.state == "disabled"
 
 
 def _duration(profile: Profile, op: Op, qubits: tuple[int, ...]) -> Fraction:
@@ -568,9 +581,12 @@ def simulate(
     measured = []
     for circuit in circuits:
         n = len(circuit.qubits)
-        probs = probabilities(
-            truth, circuit.ops, n, layout=circuit.qubits, readout=True, unknown_gates="error"
-        )
+        try:
+            probs = probabilities(
+                truth, circuit.ops, n, layout=circuit.qubits, readout=True, unknown_gates="error"
+            )
+        except NoiseVaultError as exc:
+            raise type(exc)(f"circuit {circuit.name!r}: {exc.message}", hint=exc.hint) from None
         draws = rng.multinomial(shots, probs)
         counts = {outcome_bits(i, n): int(k) for i, k in enumerate(draws)}
         measured.append(

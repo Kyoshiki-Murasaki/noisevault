@@ -12,6 +12,7 @@ from .conversion import UnknownGates, idle_channel, native_name, resolve_op
 from .layout import normalize_layout
 from .profile import Profile
 from .report import Report
+from .table import refuse_disabled
 
 MAX_QUBITS = 10
 # The rotations an ms gate equals at some phases, as the exports read XX and YY gates.
@@ -55,6 +56,7 @@ def probabilities(
     for op in ops:
         if op.name == "delay":
             (q,), (duration_ns,) = op.qubits, op.params
+            refuse_disabled(table.gate("delay", (physical[q],)))
             channel = idle_channel(table, physical[q], duration_ns, report)
             if channel is not None:
                 rho = _apply(rho, channel.kraus, (q,), num_qubits)
@@ -75,6 +77,8 @@ def probabilities(
         for channel in built.channels:
             wires = tuple(circuit_of[w] for w in channel.wires)
             rho = _apply(rho, channel.kraus, wires, num_qubits)
+    for c in range(num_qubits):
+        refuse_disabled(table.gate("measure", (physical[c],)))
 
     dim = 2**num_qubits
     probs = np.real(np.diagonal(rho.reshape(dim, dim))).reshape((2,) * num_qubits)

@@ -15,7 +15,13 @@ from conftest import deeper_than_the_parser_takes, require, toy
 from pydantic import ValidationError
 
 import noisevault as nv
-from noisevault import CountsError, LayoutError, NoiseVaultError, UnsupportedEffect
+from noisevault import (
+    CountsError,
+    DisabledGateError,
+    LayoutError,
+    NoiseVaultError,
+    UnsupportedEffect,
+)
 from noisevault.counts import (
     SAMPLER_V2_OPTIONS,
     MeasuredCircuit,
@@ -618,10 +624,22 @@ def test_simulate_refuses_an_effect_that_the_profile_does_not_let_it_leave_out(a
     with pytest.raises(UnsupportedEffect) as caught:
         simulate(profile, [circuit], shots=100, seed=0, run_at=RUN_AT)
     assert caught.value.message == (
-        f"effect atom_loss on readout asks for allow='{allow}', but the reference simulator"
-        " does not model effects yet"
+        f"circuit 'sx': effect atom_loss on readout asks for allow='{allow}', but the reference"
+        " simulator does not model effects yet"
     )
     assert caught.value.hint == "set allow to 'omit' to leave the effect out"
+
+
+@pytest.mark.parametrize("name", ["measure", "delay"])
+def test_simulate_refuses_an_op_that_the_profile_disables(name: str) -> None:
+    data = toy()
+    data["gates"][name] = {"disabled": True}
+    ops = (Op("sx", (0,)), Op("delay", (0,), (100.0,)))
+    circuit = PlannedCircuit(name="sx", qubits=(1,), ops=ops)
+    with pytest.raises(DisabledGateError) as caught:
+        simulate(Profile.model_validate(data), [circuit], shots=100, seed=0, run_at=RUN_AT)
+    assert caught.value.message == f"circuit 'sx': {name} on qubit 1 is disabled in this profile"
+    assert caught.value.hint is None
 
 
 def test_plan_measures_no_qubit_whose_measurement_the_profile_disables() -> None:
@@ -631,6 +649,28 @@ def test_plan_measures_no_qubit_whose_measurement_the_profile_disables() -> None
     assert {c.qubits for c in plan(profile)} == {(1, 2)}
     with pytest.raises(LayoutError, match=r"^test_toy disables measure on qubit 0, but"):
         plan(profile, layout=[0, 1])
+
+
+def _delay_off(ref: str, qubit: int) -> Profile:
+    data = nv.load(ref).to_dict()
+    data["gates"]["delay"] = {}
+    off = {"gate": "delay", "qubits": [qubit], "disabled": True}
+    data["calibrations"] = [*data.get("calibrations", []), off]
+    return Profile.model_validate(data)
+
+
+@pytest.mark.parametrize("qubit", [148, 151])
+def test_plan_writes_no_delay_on_a_qubit_where_the_profile_disables_delay(qubit: int) -> None:
+    profile = _delay_off(KINGSTON, qubit)
+    with pytest.raises(LayoutError) as info:
+        plan(profile, layout=[148, 149, 150, 151])
+    assert info.value.message == (
+        f"circuit 'ghz_chain': qubit {qubit} waits 136 ns, but ibm_kingston disables delay on"
+        " that qubit"
+    )
+    assert info.value.hint == "pass layout= with qubits that allow delay"
+    chain = [0, 1, 2, 3]
+    assert plan(_delay_off("quantinuum_h1-1", 0), chain) == plan(nv.load("quantinuum_h1-1"), chain)
 
 
 def test_simulate_refuses_a_shot_count_that_is_not_positive() -> None:
