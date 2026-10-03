@@ -33,6 +33,7 @@ from .errors import (
     LociText,
     NoiseApproximationWarning,
     NoiseVaultError,
+    NoiseVaultWarning,
     install_hint,
     qubit_loci,
 )
@@ -44,6 +45,7 @@ from .table import GateNoise
 
 if TYPE_CHECKING:
     from .profile import Profile
+    from .table import NoiseTable
 
 FRAMEWORKS = ("qiskit", "cirq", "pennylane", "stim")
 EXACT_TOLERANCE = 1e-9
@@ -283,7 +285,7 @@ def plan_circuits(
         raise NoiseVaultError(
             f"{profile.id} has no calibrated native gate with a known unitary on"
             f" {qubit_loci(chain)}, so there is nothing to {purpose}",
-            hint=None if layout is None else "pass layout= with other qubits",
+            hint=_layout_hint(profile, "pass layout= with other qubits"),
         )
     if purpose == "run":
         circuits = tuple(c for c in circuits if c.name not in _CHECK_ONLY)
@@ -296,6 +298,15 @@ def _chain_and_circuits(
     if layout is not None:
         chain = _chain(profile, layout)
         return chain, build_circuits(profile, chain)
+    found = _connected_chain(profile)
+    if found is not None:
+        return found
+    chain = list(profile.suggest_layout(1).values())
+    return chain, build_circuits(profile, chain)
+
+
+def _connected_chain(profile: Profile) -> tuple[list[int], tuple[Circuit, ...]] | None:
+    """The longest suggested chain of 2 or more qubits that has check circuits."""
     for n in range(min(MAX_QUBITS, profile.device.num_qubits), 1, -1):
         try:
             suggested = suggest_layout(
@@ -307,8 +318,7 @@ def _chain_and_circuits(
         circuits = build_circuits(profile, chain)
         if circuits:
             return chain, circuits
-    chain = list(profile.suggest_layout(1).values())
-    return chain, build_circuits(profile, chain)
+    return None
 
 
 def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int]) -> list[int]:
@@ -320,26 +330,41 @@ def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int]) -> 
     table = profile.table
     unmeasured = [(q,) for q in chain if not can_measure(table, q)]
     if unmeasured:
-        measured = [
-            (q,)
-            for q in range(table.num_qubits)
-            if not table.qubit(q).disabled and can_measure(table, q)
-        ]
+        measurable = any(_measurable(table, q) for q in range(table.num_qubits))
         raise LayoutError(
             f"{profile.id} disables measure on {qubit_loci(*unmeasured)}, but every check"
             " circuit measures all its qubits",
-            hint=f"use qubits that can measure, such as {qubit_loci(*measured)}"
-            if measured
-            else None,
+            hint=_layout_hint(profile, "use qubits that can measure") if measurable else None,
         )
     for a, b in zip(chain, chain[1:], strict=False):
         if not _usable_pair(profile, a, b):
             raise LayoutError(
                 f"qubits {a} and {b} share no calibrated 2-qubit native gate",
-                hint="pass a layout whose neighbors are connected"
-                " (profile.suggest_layout(n) gives one)",
+                hint=_layout_hint(profile, "pass a layout whose neighbors share one"),
             )
     return chain
+
+
+_NO_ONE_QUBIT = "use a profile that calibrates a 1-qubit native gate with a known unitary"
+
+
+def _layout_hint(profile: Profile, step: str) -> str:
+    """``step`` with a layout that has check circuits, or the calibration that no layout has."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NoiseVaultWarning)
+        found = _connected_chain(profile)
+    table = profile.table
+    singles = (
+        [q]
+        for q in range(table.num_qubits)
+        if _measurable(table, q) and build_circuits(profile, [q])
+    )
+    layout = found[0] if found else next(singles, None)
+    return _NO_ONE_QUBIT if layout is None else f"{step}, such as layout={layout}"
+
+
+def _measurable(table: NoiseTable, q: int) -> bool:
+    return not table.qubit(q).disabled and can_measure(table, q)
 
 
 def _usable_pair(profile: Profile, a: int, b: int) -> bool:

@@ -14,7 +14,7 @@ from conftest import require, toy
 from typer.testing import CliRunner
 
 import noisevault as nv
-from noisevault import gates, metrics
+from noisevault import counts, gates, metrics
 from noisevault.check import (
     EXACT_TOLERANCE,
     FRAMEWORKS,
@@ -501,8 +501,13 @@ def test_directed_natives_run_in_their_calibrated_direction() -> None:
 
 
 def test_a_layout_with_unconnected_neighbors_says_how_to_fix_it() -> None:
-    with pytest.raises(LayoutError, match="suggest_layout"):
-        check(nv.load("ibm_manila"), layout=[0, 2])
+    manila = nv.load("ibm_manila")
+    with pytest.raises(LayoutError) as info:
+        check(manila, layout=[0, 2])
+    default = check(manila, frameworks=["cirq"])
+    assert default.passed, default
+    chain = [*default.layout.values()]
+    assert info.value.hint == f"pass a layout whose neighbors share one, such as layout={chain}"
 
 
 def _disabled(profile: Profile, *qubits: int) -> Profile:
@@ -553,13 +558,30 @@ def test_the_default_chain_leaves_out_a_link_only_a_custom_gate_calibrates() -> 
         LayoutError, match="qubits 1 and 2 share no calibrated 2-qubit native"
     ) as info:
         check(profile, layout=[0, 1, 2])
-    assert info.value.hint == (
-        "pass a layout whose neighbors are connected (profile.suggest_layout(n) gives one)"
-    )
+    assert info.value.hint == "pass a layout whose neighbors share one, such as layout=[0, 1]"
+    assert check(profile, frameworks=["cirq"], layout=[0, 1]).passed
     result = check(profile, frameworks=["cirq"])
     assert result.layout == {0: 0, 1: 1}
     assert result.passed, result
     assert any("cz" in c.gates for c in result.frameworks[0].circuits)
+
+
+_NO_ONE_QUBIT = "use a profile that calibrates a 1-qubit native gate with a known unitary"
+
+
+def test_a_layout_with_an_unusable_pair_names_a_layout_that_runs_or_the_calibration() -> None:
+    gates = {"sx": {"avg_infidelity": 1e-3}, "cz": {"qubits": 2}, "custom": {"qubits": 2}}
+    custom = [{"gate": "custom", "qubits": [0, 1], "avg_infidelity": 2e-2}]
+    profile = Profile.model_validate(toy(gates=gates, calibrations=custom))
+    with pytest.raises(LayoutError, match="qubits 0 and 1 share no calibrated") as info:
+        check(profile, layout=[0, 1])
+    assert info.value.hint == "pass a layout whose neighbors share one, such as layout=[0]"
+    assert check(profile, frameworks=["cirq"], layout=[0]).passed
+    gates["sx"] = {}
+    profile = Profile.model_validate(toy(gates=gates, calibrations=custom))
+    with pytest.raises(LayoutError, match="qubits 0 and 1 share no calibrated") as info:
+        check(profile, layout=[0, 1])
+    assert info.value.hint == _NO_ONE_QUBIT
 
 
 def test_the_default_chain_routes_around_a_link_only_a_custom_gate_calibrates() -> None:
@@ -604,10 +626,26 @@ def test_a_layout_with_a_qubit_that_cannot_measure_names_the_qubits_that_can() -
     assert info.value.message == (
         "test_toy disables measure on qubit 1, but every check circuit measures all its qubits"
     )
-    assert info.value.hint == "use qubits that can measure, such as qubits 0 and 2"
+    assert info.value.hint == "use qubits that can measure, such as layout=[0]"
+    assert check(_measure_off(1), frameworks=["cirq"], layout=[0]).passed
     with pytest.raises(LayoutError) as info:
         check(_measure_off(0, 1, 2), layout=[0])
     assert info.value.hint is None
+
+
+def test_a_measure_hint_names_only_qubits_with_a_calibrated_one_qubit_native() -> None:
+    sx = [{"gate": "sx", "qubits": [2], "avg_infidelity": 1e-3}]
+    off = [{"gate": "measure", "qubits": [1], "disabled": True}]
+    gates = {"rz": {"virtual": True}, "sx": {}, "cz": {"avg_infidelity": 1e-2}, "measure": {}}
+    profile = Profile.model_validate(toy(gates=gates, calibrations=[*sx, *off]))
+    with pytest.raises(LayoutError, match="disables measure on qubit 1") as info:
+        check(profile, layout=[1])
+    assert info.value.hint == "use qubits that can measure, such as layout=[2]"
+    assert check(profile, frameworks=["cirq"], layout=[2]).passed
+    profile = Profile.model_validate(toy(gates=gates, calibrations=off))
+    with pytest.raises(LayoutError, match="disables measure on qubit 1") as info:
+        check(profile, layout=[1])
+    assert info.value.hint == _NO_ONE_QUBIT
 
 
 def test_a_device_where_no_qubit_can_measure_has_no_default_chain() -> None:
@@ -634,11 +672,29 @@ def test_the_default_chain_leaves_out_qubits_no_one_qubit_native_calibrates(
     assert profile.suggest_layout(3) == {0: 0, 1: 1, 2: 2}
     with pytest.raises(NoiseVaultError, match=r"known unitary on qubits 0-1-2, so there") as info:
         check(profile, layout=[0, 1, 2])
-    assert info.value.hint == "pass layout= with other qubits"
+    assert info.value.hint == f"pass layout= with other qubits, such as layout={[*layout.values()]}"
+    assert check(profile, frameworks=["cirq"], layout=list(layout.values())).passed
     result = check(profile, frameworks=["cirq"])
     assert result.layout == layout
     assert result.passed, result
     assert result.summary().splitlines()[0].endswith(f" circuits {on}")
+
+
+@pytest.mark.parametrize("h", [{}, {"disabled": True}])
+def test_check_and_plan_ask_for_a_calibration_when_no_layout_has_check_circuits(h) -> None:
+    device = {"name": "toy", "technology": "superconducting", "num_qubits": 2}
+    gates = {"h": h, "cx": {"avg_infidelity": 0.01}}
+    profile = Profile.model_validate(toy(device=device, connectivity="all_to_all", gates=gates))
+    for layout in ([0], [1], [0, 1], [1, 0]):
+        with pytest.raises(NoiseVaultError) as info:
+            check(profile, frameworks=["cirq"], layout=layout)
+        assert info.value.message.endswith("so there is nothing to check")
+        assert info.value.hint == _NO_ONE_QUBIT
+    for layout in (None, [0]):
+        with pytest.raises(NoiseVaultError) as info:
+            counts.plan(profile, layout=layout)
+        assert info.value.message.endswith("so there is nothing to run")
+        assert info.value.hint == _NO_ONE_QUBIT
 
 
 def test_a_pair_the_qiskit_export_lacks_is_named_the_way_the_cli_does() -> None:
@@ -649,13 +705,14 @@ def test_a_pair_the_qiskit_export_lacks_is_named_the_way_the_cli_does() -> None:
 def test_with_no_calibrated_one_qubit_native_the_one_qubit_chain_has_nothing_to_check(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(NoiseVaultError, match=r"on qubit 0, so there is nothing to check$") as info:
+    with pytest.raises(NoiseVaultError) as info:
         check(_sx_calibrated_on())
-    assert info.value.hint is None
+    assert info.value.message.endswith("on qubit 0, so there is nothing to check")
+    assert info.value.hint == _NO_ONE_QUBIT
     path = _sx_calibrated_on().save(tmp_path / "toy.json")
     result = CliRunner().invoke(app, ["check", str(path)])
     assert result.stderr.startswith("error: test_toy has no calibrated native gate")
-    assert "hint:" not in result.stderr and "layout=" not in result.stderr
+    assert f"hint: {_NO_ONE_QUBIT}" in result.stderr and "layout=" not in result.stderr
 
 
 def test_a_device_with_every_qubit_disabled_has_no_default_chain() -> None:

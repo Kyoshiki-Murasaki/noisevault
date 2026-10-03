@@ -673,9 +673,16 @@ def test_shots_refuse_pauli_words_whose_shared_shots_default_mixed_decides(qml) 
     def ambiguous():
         return qml.sample(qml.Z(0)), qml.sample(qml.X(1)), qml.sample(qml.X(0))
 
+    def through_identity_probabilities():
+        return qml.probs(op=qml.I(0) @ qml.I(1)), qml.sample(qml.X(1)), qml.sample(qml.Z(1))
+
     with pytest.raises(NoiseVaultError, match="read wire 0 in different bases") as raised:
         run(ambiguous)
     assert "qml.transforms.split_non_commuting" in raised.value.hint
+    with pytest.raises(NoiseVaultError, match="read wire 1 in different bases"):
+        run(through_identity_probabilities)
+    split = run(through_identity_probabilities, qml.transforms.split_non_commuting)
+    assert [np.asarray(r).shape for r in split] == [(4,), (shots,), (shots,)]
     split = run(ambiguous, qml.transforms.split_non_commuting)
     assert [np.asarray(r).shape for r in split] == [(shots,)] * 3
 
@@ -707,6 +714,43 @@ def test_a_zero_coefficient_term_does_not_split_shared_shots(qml, readout_error)
     expected = probabilities(profile, bell + [Op("h", (0,)), Op("h", (1,))], 2) @ [1, -1, -1, 1]
     product = np.mean(np.asarray(x0) * np.asarray(x1))
     assert product == pytest.approx(expected, abs=5 / np.sqrt(shots))
+
+
+_IDENTITY_PROBS = {
+    "identity product": lambda qml: (qml.probs(op=qml.I(0) @ qml.I(1)), qml.sample(qml.X(1))),
+    "identity on one wire": lambda qml: (qml.probs(op=qml.I(1)), qml.counts(qml.X(1))),
+    "zero observable": lambda qml: (
+        qml.probs(op=0 * qml.Z(0) + 0 * qml.X(1)),
+        qml.sample(qml.Y(1)),
+    ),
+}
+
+
+@pytest.mark.parametrize("readout", [True, False])
+@pytest.mark.parametrize("case", list(_IDENTITY_PROBS))
+def test_identity_probabilities_share_the_basis_of_their_shot_group(qml, case, readout) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    def run(model=None):
+        @qml.qnode(qml.device("default.mixed", wires=2, seed=19))
+        def circuit():
+            _pl_ops(qml, BELL_THEN_H)
+            return _IDENTITY_PROBS[case](qml)
+
+        noisy = circuit if model is None else qml.add_noise(circuit, model)
+        return qml.set_shots(noisy, shots=10_000)()
+
+    (raw_probs, raw_other), (probs, other) = (
+        run(),
+        run(to_pennylane(_ideal_gates(0.0), readout=readout)),
+    )
+    assert np.asarray(probs) == pytest.approx(np.asarray(raw_probs), abs=1e-12)
+    if isinstance(raw_other, dict):
+        assert other == raw_other
+    else:
+        np.testing.assert_array_equal(other, raw_other)
+    if case == "identity product":
+        assert np.asarray(probs) == pytest.approx([0.5, 0, 0, 0.5], abs=0.02)
 
 
 def test_a_zero_coefficient_term_does_not_hide_the_measured_basis(qml) -> None:
@@ -952,7 +996,9 @@ def test_a_measurement_the_profile_disables_is_refused(qml, kind, where, readout
         _measured(qml, model, kind, 1)
 
 
-@pytest.mark.parametrize("kind", [k for k in _MEASUREMENTS if k != "sample"])
+@pytest.mark.parametrize(
+    "kind", [k for k in _MEASUREMENTS if k not in ("sample", "probs of every wire")]
+)
 def test_a_measurement_where_the_profile_allows_it_keeps_its_noise(qml, kind) -> None:
     from noisevault.frameworks.pennylane import to_pennylane
 
@@ -963,6 +1009,80 @@ def test_a_measurement_where_the_profile_allows_it_keeps_its_noise(qml, kind) ->
     assert noisy == pytest.approx(plain, abs=1e-12)
     if kind == "probs":
         assert noisy == pytest.approx([0.1, 0.9], abs=1e-12)
+
+
+def _measure_off_on_1() -> Profile:
+    data = toy(
+        gates={"x": {"avg_infidelity": 0.0}, "measure": {}},
+        qubits=[{"index": 0, "readout": {"p1_given_0": 0.1, "p0_given_1": 0.2}}],
+        calibrations=[{"gate": "measure", "qubits": [1], "disabled": True}],
+    )
+    return Profile.model_validate(data)
+
+
+@pytest.mark.parametrize("readout", [True, False])
+@pytest.mark.parametrize("measure", ["probs", "sample", "counts"])
+def test_a_measurement_without_wires_reads_every_device_wire(qml, measure, readout) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    def run(profile, device_wires, wires=None):
+        @qml.qnode(qml.device("default.mixed", wires=device_wires, seed=7))
+        def circuit():
+            qml.PauliX(0)
+            return getattr(qml, measure)(wires=wires)
+
+        noisy = qml.add_noise(circuit, to_pennylane(profile, layout=[0, 1], readout=readout))
+        return qml.set_shots(noisy, shots=200)() if measure != "probs" else noisy()
+
+    with pytest.raises(
+        DisabledGateError, match=r"^measure on qubit 1 is disabled in this profile$"
+    ):
+        run(_measure_off_on_1(), 2)
+    with pytest.raises(LayoutError, match="marks disabled"):
+        run(_one_disabled(), 2)
+    explicit = run(_measure_off_on_1(), [0], wires=[0])
+    for device_wires in ([0], None):
+        got = run(_measure_off_on_1(), device_wires)
+        if measure == "counts":
+            assert got == explicit
+        else:
+            np.testing.assert_array_equal(got, explicit)
+
+
+_TAPE_CASES = {
+    "measure off, default layout": (_measure_off_on_1, None, True),
+    "measure off, list layout": (_measure_off_on_1, [0, 1], True),
+    "measure off, layout without it": (_measure_off_on_1, {0: 0}, False),
+    "qubit off, default layout": (_one_disabled, None, True),
+    "every qubit measures": (lambda: Profile.model_validate(toy()), None, False),
+}
+
+
+@pytest.mark.parametrize("case", list(_TAPE_CASES))
+def test_a_measurement_without_wires_on_a_tape_is_refused_when_a_qubit_cannot_measure(
+    qml, case
+) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    profile, layout, refused = _TAPE_CASES[case]
+    model = to_pennylane(profile(), layout=layout)
+
+    def run(wires=None):
+        tape = qml.tape.QuantumScript([qml.PauliX(0)], [qml.probs(wires=wires)])
+        [noisy], _ = qml.noise.add_noise(tape, model)
+        return qml.device("default.mixed", wires=[0]).execute(noisy)
+
+    explicit = run(wires=[0])
+    if not refused:
+        assert run() == pytest.approx(explicit, abs=1e-12)
+        return
+    with pytest.raises(
+        DisabledGateError, match="can map to qubit 1, which cannot measure"
+    ) as raised:
+        run()
+    assert (
+        raised.value.hint == "pass wires= to the measurement, or apply qml.add_noise to the QNode"
+    )
 
 
 _ONLY_WIRE_0 = {

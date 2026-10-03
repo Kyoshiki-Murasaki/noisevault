@@ -11,7 +11,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from ..errors import LayoutError, NoiseVaultError, install_hint
+from ..errors import DisabledGateError, LayoutError, NoiseVaultError, install_hint
 
 try:
     import pennylane as qml
@@ -34,7 +34,7 @@ from pennylane.ops.op_math import Adjoint, CompositeOp, Conditional, ControlledO
 from .. import gates
 from ..channels import readout_matrix
 from ..conversion import UnknownGates, native_name, resolve_op
-from ..layout import normalize_layout
+from ..layout import can_measure, normalize_layout
 from ..profile import Profile
 from ..report import Report
 from ..table import refuse_disabled
@@ -91,6 +91,7 @@ _READOUT_MEASUREMENTS = (
 _EIGENVALUE_MEASUREMENTS = (ExpectationMP, VarianceMP, SampleMP, CountsMP)
 _ROTATED_PAULIS = {"X": qml.PauliX, "Y": qml.PauliY}
 _ADD_NOISE = ("pennylane.noise.add_noise", "add_noise")  # module and name of its tape transform
+_EXECUTE = ("pennylane.workflow.execution", "execute")  # its `device` runs the tape
 _NO_BASIS_FIX = (
     "measure Pauli words or computational-basis probabilities. For a Hamiltonian, wrap the"
     " QNode in qml.transforms.split_non_commuting before qml.add_noise"
@@ -144,7 +145,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
     def model_map(self) -> dict:
         # add_noise reads this for every tape, so a tape with no operation and no readout
         # callback (measurements only, or readout=False) still has its wires checked.
-        if _add_noise_frame() is not None:
+        if _outer_frame(_ADD_NOISE) is not None:
             self._noised_tape()
         return super().model_map
 
@@ -157,7 +158,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         keep it on the model. A composed model is a new plain qml.NoiseModel that shares only
         these functions.
         """
-        frame = _add_noise_frame()
+        frame = _outer_frame(_ADD_NOISE)
         if frame is None:
             raise RuntimeError(
                 f"NoiseVault noise ran outside qml.add_noise (PennyLane {qml.__version__}),"
@@ -174,12 +175,37 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             )
         for wire in tape.wires:
             self.physical_qubit(wire)
-        for mp in tape.measurements:
-            if _reads_out(mp):
-                for wire in _read_wires(mp, tape):
-                    qubit = self.physical_qubit(wire)
-                    refuse_disabled(self.profile.table.gate("measure", (qubit,)))
+        read = [mp for mp in tape.measurements if _reads_out(mp)]
+        measured = [wire for mp in read for wire in _read_wires(mp, tape)]
+        if any(not mp.wires for mp in read):
+            measured += self._device_wires(frame, tape)
+        for wire in measured:
+            qubit = self.physical_qubit(wire)
+            refuse_disabled(self.profile.table.gate("measure", (qubit,)))
         return tape
+
+    def _device_wires(self, frame: FrameType, tape: qml.tape.QuantumScript) -> list[Hashable]:
+        """The wires of the device, which a measurement without wires reads.
+
+        Only a QNode run shows the device. Without the device, raise if a wire that the circuit
+        does not use can map to a qubit that cannot measure.
+        """
+        execute = _outer_frame(_EXECUTE, frame)
+        if execute is not None:
+            return list(execute.f_locals["device"].wires or ())
+        table = self.profile.table
+        used = {self._layout[wire] for wire in tape.wires}
+        possible = self._layout.values() if self._explicit_layout else range(table.num_qubits)
+        for qubit in possible:
+            if qubit in used or (can_measure(table, qubit) and not table.qubit(qubit).disabled):
+                continue
+            raise DisabledGateError(
+                "a measurement without wires reads every device wire, and qml.add_noise on a"
+                f" tape cannot see the device. A device wire can map to qubit {qubit}, which"
+                " cannot measure in this profile",
+                hint="pass wires= to the measurement, or apply qml.add_noise to the QNode",
+            )
+        return []
 
     def _check_wires(self, _: Operator, **__: Any) -> None:
         self._noised_tape()
@@ -450,9 +476,9 @@ def _same_angle(a: float, b: float) -> bool:
     return min(gap, 2 * pi - gap) < _ANGLE_TOL
 
 
-def _add_noise_frame() -> FrameType | None:
-    frame = sys._getframe(1)
-    while frame and (frame.f_globals.get("__name__"), frame.f_code.co_name) != _ADD_NOISE:
+def _outer_frame(key: tuple[str, str], frame: FrameType | None = None) -> FrameType | None:
+    frame = frame or sys._getframe(1)
+    while frame and (frame.f_globals.get("__name__"), frame.f_code.co_name) != key:
         frame = frame.f_back
     return frame
 
@@ -588,8 +614,9 @@ def _shared_readout(
     computational-basis readout goes on every tape wire, and those measurements share a tape.
     """
     rotations, wires = basis, _read_wires(mp, tape)
-    if tape.shots and _word(mp):
-        rotations, wires = _shot_group(mp, [m for m in tape.measurements if _word(m)], tape)
+    if tape.shots and _word(mp) is not None:
+        words = [m for m in tape.measurements if _word(m) is not None]
+        rotations, wires = _shot_group(mp, words, tape)
     return rotations, wires if rotations else list(tape.wires)
 
 
@@ -637,10 +664,16 @@ def _read_wires(mp: Any, tape: qml.tape.QuantumScript) -> list[Hashable]:
 
 
 def _word(mp: Any) -> qml.pauli.PauliWord | None:
+    """The Pauli word by which default.mixed puts ``mp`` in a group with shared shots, or None.
+
+    A zero or identity observable has the empty word. Only probabilities keep the empty word,
+    because the shared basis does not change an eigenvalue of the identity.
+    """
     words = _pauli_terms(mp.obs)
-    if not _reads_out(mp) or words is None or len(words) != 1:
+    if not _reads_out(mp) or words is None or len(words) > 1:
         return None
-    return next(iter(words)) or None
+    word = next(iter(words), qml.pauli.PauliWord({}))
+    return word if word or isinstance(mp, ProbabilityMP) else None
 
 
 def _commute(a: Mapping[Hashable, str], b: Mapping[Hashable, str]) -> bool:

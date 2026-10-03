@@ -16,7 +16,9 @@ from noisevault.channels import ChannelSpec, gate_channels, superoperator
 from noisevault.conversion import resolve_op
 from noisevault.errors import (
     DisabledGateError,
+    MissingCalibrationError,
     NoiseApproximationWarning,
+    NoiseVaultError,
     UnsupportedEffect,
 )
 from noisevault.profile import Profile
@@ -571,6 +573,23 @@ def _five_of_eight_qubits() -> QuantumCircuit:
     return circuit
 
 
+def _five_qubits() -> QuantumCircuit:
+    circuit = QuantumCircuit(5, 5, name="dense")
+    circuit.h(0)
+    circuit.cx([0, 1, 2, 3], [1, 2, 3, 4])
+    circuit.barrier()
+    circuit.measure(range(5), range(5))
+    return circuit
+
+
+def _runs(sim: NoiseVaultSimulator, circuit: QuantumCircuit) -> None:
+    assert sim.run(transpile(circuit, sim, seed_transpiler=1), shots=10).result().success
+
+
+def _runs_on_8_qubits(circuit: QuantumCircuit) -> None:
+    _runs(quiet_export(_line(8)), circuit)
+
+
 _BUILD_NARROWER = (
     "transpile also counts idle qubits, so build the circuit on at most 5 qubits. Then run"
     " sim.run(transpile(circuit, sim))"
@@ -578,13 +597,14 @@ _BUILD_NARROWER = (
 
 
 @pytest.mark.parametrize(
-    ("build", "message", "hint"),
+    ("build", "message", "hint", "follow"),
     [
         (
             lambda: _ghz_for_a_line_of_8(3),
             "circuit 'ghz3' has 8 qubits but ibm_manila has 5",
             "the circuit is transpiled for a backend with 8 qubits, so transpile the original"
             " circuit for this simulator instead: sim.run(transpile(original, sim))",
+            lambda sim: _runs(sim, ghz(3)),
         ),
         (
             lambda: _ghz_for_a_line_of_8(6),
@@ -592,22 +612,26 @@ _BUILD_NARROWER = (
             "the circuit is transpiled for a backend with 8 qubits from a circuit with 6."
             " Transpile the original circuit for a profile with at least 6 qubits (nv list shows"
             " how many each profile has)",
+            lambda sim: _runs_on_8_qubits(ghz(6)),
         ),
         (
             _five_of_eight_qubits,
             "circuit 'sparse' has 8 qubits but ibm_manila has 5",
             _BUILD_NARROWER,
+            lambda sim: _runs(sim, _five_qubits()),
         ),
         (
             lambda: QuantumCircuit(6, name="empty"),
             "circuit 'empty' has 6 qubits but ibm_manila has 5",
             _BUILD_NARROWER,
+            lambda sim: _runs(sim, QuantumCircuit(5)),
         ),
         (
             lambda: ghz(6),
             "circuit 'ghz6' has 6 qubits but ibm_manila has 5",
             "the circuit needs 6 qubits, so run the circuit on a profile with at least 6 qubits"
             " (nv list shows how many each profile has)",
+            lambda sim: _runs_on_8_qubits(ghz(6)),
         ),
     ],
     ids=[
@@ -619,12 +643,14 @@ _BUILD_NARROWER = (
     ],
 )
 def test_a_circuit_wider_than_the_device_gets_a_step_that_can_work(
-    manila: Profile, build, message, hint
+    build, message, hint, follow
 ) -> None:
+    sim = quiet_export(nv.load("ibm_manila"))
     with pytest.raises(CircuitNotNativeError) as caught:
-        quiet_export(manila).run(build())
+        sim.run(build())
     assert caught.value.message == message
     assert caught.value.hint == hint
+    follow(sim)
 
 
 # reset and delays ----------------------------------------------------------------------------
@@ -716,7 +742,12 @@ def _turned_off(gate: str, *qubits: int) -> Profile:
                 "num_qubits": 2,
             },
             connectivity="all_to_all",
-            gates={**_LINE_GATES, "reset": {"duration_ns": 1000}, gate: {}},
+            gates={
+                **_LINE_GATES,
+                "x": {"avg_infidelity": 0.0, "duration_ns": 35},
+                "reset": {"duration_ns": 1000},
+                gate: {},
+            },
             readout={"error": 0.0, "duration_ns": 800},
             calibrations=[{"gate": gate, "qubits": [q], "disabled": True} for q in qubits],
         )
@@ -883,6 +914,9 @@ def test_delay_in_device_ticks_says_how_to_fix_it() -> None:
         "the profile has no sample time, so give delays a time unit (s, ms, us, ns, ps), for"
         " example qc.delay(100, q, unit='ns')"
     )
+    timed = QuantumCircuit(1)
+    timed.delay(100, 0, unit="ns")
+    assert sim.run(timed, shots=1).result().success
 
 
 def test_unbound_delay_duration_says_to_bind_it_first() -> None:
@@ -1048,14 +1082,16 @@ _ONE_QUBIT_NATIVES = {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}}
 _NO_EDGES = {"edges": []}
 
 
-_UNCALIBRATED = (
-    ", and unknown_gates='error', so transpile does not use this native there"
-    " (unknown_gates='typical' gives those loci the typical native's noise))"
+_UNCALIBRATED = ", and unknown_gates='error', so transpile does not use this native there"
+_TYPICAL_FITS = " (unknown_gates='typical' gives those loci the typical native's noise)"
+_NO_METRIC = (
+    ". No {}-qubit native has an error metric on any {}, so profile.to_cirq() cannot run one"
 )
+_CZ_LOCI = "cz: no error metric on qubits 0-1, 1-0, 1-2 and 2-1"
 
 
 @pytest.mark.parametrize(
-    ("sections", "unknown_gates", "ending", "hint"),
+    ("sections", "unknown_gates", "ending", "hint", "fix"),
     [
         (
             {
@@ -1065,6 +1101,7 @@ _UNCALIBRATED = (
             "typical",
             "compile to. The profile connectivity allows no pair of enabled qubits, so"
             " profile.to_cirq() cannot run a two-qubit gate either",
+            None,
             None,
         ),
         (
@@ -1082,6 +1119,7 @@ _UNCALIBRATED = (
             " and the connectivity does not allow ms there). The profile allows no two-qubit"
             " native on any pair of enabled qubits, so profile.to_cirq() cannot run one either",
             None,
+            None,
         ),
         (
             {"gates": {"sx": {"disabled": True}, "cz": {"avg_infidelity": 1e-2}}},
@@ -1089,20 +1127,34 @@ _UNCALIBRATED = (
             "compile to (sx: disabled on every locus). The profile allows no one-qubit native on"
             " any enabled qubit, so profile.to_cirq() cannot run one either",
             None,
+            None,
         ),
         (
             {"gates": {**_ONE_QUBIT_NATIVES, "cz": {}}},
             "error",
-            "compile to (cz: no error metric on qubits 0-1, 1-0, 1-2 and 2-1" + _UNCALIBRATED,
-            "simulate the profile with profile.to_cirq() instead, or give the profile a calibrated"
-            " two-qubit native that Qiskit provides",
+            f"compile to ({_CZ_LOCI}{_UNCALIBRATED})"
+            + _NO_METRIC.format("two", "pair of enabled qubits")
+            + " either",
+            "give the profile a calibrated two-qubit native that Qiskit provides",
+            {"cz": {"avg_infidelity": 1e-2}},
         ),
         (
             {"gates": {"sx": {}, "cz": {"avg_infidelity": 1e-2}}},
             "error",
-            "compile to (sx: no error metric on qubits 0, 1 and 2" + _UNCALIBRATED,
+            f"compile to (sx: no error metric on qubits 0, 1 and 2{_UNCALIBRATED})"
+            + _NO_METRIC.format("one", "enabled qubit")
+            + " either",
+            "give the profile a calibrated one-qubit native that Qiskit provides",
+            {"sx": {"avg_infidelity": 1e-3}},
+        ),
+        (
+            {"gates": {**_ONE_QUBIT_NATIVES, "cz": {}, "swapcx": {"avg_infidelity": 1e-2}}},
+            "error",
+            f"compile to ({_CZ_LOCI}{_UNCALIBRATED}{_TYPICAL_FITS}; swapcx: the Qiskit export has"
+            " no instruction for this native)",
             "simulate the profile with profile.to_cirq() instead, or give the profile a calibrated"
-            " one-qubit native that Qiskit provides",
+            " two-qubit native that Qiskit provides",
+            {"cz": {"avg_infidelity": 1e-2}},
         ),
     ],
     ids=[
@@ -1111,16 +1163,100 @@ _UNCALIBRATED = (
         "one-qubit disabled",
         "uncalibrated",
         "one-qubit uncalibrated",
+        "uncalibrated beside a native Cirq runs",
     ],
 )
-def test_a_refusal_says_why_and_whether_cirq_can_run_the_gate(
-    sections, unknown_gates, ending, hint
+def test_a_refusal_names_only_next_steps_that_run(
+    sections, unknown_gates, ending, hint, fix
 ) -> None:
+    profile = Profile.model_validate(toy(**sections))
     with pytest.raises(UnsupportedDevice) as refused:
-        to_qiskit(Profile.model_validate(toy(**sections)), unknown_gates=unknown_gates)
+        to_qiskit(profile, unknown_gates=unknown_gates)
     message = refused.value.message
     assert message.endswith(ending), message
     assert refused.value.hint == hint
+    arity = 1 if "has no one-qubit native" in message else 2
+    runs = _cirq_runs_a_gate(profile, arity)
+    assert runs is ("cannot run" not in message)
+    assert runs is ("profile.to_cirq() instead" in (hint or ""))
+    if _TYPICAL_FITS in message:
+        _run_natives(profile, unknown_gates="typical")
+    if fix is not None:
+        fixed = Profile.model_validate(toy(**{**sections, "gates": {**sections["gates"], **fix}}))
+        _run_natives(fixed, unknown_gates=unknown_gates)
+
+
+def test_a_refusal_offers_cirq_for_an_ideal_native_cirq_runs() -> None:
+    cirq = require("cirq")
+    profile = Profile.model_validate(
+        toy(
+            device={**toy()["device"], "num_qubits": 2},
+            connectivity="all_to_all",
+            gates={"h": {"avg_infidelity": 0}, "fsim": {"qubits": 2, "virtual": True}},
+            qubits=[{"index": q, "readout": {"error": 0}} for q in range(2)],
+        )
+    )
+    with pytest.raises(UnsupportedDevice) as refused:
+        to_qiskit(profile)
+    assert "cannot run" not in refused.value.message
+    assert refused.value.hint == (
+        "simulate the profile with profile.to_cirq() instead, or give the profile a calibrated"
+        " two-qubit native that Qiskit provides"
+    )
+    a, b = cirq.LineQubit.range(2)
+    circuit = cirq.Circuit(cirq.H(a), cirq.FSimGate(0.5, 0.3)(a, b), cirq.measure(a, b, key="m"))
+    simulator = cirq.DensityMatrixSimulator(noise=profile.to_cirq())
+    assert len(simulator.run(circuit, repetitions=10).measurements["m"]) == 10
+
+
+def _cirq_runs_a_gate(profile: Profile, arity: int) -> bool:
+    cirq = require("cirq")
+    a, b = cirq.LineQubit.range(2)
+    gate = cirq.CZ(a, b) if arity == 2 else cirq.X(a)
+    circuit = cirq.Circuit(gate, cirq.measure(a, b, key="m"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NoiseApproximationWarning)
+        try:
+            simulator = cirq.DensityMatrixSimulator(noise=profile.to_cirq())
+            simulator.run(circuit, repetitions=10)
+        except NoiseVaultError:
+            return False
+    return True
+
+
+def _run_natives(profile: Profile, **options: Any) -> None:
+    sim = quiet_export(profile, **options)
+    circuit = QuantumCircuit(2)
+    circuit.sx([0, 1])
+    circuit.cz(0, 1)
+    circuit.measure_all()
+    assert sim.run(transpile(circuit, sim, seed_transpiler=1), shots=10).result().success
+
+
+@pytest.mark.parametrize(
+    ("extra", "offered"),
+    [
+        ({"iswap": {}}, True),
+        ({"swap": {}}, False),
+        ({"iswap": {}, "swap": {}}, False),
+    ],
+    ids=["typical fits", "swap needs several entanglers", "one native blocks the other"],
+)
+def test_the_report_offers_typical_noise_only_when_unknown_gates_typical_runs(
+    extra, offered
+) -> None:
+    profile = Profile.model_validate(
+        toy(gates={**_ONE_QUBIT_NATIVES, "cz": {"avg_infidelity": 1e-2}, **extra})
+    )
+    sim = to_qiskit(profile, unknown_gates="error")
+    entries = [e for e in sim.report.omitted if e.startswith(tuple(f"native {n}:" for n in extra))]
+    assert len(entries) == len(extra)
+    assert all(e.endswith(_TYPICAL_FITS) is offered for e in entries), entries
+    if offered:
+        _run_natives(profile, unknown_gates="typical")
+    else:
+        with pytest.raises(MissingCalibrationError):
+            quiet_export(profile, unknown_gates="typical")
 
 
 def test_the_report_names_a_native_that_no_listed_pair_allows() -> None:
@@ -1161,7 +1297,9 @@ def test_a_saved_report_names_every_affected_qubit() -> None:
         "preparation (reset) error of qubits 0, 1, 2, 3, 4, 5, 6 and 7",
     ]
     assert (
-        "native x: no error metric on qubits 0, 1, 2, 3, 4, 5, 6 and 7" + _UNCALIBRATED[:-1]
+        "native x: no error metric on qubits 0, 1, 2, 3, 4, 5, 6 and 7"
+        + _UNCALIBRATED
+        + _TYPICAL_FITS
     ) in saved["omitted"]
     summary = report.summary()
     assert (
@@ -1305,6 +1443,31 @@ def test_google_profiles_export_sqrt_iswap_and_report_the_gate_count_cost() -> N
     )
     (qiskit,) = nv.load("google_weber").check(frameworks=["qiskit"]).frameworks
     assert qiskit.passed and not qiskit.not_run
+
+
+def test_the_sqrt_iswap_cost_note_names_steps_that_run() -> None:
+    cirq = require("cirq")
+    profile = _sqrt_iswap_line()
+    sim = quiet_export(profile)
+    (note,) = [a for a in sim.report.approximated if a.what == "gate count of transpiled circuits"]
+    assert note.detail.endswith(
+        "Build circuits in sqrt_iswap directly, or use profile.to_cirq() to compile for Google"
+    )
+    direct = QuantumCircuit(2)
+    direct.append(SqrtISwapGate(), [0, 1])
+    direct.measure_all()
+    compiled = transpile(direct, sim, seed_transpiler=1)
+    assert compiled.count_ops()["sqrt_iswap"] == 1
+    assert sim.run(compiled, shots=10).result().success
+    a, b = cirq.LineQubit.range(2)
+    google = cirq.optimize_for_target_gateset(
+        cirq.Circuit(cirq.CNOT(a, b), cirq.measure(a, b, key="m")),
+        gateset=cirq.SqrtIswapTargetGateset(),
+    )
+    assert sum(op.gate == cirq.SQRT_ISWAP for op in google.all_operations()) == 2
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NoiseApproximationWarning)
+        cirq.DensityMatrixSimulator(noise=profile.to_cirq()).run(google, repetitions=10)
 
 
 def _t2_above_2_t1(**gates: dict) -> Profile:

@@ -4,7 +4,7 @@ import pickle
 import re
 import time
 import warnings
-from itertools import product
+from itertools import permutations, product
 
 import numpy as np
 import pytest
@@ -27,6 +27,7 @@ from noisevault.errors import (  # noqa: E402
     LayoutError,
     MissingCalibrationError,
     NoiseApproximationWarning,
+    NoiseVaultError,
     UnsupportedEffect,
 )
 from noisevault.frameworks.stim import (  # noqa: E402
@@ -366,6 +367,80 @@ def test_the_layout_hint_names_what_the_pair_lacks():
     assert hint(DisabledGateError, "CZ", [0, 1]) == _USABLE_PAIRS
     assert hint(DisabledGateError, "CX", [1, 2]) is None
     assert hint(MissingCalibrationError, "CZ", [0, 2]) == _CONNECTED_PAIRS
+    to_stim(profile, "CZ 0 1", layout=profile.suggest_layout(2))
+
+
+def _only_cz() -> Profile:
+    data = toy()
+    data["gates"] = {"h": {"virtual": True}, "cx": {"qubits": 2, "disabled": True}}
+    data["gates"]["cz"] = {"qubits": 2, "avg_infidelity": 0.02}
+    return Profile.model_validate(data)
+
+
+@pytest.mark.parametrize("unknown_gates", ["typical", "error"])
+def test_no_layout_hint_when_no_pair_runs_the_failing_gate(unknown_gates):
+    profile = _only_cz()
+    for layout in permutations(range(3), 2):
+        with pytest.raises(NoiseVaultError) as caught:
+            to_stim(profile, "CX 0 1", layout=list(layout), unknown_gates=unknown_gates)
+        assert caught.value.hint is None
+    with pytest.raises(DisabledGateError):
+        to_stim(profile, "CX 0 1", layout=profile.suggest_layout(2), unknown_gates=unknown_gates)
+
+
+@pytest.mark.parametrize("unknown_gates", ["typical", "error"])
+def test_the_layout_hint_names_a_pair_where_the_failing_gate_runs(unknown_gates):
+    enabled = {"gate": "cx", "qubits": [1, 2], "avg_infidelity": 0.01, "disabled": False}
+    data = toy(calibrations=[enabled])
+    data["gates"]["cx"] = {"qubits": 2, "disabled": True}
+    profile = Profile.model_validate(data)
+    for layout in ([0, 1], [0, 2], [2, 1]):
+        with pytest.raises(NoiseVaultError) as caught:
+            to_stim(profile, "CX 0 1", layout=layout, unknown_gates=unknown_gates)
+        assert caught.value.hint == "pass layout= to put cx on qubits 1-2, where it runs"
+    to_stim(profile, "CX 0 1", layout=[1, 2], unknown_gates=unknown_gates)
+
+
+def test_the_layout_hint_names_a_direction_where_a_one_way_gate_runs():
+    enabled = {"gate": "cx", "avg_infidelity": 0.01, "disabled": False}
+    data = toy(calibrations=[{**enabled, "qubits": pair} for pair in ([0, 1], [1, 2])])
+    data["gates"] = {"h": {"virtual": True}, "cx": {"qubits": 2, "disabled": True}}
+    profile = Profile.model_validate(data)
+    with pytest.raises(MissingCalibrationError) as caught:
+        to_stim(profile, "CX 1 0", layout=[2, 0])
+    assert caught.value.hint == "pass layout= to put cx on qubits 0-1, where it runs"
+    to_stim(profile, "CX 1 0", layout=[1, 0])
+    with pytest.raises(DisabledGateError):
+        to_stim(profile, "CX 1 0", layout=profile.suggest_layout(2))
+
+
+@pytest.mark.parametrize("unknown_gates", ["typical", "error"])
+def test_no_layout_hint_when_no_pair_has_a_usable_2_qubit_gate(unknown_gates):
+    data = toy()
+    data["gates"] = {"h": {"virtual": True}, "cx": {"avg_infidelity": 0.01, "disabled": True}}
+    profile = Profile.model_validate(data)
+    with pytest.raises(LayoutError, match="no connected chain of 2 usable qubits"):
+        profile.suggest_layout(2)
+    for layout in ([0, 2], [0, 1]):
+        where = rf"^CX 0 1 \(physical qubits {layout[0]}-{layout[1]}\)"
+        with pytest.raises(NoiseVaultError, match=where) as caught:
+            to_stim(profile, "CX 0 1", layout=layout, unknown_gates=unknown_gates)
+        assert "layout=" not in (caught.value.hint or "")
+
+
+def test_no_layout_hint_when_no_usable_pair_can_measure():
+    gates = {**toy()["gates"], "measure": {}}
+    off = [{"gate": "measure", "qubits": [q], "disabled": True} for q in (1, 2)]
+    disabled_cz = {"gate": "cz", "qubits": [0, 1], "disabled": True}
+    profile = Profile.model_validate(toy(gates=gates, calibrations=[*off, disabled_cz]))
+    with pytest.raises(LayoutError, match="can measure"):
+        profile.suggest_layout(2)
+    with pytest.raises(DisabledGateError) as caught:
+        to_stim(profile, "CZ 0 1")
+    assert caught.value.hint is None
+    with pytest.raises(MissingCalibrationError) as caught:
+        to_stim(profile, "CZ 0 2")
+    assert caught.value.hint is None
 
 
 _CONTROLLED_PAULIS = [
@@ -414,11 +489,13 @@ def test_unusable_gate_errors_name_the_stim_instruction_and_the_fix():
     assert caught.value.hint == _CONNECTED_PAIRS
     with pytest.raises(MissingCalibrationError, match=cx_1_2) as caught:
         to_stim(_manila(), "CX 1 2", layout={1: 1, 2: 4}, unknown_gates="error")
-    assert caught.value.hint == f"{_NATIVE_OR_TYPICAL}; {_CONNECTED_PAIRS}"
+    assert caught.value.hint == _CONNECTED_PAIRS
+    to_stim(_manila(), circuit, layout=_manila().suggest_layout(3))
     with pytest.raises(MissingCalibrationError, match="^SQRT_Y 0 .*unknown_gates") as caught:
         to_stim(_manila(), "SQRT_Y 0", unknown_gates="error")
     assert "layout=" not in str(caught.value)
     assert caught.value.hint == _NATIVE_OR_TYPICAL
+    to_stim(_manila(), "SQRT_Y 0", unknown_gates="typical")
 
 
 def test_repeated_targets_in_one_instruction_keep_gate_then_noise_order():
@@ -964,18 +1041,32 @@ def test_layout_from_coords_places_a_surface_code_on_the_best_grid_patch():
 
 
 def test_layout_from_coords_says_what_to_do_without_coords():
-    circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=3, rounds=1)
+    small = "QUBIT_COORDS(0, 0) 0\nQUBIT_COORDS(0, 9) 1\nH 0\nCZ 0 1\nM 0 1"
     with pytest.raises(LayoutError, match="records no qubit coords") as caught:
-        layout_from_coords(circuit, _manila())
+        layout_from_coords(small, _manila())
     assert caught.value.hint == "pass layout={stim qubit: physical qubit}"
+    to_stim(_manila(), small, layout={0: 0, 1: 1})
     with pytest.raises(LayoutError, match="no rotation or shift") as caught:
-        layout_from_coords(circuit, _grid(4))
+        layout_from_coords(small, _grid(4))
     assert caught.value.hint == "pass layout= explicitly"
+    to_stim(_grid(4), small, layout={0: 0, 1: 1})
     with pytest.raises(
         LayoutError, match=r"^the circuit gives no 2D QUBIT_COORDS for qubits 0 and 1;"
     ) as caught:
         layout_from_coords("H 0 1", _grid(4))
     assert caught.value.hint == "add QUBIT_COORDS for each qubit or pass layout="
+    to_stim(_grid(4), "H 0 1", layout={0: 0, 1: 1})
+
+
+def test_layout_from_coords_gives_no_layout_hint_for_a_circuit_larger_than_the_device():
+    circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=3, rounds=1)
+    for profile, error in ((_manila(), "records no qubit coords"), (_grid(4), "no rotation")):
+        with pytest.raises(LayoutError, match=error) as caught:
+            layout_from_coords(circuit, profile)
+        assert caught.value.hint is None
+    with pytest.raises(LayoutError, match="no 2D QUBIT_COORDS") as caught:
+        layout_from_coords("H " + " ".join(map(str, range(17))), _grid(4))
+    assert caught.value.hint is None
 
 
 def test_layout_from_coords_refuses_a_match_on_coords_of_two_enabled_qubits():
@@ -991,8 +1082,79 @@ def test_layout_from_coords_refuses_a_match_on_coords_of_two_enabled_qubits():
         " single device qubit there"
     )
     assert caught.value.hint == "pass layout={stim qubit: physical qubit}"
+    to_stim(profile, "QUBIT_COORDS(5, 5) 0\nM 0", layout={0: 3})
     line = "QUBIT_COORDS(0, 0) 0\nQUBIT_COORDS(0, 1) 1\nQUBIT_COORDS(0, 2) 2\nM 0 1 2"
     assert layout_from_coords(line, profile) == {0: 0, 1: 1, 2: 2}
+
+
+def _line_of_two(gate: str, disabled_on: tuple[int, ...], where: str) -> Profile:
+    two = {"name": "two", "vendor": "test", "technology": "superconducting", "num_qubits": 2}
+    data = toy(device=two, connectivity={"edges": [[0, 1]]})
+    data["gates"] = {"h": {"virtual": True}, "x": {"virtual": True}, "measure": {}, "reset": {}}
+    by_record = where == "record"
+    data["gates"][gate]["disabled"] = not by_record
+    records = [q for q in (0, 1) if (q in disabled_on) == by_record]
+    data["calibrations"] = [{"gate": gate, "qubits": [q], "disabled": by_record} for q in records]
+    data["qubits"] = [
+        {"index": 0, "coords": [0, 0], "readout": {"p1_given_0": 0.0, "p0_given_1": 0.0}},
+        {"index": 1, "coords": [0, 1], "readout": {"p1_given_0": 0.02, "p0_given_1": 0.02}},
+    ]
+    return Profile.model_validate(data)
+
+
+_ONE_QUBIT_USES = [
+    ("measure", "QUBIT_COORDS(0, 0) 0\nH 0\nM 0"),
+    ("measure", "QUBIT_COORDS(0, 0) 0\nMPP X0"),
+    ("measure", "QUBIT_COORDS(0, 0) 0\nMR 0"),
+    ("reset", "QUBIT_COORDS(0, 0) 0\nMR 0"),
+    ("reset", "QUBIT_COORDS(0, 0) 0\nRX 0"),
+    ("h", "QUBIT_COORDS(0, 0) 0\nH 0"),
+    ("x", "QUBIT_COORDS(0, 0) 0\nCX sweep[0] 0"),
+    ("x", "QUBIT_COORDS(0, 0) 0\nMPAD 1\nREPEAT 2 {\n    CX rec[-1] 0\n}"),
+]
+
+
+@pytest.mark.parametrize("where", ["record", "definition"])
+@pytest.mark.parametrize(("gate", "circuit"), _ONE_QUBIT_USES)
+def test_layout_from_coords_skips_a_qubit_that_disables_an_operation_the_circuit_uses(
+    gate, circuit, where
+):
+    assert layout_from_coords(circuit, _line_of_two(gate, (), where)) == {0: 0}
+    profile = _line_of_two(gate, (0,), where)
+    layout = layout_from_coords(circuit, profile)
+    assert layout == {0: 1}
+    to_stim(profile, circuit, layout=layout)
+    nowhere = _line_of_two(gate, (0, 1), where)
+    with pytest.raises(LayoutError) as caught:
+        layout_from_coords(circuit, nowhere)
+    assert caught.value.message == (
+        "no rotation or shift of the circuit's QUBIT_COORDS fits test_two's qubit coords, puts"
+        " every 2-qubit gate on a connected pair and avoids disabled operations"
+    )
+    assert caught.value.hint is None
+    for q in (0, 1):
+        with pytest.raises(DisabledGateError):
+            to_stim(nowhere, circuit, layout={0: q})
+    without_coords = circuit.split("\n", 1)[1]
+    with pytest.raises(LayoutError, match="no 2D QUBIT_COORDS") as caught:
+        layout_from_coords(without_coords, nowhere)
+    assert caught.value.hint is None
+
+
+def test_layout_from_coords_skips_a_pair_that_disables_the_circuit_s_2_qubit_gate():
+    four = {"name": "four", "vendor": "test", "technology": "superconducting", "num_qubits": 4}
+    gates = {"cx": {"avg_infidelity": 0.001}, "cz": {"avg_infidelity": 0.002}}
+    data = toy(device=four, gates=gates, connectivity={"edges": [[0, 1], [1, 2], [2, 3]]})
+    data["calibrations"] = [{"gate": "cx", "qubits": [1, 2], "disabled": True}]
+    data["qubits"] = [{"index": q, "coords": [0, q]} for q in range(4)]
+    data["qubits"][3]["readout"] = {"p1_given_0": 0.02, "p0_given_1": 0.02}
+    profile = Profile.model_validate(data)
+    coords = "QUBIT_COORDS(0, 0) 0\nQUBIT_COORDS(0, 1) 1\nQUBIT_COORDS(0, 2) 2\n"
+    fan_out = coords + "CX 1 0 1 2"
+    layout = layout_from_coords(fan_out, profile)
+    assert set(layout.values()) == {1, 2, 3}
+    to_stim(profile, fan_out, layout=layout)
+    assert set(layout_from_coords(coords + "CZ 1 0 1 2", profile).values()) == {0, 1, 2}
 
 
 @pytest.mark.parametrize(

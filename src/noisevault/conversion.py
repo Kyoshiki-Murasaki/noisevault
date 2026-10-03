@@ -8,7 +8,7 @@ from . import gates
 from .channels import ChannelSpec, GateChannels, gate_channels, thermal_relaxation_kraus
 from .errors import LayoutError, MissingCalibrationError, qubit_loci
 from .report import Report
-from .table import GateNoise, NoiseTable, Unavailable
+from .table import GateNoise, NoiseTable, Unavailable, refuse_disabled
 
 UnknownGates = Literal["typical", "error"]
 TYPICAL_FIX = "compile to native gates for realistic gate counts, or pass unknown_gates='error'"
@@ -67,6 +67,29 @@ def resolve_op(
     setting, a gate with no calibration on ``qubits`` raises MissingCalibrationError if it needs
     several native entanglers or acts on more than two qubits.
     """
+    qubits = tuple(qubits)
+    noise, why = resolve_gate(table, name, qubits, unknown_gates=unknown_gates)
+    if why is not None:
+        report.count("typical_noise_used", name)
+        report.approximate(
+            f"gate {name}", f"noise of the typical {len(qubits)}-qubit native gate", TYPICAL_FIX
+        )
+        report.warn_once(
+            f"typical_noise_used:{name}",
+            f"{name} on {qubit_loci(qubits)}: {why}, so the export uses the noise of"
+            f" {noise.gate} instead. To fix: {TYPICAL_FIX}",
+        )
+    return _channels(table, noise, report)
+
+
+def resolve_gate(
+    table: NoiseTable, name: str, qubits: Sequence[int], *, unknown_gates: UnknownGates
+) -> tuple[GateNoise, str | None]:
+    """The gate noise that resolve_op gives ``name`` on ``qubits``, with no side effects.
+
+    The second item is None when ``name`` has its own noise there. Otherwise it is the reason that
+    ``name`` has none, and the first item is the typical native gate. Raises as resolve_op does.
+    """
     if unknown_gates not in ("typical", "error"):
         raise ValueError(f"unknown_gates={unknown_gates!r}: choose 'typical' or 'error'")
     qubits = tuple(qubits)
@@ -77,7 +100,8 @@ def resolve_op(
 
     found = table.gate(name, qubits)
     if isinstance(found, GateNoise) and found.state != "uncalibrated":
-        return _channels(table, found, report)  # a disabled gate raises here
+        refuse_disabled(found)
+        return found, None
     if isinstance(found, Unavailable) and found.kind == "bad_target":
         raise ValueError(found.reason)
     why = found.reason if isinstance(found, Unavailable) else f"{name} has no error metric"
@@ -88,27 +112,37 @@ def resolve_op(
             " calibration describes it",
             hint="decompose it into the profile's native gates first",
         )
+    typical = table.typical(len(qubits), qubits)
     if unknown_gates == "error":
         raise MissingCalibrationError(
-            f"{where}: {why}",
-            hint="compile to the profile's native gates, or pass unknown_gates='typical' to use"
-            " the typical native gate's noise",
+            f"{where}: {why}", hint=_error_hint(table, name, qubits, typical)
         )
-    typical = table.typical(len(qubits), qubits)
     if isinstance(typical, Unavailable):
         raise MissingCalibrationError(
             f"{where}: {why}. No calibrated {len(qubits)}-qubit native gate is usable there either"
         )
-    report.count("typical_noise_used", name)
-    report.approximate(
-        f"gate {name}", f"noise of the typical {len(qubits)}-qubit native gate", TYPICAL_FIX
-    )
-    report.warn_once(
-        f"typical_noise_used:{name}",
-        f"{where}: {why}, so the export uses the noise of {typical.gate} instead."
-        f" To fix: {TYPICAL_FIX}",
-    )
-    return _channels(table, typical, report)
+    return typical, why
+
+
+def _error_hint(
+    table: NoiseTable, name: str, qubits: tuple[int, ...], typical: GateNoise | Unavailable
+) -> str | None:
+    """A step that gives ``name`` noise on ``qubits``, or None when the profile has none."""
+    if isinstance(typical, GateNoise):
+        return (
+            "compile to the profile's native gates, or pass unknown_gates='typical' to use"
+            " the typical native gate's noise"
+        )
+    usable = [n for n in table.natives(len(qubits)) if table.allowed(n, qubits)]
+    where = qubit_loci(qubits)
+    if name in usable:
+        return f"give {name} an error metric on {where}"
+    if usable:
+        return (
+            f"give {usable[0]} an error metric on {where}, then compile to the profile's native"
+            " gates"
+        )
+    return None
 
 
 def _check_qubits(table: NoiseTable, name: str, qubits: tuple[int, ...]) -> None:

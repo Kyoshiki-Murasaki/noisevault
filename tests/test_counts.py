@@ -607,13 +607,15 @@ def test_loaded_circuits_key_a_cache_as_the_planned_ones_do(tmp_path: Path, ref:
 def test_plan_refuses_a_profile_with_no_calibrated_native_on_the_chain() -> None:
     gates = {"rz": {"virtual": True}, "sx": {}}
     profile = Profile.model_validate(toy(gates=gates, calibrations=[]))
-    with pytest.raises(NoiseVaultError, match=r"on qubit 0, so there is nothing to run$") as info:
+    calibrate = "use a profile that calibrates a 1-qubit native gate with a known unitary"
+    with pytest.raises(NoiseVaultError) as info:
         plan(profile)
-    assert info.value.hint is None
+    assert info.value.message.endswith("on qubit 0, so there is nothing to run")
+    assert info.value.hint == calibrate
     with pytest.raises(NoiseVaultError) as info:
         plan(profile, layout=[1])
     assert info.value.message.endswith("on qubit 1, so there is nothing to run")
-    assert info.value.hint == "pass layout= with other qubits"
+    assert info.value.hint == calibrate
 
 
 @pytest.mark.parametrize("allow", ["exact", "approximate"])

@@ -64,7 +64,7 @@ from qiskit_aer.noise.passes import LocalNoisePass
 
 from .. import gates
 from ..channels import ChannelSpec, GateChannels, readout_matrix
-from ..conversion import UnknownGates, idle_channel, resolve_op
+from ..conversion import UnknownGates, idle_channel, resolve_gate, resolve_op
 from ..report import Report
 from ..table import GateNoise, NoiseTable, QubitNoise, Unavailable, refuse_disabled
 
@@ -411,6 +411,7 @@ def _placements(
     loci = _loci(table, enabled)
     memo: dict[tuple, Placement] = {}
     out = []
+    left_out: dict[str, list[tuple[int, ...]]] = {}
     for export in exports:
         candidates = loci[export.gate.num_qubits]
         uncalibrated, unavailable = [], []
@@ -426,15 +427,30 @@ def _placements(
                 continue
             out.append(_placement(table, export, qargs, found, unknown_gates, report, memo))
         if uncalibrated:
+            left_out[export.canonical] = uncalibrated
             omitted[export.canonical] = LociText(
                 "no error metric on ",
                 uncalibrated,
-                ", and unknown_gates='error', so transpile does not use this native there"
-                " (unknown_gates='typical' gives those loci the typical native's noise)",
+                ", and unknown_gates='error', so transpile does not use this native there",
             )
         elif unavailable and len(unavailable) == len(candidates):
             omitted[export.canonical] = unavailable[0]
+    if left_out and all(_typical_fits(table, n, q) for n, qs in left_out.items() for q in qs):
+        for name in left_out:
+            omitted[name] = LociText(
+                omitted[name],
+                " (unknown_gates='typical' gives those loci the typical native's noise)",
+            )
     return out
+
+
+def _typical_fits(table: NoiseTable, name: str, qargs: tuple[int, ...]) -> bool:
+    """Whether unknown_gates='typical' gives ``name`` noise on ``qargs``, as every export does."""
+    try:
+        resolve_gate(table, name, qargs, unknown_gates="typical")
+    except (NoiseVaultError, ValueError):
+        return False
+    return True
 
 
 def _placement(
@@ -511,13 +527,19 @@ def _require_natives(
         why = "; ".join(
             LociText(f"{n}: ", omitted.get(n, "disabled on every locus")).short for n in defined
         )
-        if any(table.allowed(n, qargs) for n in defined for qargs in loci):
+        calibrate = f"give the profile a calibrated {word}-qubit native that Qiskit provides"
+        if any(_typical_fits(table, n, qargs) for n in defined for qargs in loci):
             raise UnsupportedDevice(
                 f"{refusal} ({why})",
-                hint="simulate the profile with profile.to_cirq() instead, or give the profile a"
-                f" calibrated {word}-qubit native that Qiskit provides",
+                hint=f"simulate the profile with profile.to_cirq() instead, or {calibrate}",
             )
         unit = "enabled qubit" if arity == 1 else "pair of enabled qubits"
+        if any(table.allowed(n, qargs) for n in defined for qargs in loci):
+            raise UnsupportedDevice(
+                f"{refusal} ({why}). No {word}-qubit native has an error metric on any {unit},"
+                " so profile.to_cirq() cannot run one either",
+                hint=calibrate,
+            )
         raise UnsupportedDevice(
             f"{refusal} ({why}). The profile allows no {word}-qubit native on any {unit}, so"
             " profile.to_cirq() cannot run one either"

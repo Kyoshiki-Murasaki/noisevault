@@ -13,8 +13,9 @@ Annotations, REPEAT blocks, detectors and observables pass through unchanged.
 from __future__ import annotations
 
 import functools
+import warnings
 from collections import Counter
-from collections.abc import Container, Iterable, Mapping, Sequence
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, NamedTuple, NoReturn, get_args
 
@@ -38,10 +39,10 @@ except ImportError as exc:
 from .. import gates, metrics
 from ..channels import ChannelSpec, pauli_twirl
 from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
-from ..layout import normalize_layout
+from ..layout import can_measure, normalize_layout
 from ..profile import Profile
 from ..report import Report
-from ..table import GateNoise, refuse_disabled
+from ..table import GateNoise, NoiseTable, refuse_disabled
 
 Readout = Literal["symmetrize", "exact", "none"]
 ExistingNoise = Literal["error", "keep", "strip"]
@@ -213,28 +214,41 @@ def layout_from_coords(circuit: stim.Circuit | str, profile: Profile) -> dict[in
     Tries the eight rotations and reflections of the square lattice and every translation. It
     also tries them after a 45 degree turn, because Stim's rotated surface codes put neighbors
     on diagonals. A placement must put every qubit on an enabled device qubit and every 2-qubit
-    gate on a pair with a calibrated native gate. From the valid placements, the function
-    returns the one with the lowest summed 2-qubit gate error and mean readout error. If a
-    placement puts a qubit on coords that two enabled device qubits have, the function raises
-    LayoutError.
+    gate on a pair with a calibrated native gate. A placement also must not put an operation on
+    qubits where the profile disables the operation, for example ``M`` on a qubit whose
+    ``measure`` is disabled. From the valid placements, the function returns the one with the
+    lowest summed 2-qubit gate error and mean readout error. If a placement puts a qubit on
+    coords that two enabled device qubits have, the function raises LayoutError.
     """
     circuit = _as_circuit(circuit)
     found = _scan(circuit)
+    table = profile.table
+    enabled = sum(not table.qubit(q).disabled for q in range(table.num_qubits))
+    placeable = len(found.qubits) <= enabled and all(
+        _placeable(table, name, len(qubits))
+        for stim_name, qubits in found.operations
+        for name in _profile_names(stim_name, profile.gates)
+    )
     coords = circuit.get_final_qubit_coordinates()
     missing = sorted(q for q in found.qubits if len(coords.get(q, ())) < 2)
     if missing:
         raise LayoutError(
             f"the circuit gives no 2D QUBIT_COORDS for {qubit_loci(*((q,) for q in missing))}",
-            hint="add QUBIT_COORDS for each qubit or pass layout=",
+            hint="add QUBIT_COORDS for each qubit or pass layout=" if placeable else None,
         )
-    device = _Device(profile)
+    device = _Device(profile, placeable)
     labels = sorted(found.qubits)
     if not labels:
         return {}
     points = np.array([coords[q][:2] for q in labels], dtype=float)
     column = {q: i for i, q in enumerate(labels)}
     pairs = np.array([(column[a], column[b]) for a, b in sorted(found.pairs)], dtype=int)
-    cost = _PlacementCost(profile, pairs.reshape(-1, 2))
+    used: dict[tuple[str, int], list[tuple[int, ...]]] = {}
+    for stim_name, qubits in sorted(found.operations):
+        for name in _profile_names(stim_name, profile.gates):
+            used.setdefault((name, len(qubits)), []).append(tuple(column[q] for q in qubits))
+    operations = [(name, np.array(columns, dtype=int)) for (name, _), columns in used.items()]
+    cost = _PlacementCost(profile, pairs.reshape(-1, 2), operations)
     best: tuple[float, np.ndarray] | None = None
     for transform in _TRANSFORMS:
         placements = device.placements(points @ transform.T)
@@ -246,9 +260,9 @@ def layout_from_coords(circuit: stim.Circuit | str, profile: Profile) -> dict[in
             best = (float(totals[i]), placements[i])
     if best is None:
         raise LayoutError(
-            f"no rotation or shift of the circuit's QUBIT_COORDS fits {profile.id}'s qubit coords"
-            " with every 2-qubit gate on a connected pair",
-            hint="pass layout= explicitly",
+            f"no rotation or shift of the circuit's QUBIT_COORDS fits {profile.id}'s qubit"
+            " coords, puts every 2-qubit gate on a connected pair and avoids disabled operations",
+            hint="pass layout= explicitly" if placeable else None,
         )
     return dict(zip(labels, map(int, best[1]), strict=True))
 
@@ -265,6 +279,7 @@ class _Scan:
     herald: str | None = None  # first heralded noise instruction (it adds records)
     feedback: str | None = None  # first gate controlled by a measurement record
     product: str | None = None  # first multi-qubit measurement
+    operations: set[tuple[str, tuple[int, ...]]] = field(default_factory=set)
 
 
 def _scan(circuit: stim.Circuit, found: _Scan | None = None) -> _Scan:
@@ -289,6 +304,7 @@ def _scan(circuit: stim.Circuit, found: _Scan | None = None) -> _Scan:
         for group in item.target_groups():
             qubits = [t.qubit_value for t in group if t.qubit_value is not None]
             found.qubits.update(qubits)
+            found.operations.update(_operations(item.name, kind, group))
             if any(t.is_measurement_record_target for t in group):
                 found.feedback = found.feedback or _short(item)
             elif kind == "gate" and len(acted := _acted_on(item.name, group)) == 2:
@@ -296,6 +312,31 @@ def _scan(circuit: stim.Circuit, found: _Scan | None = None) -> _Scan:
             if kind == "measure" and len(_measured_product(item.name, group).qubits) > 1:
                 found.product = found.product or _short(item)
     return found
+
+
+def _operations(
+    name: str, kind: Kind, group: Sequence[stim.GateTarget]
+) -> Iterator[tuple[str, tuple[int, ...]]]:
+    """The (Stim gate, qubits) of each check the export makes for a disabled operation."""
+    if any(t.is_measurement_record_target or t.is_sweep_bit_target for t in group):
+        for position, target in enumerate(group):
+            pauli = _CONTROLLED_PAULI.get((name, position))
+            if pauli and target.qubit_value is not None:
+                yield pauli, (target.value,)
+    elif kind == "gate":
+        if qubits := _acted_on(name, group):
+            yield name, tuple(qubits)
+    else:
+        yield from ((name, (q,)) for q in _acted_on(name, group))
+
+
+def _profile_names(stim_name: str, defined: Container[str]) -> tuple[str, ...]:
+    kind = _kind(stim_name)
+    if kind == "measure":
+        return ("measure", "reset") if stim_name in _PREP_FLIP else ("measure",)
+    if kind == "reset":
+        return ("reset",)
+    return (gate_name(stim_name, defined),)
 
 
 def _check_existing_noise(found: _Scan, policy: ExistingNoise) -> None:
@@ -349,6 +390,7 @@ class _Exporter:
         existing_noise: ExistingNoise,
         unknown_gates: UnknownGates,
     ) -> None:
+        self.profile = profile
         self.table = profile.table
         self.defined = profile.gates
         self.physical = physical
@@ -507,7 +549,7 @@ class _Exporter:
         try:
             refuse_disabled(self.table.gate(name, wires))
         except DisabledGateError as exc:
-            raise self._explain(instruction, wires, exc) from None
+            raise self._explain(instruction, name, wires, exc, self._enabled) from None
 
     def _prep(self, name: str, qubits: list[int], lines: list[str]) -> None:
         noise: dict[str, list[int]] = {}
@@ -544,7 +586,7 @@ class _Exporter:
                 self.table, name, wires, unknown_gates=self.unknown_gates, report=self.report
             )
         except (MissingCalibrationError, DisabledGateError, LayoutError) as exc:
-            raise self._explain(instruction, wires, exc) from exc
+            raise self._explain(instruction, name, wires, exc, self._resolves) from exc
         events = _added_events(before, self.report.events)
         if len(qubits) > 2:
             probs = pauli_twirl(built.channels, wires)
@@ -552,34 +594,77 @@ class _Exporter:
         return _Resolved(events, prefix=self._twirl(built.channels, wires))
 
     def _explain(
-        self, instruction: str, wires: tuple[int, ...], exc: NoiseVaultError
+        self,
+        instruction: str,
+        name: str,
+        wires: tuple[int, ...],
+        exc: NoiseVaultError,
+        runs: Callable[[str, tuple[int, ...]], bool],
     ) -> NoiseVaultError:
         steps = [exc.hint] if exc.hint else []
-        if len(wires) == 2 and (hint := self._layout_hint(wires)):
+        if len(wires) == 2 and (hint := self._layout_hint(name, wires, runs)):
             steps.append(hint)
         return type(exc)(
             f"{instruction} (physical {qubit_loci(wires)}): {exc.message}",
             hint="; ".join(steps) or None,
         )
 
-    def _layout_hint(self, wires: tuple[int, ...]) -> str | None:
+    def _layout_hint(
+        self, name: str, wires: tuple[int, ...], runs: Callable[[str, tuple[int, ...]], bool]
+    ) -> str | None:
+        """A layout step only when ``name`` runs on a pair the step can choose."""
         table = self.table
+        pairs = table.edges() if table.all_to_all else table.listed_pairs()
+        sides = [
+            side
+            for pair in pairs
+            if can_measure(table, pair[0]) and can_measure(table, pair[1])
+            for side in (pair, pair[::-1])
+            if runs(name, side)
+        ]
+        if not sides:
+            return None
+        both = set(sides) & {side[::-1] for side in sides}
+        if not all(pair in both for pair in pairs if self._usable_pair(pair)):
+            return f"pass layout= to put {name} on {qubit_loci(sides[0])}, where it runs"
         if not (table.all_to_all or tuple(sorted(wires)) in table.listed_pairs()):
             return (
                 "pass layout= to put 2-qubit gates on connected pairs"
                 " (profile.suggest_layout(n) proposes a layout, and"
                 " noisevault.stim.layout_from_coords matches the circuit's QUBIT_COORDS)"
             )
-        if isinstance(table.typical(2, wires), GateNoise):
-            return None
-        pairs = table.edges() if table.all_to_all else table.listed_pairs()
-        sides = (side for pair in pairs for side in (pair, pair[::-1]))
-        if not any(isinstance(table.typical(2, side), GateNoise) for side in sides):
-            return None
         return (
             "pass layout= to put 2-qubit gates on pairs with a usable 2-qubit gate"
             " (profile.suggest_layout(n) proposes a chain of such pairs)"
         )
+
+    def _enabled(self, name: str, wires: tuple[int, ...]) -> bool:
+        try:
+            refuse_disabled(self.table.gate(name, wires))
+        except DisabledGateError:
+            return False
+        return True
+
+    @functools.cached_property
+    def _scratch(self) -> Report:
+        return Report.start(self.profile, "stim", stim.__version__)
+
+    def _resolves(self, name: str, wires: tuple[int, ...]) -> bool:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                resolve_op(
+                    self.table, name, wires, unknown_gates=self.unknown_gates, report=self._scratch
+                )
+        except (NoiseVaultError, ValueError):
+            return False
+        return True
+
+    def _usable_pair(self, pair: tuple[int, int]) -> bool:
+        table = self.table
+        if not (can_measure(table, pair[0]) and can_measure(table, pair[1])):
+            return False
+        return any(isinstance(table.typical(2, side), GateNoise) for side in (pair, pair[::-1]))
 
     def _twirl(self, channels: Sequence[ChannelSpec], wires: tuple[int, ...]) -> str:
         # Devices with shared defaults repeat the same channel on every pair: twirl it once.
@@ -872,10 +957,27 @@ _TURN_45 = 0.5 * np.array([[1.0, 1.0], [1.0, -1.0]])  # diagonal neighbors becom
 _TRANSFORMS = _D8 + [d @ _TURN_45 for d in _D8]
 
 
+def _placeable(table: NoiseTable, name: str, arity: int) -> bool:
+    """False when no enabled qubit or pair of the device allows ``name``."""
+    if arity == 1:
+        sides: Iterable[tuple[int, ...]] = ((q,) for q in range(table.num_qubits))
+    elif arity == 2:
+        sides = (side for pair in table.edges() for side in (pair, pair[::-1]))
+    else:
+        return True
+    for side in sides:
+        found = table.gate(name, side)
+        disabled = isinstance(found, GateNoise) and found.state == "disabled"
+        if not (disabled or any(table.qubit(q).disabled for q in side)):
+            return True
+    return False
+
+
 class _Device:
     """Enabled device qubits with coords, looked up by position (to 1e-6) in bulk."""
 
-    def __init__(self, profile: Profile) -> None:
+    def __init__(self, profile: Profile, placeable: bool) -> None:
+        self.hint = "pass layout={stim qubit: physical qubit}" if placeable else None
         usable = [
             (q.coords[:2], q.index)
             for q in profile.qubits
@@ -884,7 +986,7 @@ class _Device:
         if not usable:
             raise LayoutError(
                 f"{profile.id} records no qubit coords",
-                hint="pass layout={stim qubit: physical qubit}",
+                hint=self.hint,
             )
         self.profile_id = profile.id
         self.index = np.array([i for _, i in usable], dtype=int)
@@ -922,7 +1024,7 @@ class _Device:
             f"{self.profile_id} has {qubits}"
             f" at coords ({x:g}, {y:g}), so the circuit's QUBIT_COORDS have no single device"
             " qubit there",
-            hint="pass layout={stim qubit: physical qubit}",
+            hint=self.hint,
         )
 
     def _keys(self, grid: np.ndarray) -> np.ndarray:
@@ -931,16 +1033,35 @@ class _Device:
         return inside[..., 0] * (self.high[1] - self.low[1] + 1) + inside[..., 1]
 
 
+def _distinct_rows(rows: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """The distinct rows of ``rows``, with entries in 0..n-1, and the index of each row in them."""
+    if n ** rows.shape[1] > np.iinfo(np.int64).max:
+        return np.unique(rows, axis=0, return_inverse=True)
+    codes = rows @ n ** np.arange(rows.shape[1], dtype=np.int64)
+    _, first, inverse = np.unique(codes, return_index=True, return_inverse=True)
+    return rows[first], inverse
+
+
 def _grid_units(points: np.ndarray) -> np.ndarray:
     return np.rint(points * 1e6).astype(np.int64)
 
 
 class _PlacementCost:
-    """Summed 2-qubit error of the circuit's pairs plus mean readout error, or inf if unusable."""
+    """Summed 2-qubit error of the circuit's pairs plus mean readout error, or inf if unusable.
 
-    def __init__(self, profile: Profile, pairs: np.ndarray) -> None:
+    A placement is unusable when a pair has no usable 2-qubit gate, or when an operation lands
+    where the profile disables it.
+    """
+
+    def __init__(
+        self, profile: Profile, pairs: np.ndarray, operations: list[tuple[str, np.ndarray]]
+    ) -> None:
         self.table = profile.table
         self.pairs = pairs  # (pairs, 2) columns of a placement
+        disabled = {name for name, spec in profile.gates.items() if spec.disabled}
+        disabled |= {record.gate for record in profile.calibrations if record.disabled}
+        self.operations = [(name, columns) for name, columns in operations if name in disabled]
+        self._disabled: dict[tuple[str, tuple[int, ...]], bool] = {}
         self.readout = np.array(
             [
                 sum(r) / 2 if (r := self.table.qubit(i).readout) else 0.0
@@ -969,7 +1090,23 @@ class _PlacementCost:
             )
             errors[maybe] = [self._pair_error(int(c), n) for c in unique[maybe]]
             total = total + errors[inverse.reshape(codes.shape)].sum(axis=1)
-        return np.where(np.isnan(total), np.inf, total)
+        return np.where(np.isnan(total) | self._blocked(placements), np.inf, total)
+
+    def _blocked(self, placements: np.ndarray) -> np.ndarray:
+        blocked = np.zeros(len(placements), dtype=bool)
+        for name, columns in self.operations:
+            wires = placements[:, columns].reshape(-1, columns.shape[1])
+            unique, inverse = _distinct_rows(wires, self.table.num_qubits)
+            off = np.array([self._is_disabled(name, tuple(map(int, row))) for row in unique])
+            blocked |= off[inverse.reshape(len(placements), -1)].any(axis=1)
+        return blocked
+
+    def _is_disabled(self, name: str, wires: tuple[int, ...]) -> bool:
+        key = (name, wires)
+        if key not in self._disabled:
+            found = self.table.gate(name, wires)
+            self._disabled[key] = isinstance(found, GateNoise) and found.state == "disabled"
+        return self._disabled[key]
 
     def _pair_error(self, code: int, n: int) -> float:
         if code not in self._pair:

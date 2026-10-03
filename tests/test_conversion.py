@@ -81,16 +81,64 @@ def test_typical_noise_is_used_reported_and_warned_once(name, qubits, typical) -
     assert [a.what for a in report.approximated] == [f"gate {name}"]
 
 
-def test_unknown_gates_error_raises_instead() -> None:
-    profile, report = _setup()
-    for name, qubits in (("h", (0,)), ("x", (1,)), ("cz", (0, 2))):
-        with pytest.raises(MissingCalibrationError, match="unknown_gates='typical'") as caught:
-            _resolve(profile, report, name, qubits, "error")
-        assert caught.value.hint == (
-            "compile to the profile's native gates, or pass unknown_gates='typical' to use the"
-            " typical native gate's noise"
-        )
+_NATIVE_OR_TYPICAL = (
+    "compile to the profile's native gates, or pass unknown_gates='typical' to use the typical"
+    " native gate's noise"
+)
+_TWO_UNCALIBRATED = {
+    "device": {"name": "two", "vendor": "test", "technology": "superconducting", "num_qubits": 2},
+    "connectivity": "all_to_all",
+    "gates": {"rz": {"virtual": True}, "sx": {"avg_infidelity": 1e-3}, "cz": {}},
+}
+_CZ_01 = [{"gate": "cz", "qubits": [0, 1], "avg_infidelity": 1e-2}]
+
+
+@pytest.mark.parametrize(
+    ("sections", "name", "qubits", "hint", "fix", "native"),
+    [
+        ({"gates": GATES}, "h", (0,), _NATIVE_OR_TYPICAL, None, "sx"),
+        ({"gates": GATES}, "x", (1,), _NATIVE_OR_TYPICAL, None, "sx"),
+        ({"gates": GATES}, "cz", (0, 2), None, None, None),
+        (_TWO_UNCALIBRATED, "cz", (0, 1), "give cz an error metric on qubits 0-1", _CZ_01, "cz"),
+        (
+            _TWO_UNCALIBRATED,
+            "cx",
+            (0, 1),
+            "give cz an error metric on qubits 0-1, then compile to the profile's native gates",
+            _CZ_01,
+            "cz",
+        ),
+    ],
+    ids=[
+        "not defined",
+        "uncalibrated beside a calibrated native",
+        "pair not connected",
+        "uncalibrated native, no calibrated native",
+        "not defined, no calibrated native",
+    ],
+)
+def test_unknown_gates_error_names_only_steps_that_run(
+    sections, name, qubits, hint, fix, native
+) -> None:
+    profile = Profile.model_validate(toy(**sections))
+    report = Report.start(profile, "test", None)
+    with pytest.raises(MissingCalibrationError) as caught:
+        _resolve(profile, report, name, qubits, "error")
+    assert caught.value.hint == hint
     assert report.events == {}
+    typical_runs = True
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", NoiseApproximationWarning)
+            _resolve(profile, report, name, qubits)
+    except MissingCalibrationError:
+        typical_runs = False
+    assert typical_runs is ("unknown_gates='typical'" in (hint or ""))
+    if fix is not None:
+        profile = Profile.model_validate(toy(**sections, calibrations=fix))
+        report = Report.start(profile, "test", None)
+    if native is not None:
+        assert _resolve(profile, report, native, qubits, "error").channels
 
 
 @pytest.mark.parametrize("unknown_gates", ["typical", "error"])

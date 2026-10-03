@@ -219,8 +219,12 @@ print(model.report.summary())
 ```
 
 Integer wire i maps to device qubit i. Other wire labels need `layout`. A measurement without
-wires, such as `qml.probs()`, gets readout error only on the wires that the circuit's operations
-touch. To give every wire readout error, pass `wires=` to the measurement.
+wires, such as `qml.probs()`, reads every device wire. The model checks those wires against the
+layout and the `measure` entry, as for `wires=`. `qml.add_noise` on a tape cannot see the device.
+The model then refuses a measurement without wires if a wire that the circuit does not use can
+map to a qubit that cannot measure. A measurement without wires gets readout error only on the
+wires that the circuit's operations touch. To give every wire readout error, pass `wires=` to
+the measurement.
 
 What the report can list:
 
@@ -259,7 +263,10 @@ readout operations, so they stay on one tape and their samples stay correlated. 
 read one wire in different bases, such as `qml.Z(0)` and `qml.X(0)`, get separate shots. If a
 third word commutes with both, `default.mixed` decides which shots that word shares. The model
 cannot see that decision, so the model raises an error. To fix the error, wrap the QNode in
-`qml.transforms.split_non_commuting` before `qml.add_noise`.
+`qml.transforms.split_non_commuting` before `qml.add_noise`. `default.mixed` also puts
+`qml.probs(op=...)` of an identity or zero observable, such as `qml.I(0) @ qml.I(1)`, in a group
+of commuting words. Those probabilities then show the basis of that group, and the model gives
+them the readout operations of that group.
 
 The model simplifies each Pauli observable as PennyLane does. The model then selects the measured
 basis, the words that share shots and the wires that a measurement reads. The simplification
