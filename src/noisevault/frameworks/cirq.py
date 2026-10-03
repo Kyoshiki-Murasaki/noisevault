@@ -6,7 +6,8 @@ assignment error as a ``MeasurementGate`` confusion map. A terminal measurement 
 error as a channel directly before it (see :class:`NoiseVaultNoiseModel`). A reset gets the
 preparation error, and ``WaitGate`` gets thermal relaxation. ``LineQubit(i)`` is device qubit
 ``i`` unless ``layout`` gives a different qubit. ``GridQubit(r, c)`` is the qubit at coords
-``(r, c)`` when the profile records coords.
+``(r, c)`` when the profile records coords. If two enabled qubits have the same coords, give
+``layout``.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Any, get_args
 
 import numpy as np
 
-from ..errors import LayoutError, install_hint
+from ..errors import LayoutError, install_hint, qubit_loci
 
 try:
     import cirq
@@ -32,7 +33,7 @@ from .. import gates
 from ..channels import readout_matrix
 from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
 from ..layout import normalize_layout
-from ..profile import Profile
+from ..profile import Profile, QubitRecord
 from ..report import Report
 
 CirqLayout = Mapping[Any, int] | Sequence[int]
@@ -181,7 +182,10 @@ class _QubitMap:
     def __init__(self, profile: Profile, layout: CirqLayout | None) -> None:
         self._profile = profile
         self._explicit = layout is not None
-        self._coords = {tuple(r.coords): r.index for r in profile.qubits if r.coords is not None}
+        self._coords: dict[tuple[float, ...], list[QubitRecord]] = defaultdict(list)
+        for record in profile.qubits:
+            if record.coords is not None:
+                self._coords[tuple(record.coords)].append(record)
         self._known: dict[cirq.Qid, int] = {}
         if layout is not None:
             keyed = _keyed_layout(layout)
@@ -220,14 +224,21 @@ class _QubitMap:
             return qid.x
         fix = f"pass layout={{{qid!r}: <device qubit>, ...}} covering every circuit qubit"
         if isinstance(qid, cirq.GridQubit) and self._coords:
-            index = self._coords.get((qid.row, qid.col))
-            if index is None:
+            records = self._coords.get((qid.row, qid.col))
+            if records is None:
                 some = ", ".join(f"GridQubit{c}" for c in list(self._coords)[:3])
                 raise LayoutError(
                     f"{self._profile.id} has no qubit at coords ({qid.row}, {qid.col})",
                     hint=f"use the device's coords, for example {some}, or {fix}",
                 )
-            return index
+            enabled = [r.index for r in records if not r.disabled]
+            if len(enabled) > 1:
+                raise LayoutError(
+                    f"{self._profile.id} has {qubit_loci(*((i,) for i in enabled), limit=None)}"
+                    f" at coords ({qid.row}, {qid.col}), so {qid!r} has no single device qubit",
+                    hint=fix,
+                )
+            return enabled[0] if enabled else records[0].index
         why = (
             "records no qubit coords"
             if isinstance(qid, cirq.GridQubit)
@@ -244,14 +255,18 @@ def _keyed_layout(layout: CirqLayout) -> dict[cirq.Qid, int]:
     """A layout keyed by Cirq qubits. A sequence or an integer key means LineQubit(i)."""
     if not isinstance(layout, Mapping):
         return {cirq.LineQubit(i): p for i, p in enumerate(layout)}
-    keyed: dict[cirq.Qid, int] = {}
-    for key, index in layout.items():
-        if isinstance(key, int) and not isinstance(key, bool):
-            key = cirq.LineQubit(key)
-        if not isinstance(key, cirq.Qid):
+    given: dict[cirq.Qid, Any] = {}
+    for key in layout:
+        qid = cirq.LineQubit(key) if isinstance(key, int) and not isinstance(key, bool) else key
+        if not isinstance(qid, cirq.Qid):
             raise LayoutError(f"layout key {key!r} is not a Cirq qubit or an integer")
-        keyed[key] = index
-    return keyed
+        if qid in given:
+            raise LayoutError(
+                f"layout keys {given[qid]!r} and {key!r} both name {qid!r}",
+                hint="keep one of the two keys",
+            )
+        given[qid] = key
+    return {qid: layout[key] for qid, key in given.items()}
 
 
 class NoiseVaultNoiseModel(cirq.NoiseModel):
@@ -484,8 +499,10 @@ def to_cirq(
     """A Cirq noise model of ``profile``, carrying ``.report`` and ``.profile``.
 
     ``layout`` maps circuit qubits (Cirq qubits, or integers meaning ``LineQubit(i)``, or a
-    sequence indexed by LineQubit) to device qubits. Without it ``LineQubit(i)`` is qubit ``i``
-    and ``GridQubit(r, c)`` is the qubit at coords ``(r, c)`` if the profile records coords.
+    sequence indexed by LineQubit) to device qubits. The keys ``i`` and ``LineQubit(i)`` in one
+    layout raise LayoutError. Without ``layout``, ``LineQubit(i)`` is qubit ``i`` and
+    ``GridQubit(r, c)`` is the qubit at coords ``(r, c)`` if the profile records coords. If two
+    enabled qubits have those coords, the model raises LayoutError.
     ``unknown_gates="typical"`` gives gates the profile does not calibrate the noise of its
     typical native gate, with one report entry and one warning per gate. ``"error"`` raises
     an error instead. ``readout=False`` leaves measurements noiseless.

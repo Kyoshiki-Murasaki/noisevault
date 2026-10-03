@@ -539,6 +539,52 @@ def test_default_placement_must_be_injective_within_a_circuit_only() -> None:
     assert caught.value.hint == "pass layout= to place them explicitly"
 
 
+def _shared_coords(*, second_disabled: bool = False) -> Profile:
+    qubits = [
+        {"index": 0, "coords": [0, 0]},
+        {"index": 1, "coords": [0, 0], "disabled": second_disabled},
+        {"index": 2, "coords": [0, 1]},
+    ]
+    return Profile.model_validate(toy(qubits=qubits))
+
+
+def test_grid_qubit_at_coords_of_two_enabled_qubits_needs_a_layout() -> None:
+    model = to_cirq(_shared_coords())
+    with pytest.raises(LayoutError) as caught:
+        model.noisy_operation(cirq.X(cirq.GridQubit(0, 0)))
+    assert str(caught.value).startswith(
+        "test_toy has qubits 0 and 1 at coords (0, 0), so cirq.GridQubit(0, 0) has no single device"
+        " qubit"
+    )
+    assert caught.value.hint == (
+        "pass layout={cirq.GridQubit(0, 0): <device qubit>, ...} covering every circuit qubit"
+    )
+    assert model._qubits.physical([cirq.GridQubit(0, 1)]) == (2,)
+    placed = to_cirq(_shared_coords(), layout={cirq.GridQubit(0, 0): 1})
+    assert placed._qubits.physical([cirq.GridQubit(0, 0)]) == (1,)
+
+
+def test_grid_qubit_at_coords_of_an_enabled_and_a_disabled_qubit_takes_the_enabled_one() -> None:
+    model = to_cirq(_shared_coords(second_disabled=True))
+    assert model._qubits.physical([cirq.GridQubit(0, 0)]) == (0,)
+
+
+@pytest.mark.parametrize(
+    ("layout", "first", "second"),
+    [
+        ({0: 99, cirq.LineQubit(0): 1}, "0", "cirq.LineQubit(0)"),
+        ({cirq.LineQubit(0): 1, 0: 0}, "cirq.LineQubit(0)", "0"),
+    ],
+)
+def test_layout_keys_that_name_one_qubit_raise(layout, first, second) -> None:
+    with pytest.raises(LayoutError) as caught:
+        to_cirq(Profile.model_validate(toy()), layout=layout)
+    assert str(caught.value).startswith(
+        f"layout keys {first} and {second} both name cirq.LineQubit(0)"
+    )
+    assert caught.value.hint == "keep one of the two keys"
+
+
 _COVERING = ": <device qubit>, ...} covering every circuit qubit"
 
 

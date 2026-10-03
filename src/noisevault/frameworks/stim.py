@@ -16,7 +16,7 @@ import functools
 from collections import Counter
 from collections.abc import Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, NamedTuple, get_args
+from typing import Any, Literal, NamedTuple, NoReturn, get_args
 
 import numpy as np
 
@@ -206,7 +206,9 @@ def layout_from_coords(circuit: stim.Circuit | str, profile: Profile) -> dict[in
     also tries them after a 45 degree turn, because Stim's rotated surface codes put neighbors
     on diagonals. A placement must put every qubit on an enabled device qubit and every 2-qubit
     gate on a pair with a calibrated native gate. From the valid placements, the function
-    returns the one with the lowest summed 2-qubit gate error and mean readout error.
+    returns the one with the lowest summed 2-qubit gate error and mean readout error. If a
+    placement puts a qubit on coords that two enabled device qubits have, the function raises
+    LayoutError.
     """
     circuit = _as_circuit(circuit)
     found = _scan(circuit)
@@ -840,12 +842,15 @@ class _Device:
                 f"{profile.id} records no qubit coords",
                 hint="pass layout={stim qubit: physical qubit}",
             )
+        self.profile_id = profile.id
         self.index = np.array([i for _, i in usable], dtype=int)
-        self.grid = _grid_units(np.array([c for c, _ in usable], dtype=float))
+        self.coords = np.array([c for c, _ in usable], dtype=float)
+        self.grid = _grid_units(self.coords)
         self.low, self.high = self.grid.min(axis=0), self.grid.max(axis=0)
         keys = self._keys(self.grid)
         self.order = np.argsort(keys, kind="stable")
         self.sorted_keys = keys[self.order]
+        self.shared = np.unique(self.sorted_keys[1:][np.diff(self.sorted_keys) == 0])
 
     def placements(self, points: np.ndarray) -> np.ndarray:
         """Physical qubits of every shift that lands all points on device qubits.
@@ -859,7 +864,22 @@ class _Device:
         keys = self._keys(self.grid[fits][:, None, :] + offsets[None, :, :])
         at = np.searchsorted(self.sorted_keys, keys).clip(max=len(self.sorted_keys) - 1)
         whole = (self.sorted_keys[at] == keys).all(axis=1)
+        matched = keys[whole]
+        hit = np.isin(matched, self.shared)
+        if hit.any():
+            self._refuse_shared(int(matched[hit][0]))
         return self.index[self.order[at[whole]]]
+
+    def _refuse_shared(self, key: int) -> NoReturn:
+        rows = self.order[self.sorted_keys == key]
+        x, y = self.coords[rows[0]]
+        qubits = qubit_loci(*((int(i),) for i in self.index[rows]), limit=None)
+        raise LayoutError(
+            f"{self.profile_id} has {qubits}"
+            f" at coords ({x:g}, {y:g}), so the circuit's QUBIT_COORDS have no single device"
+            " qubit there",
+            hint="pass layout={stim qubit: physical qubit}",
+        )
 
     def _keys(self, grid: np.ndarray) -> np.ndarray:
         """One integer per point inside the device's bounding box."""

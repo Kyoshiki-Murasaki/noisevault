@@ -161,8 +161,10 @@ print(model.report.summary())
 ```
 
 `LineQubit(i)` is device qubit i. `GridQubit(r, c)` is the qubit whose `coords` are `[r, c]`. Google
-profiles record `coords`. Other qubit types need `layout={qubit: index, ...}`. Gates match by Cirq
-class and exponent. `cirq.X**0.5` is `sx`, `cirq.ZZ**0.5` is `zz`, and `cirq.Z**t` is the phase gate
+profiles record `coords`. If two enabled qubits have the same `coords`, give `layout`. Other qubit
+types need `layout={qubit: index, ...}`. Do not use both `i` and `cirq.LineQubit(i)` as keys in one
+layout. They name the same qubit, so the model raises `LayoutError`. Gates match by Cirq class and
+exponent. `cirq.X**0.5` is `sx`, `cirq.ZZ**0.5` is `zz`, and `cirq.Z**t` is the phase gate
 `p`, or `s`, `t` or their inverses at those exponents. The model splits `cirq.PhasedXZGate` into the
 `r` gate and `cirq.Z**z`. Each part gets the noise that it would get on its own.
 
@@ -277,7 +279,8 @@ print(noisy.report.summary())
 `CX` is not a Fez native, so here `CX` gets the noise of `cz` on the same pair, with a warning.
 The report also states this substitution. For a grid device,
 `noisevault.stim.layout_from_coords(circuit, profile)` places a circuit by matching its
-`QUBIT_COORDS` to the profile's qubit coords.
+`QUBIT_COORDS` to the profile's qubit coords. If a match uses coords that two enabled qubits
+have, the function raises `LayoutError`. Then give `layout=` to `to_stim`.
 
 In `MPP` and `SPP`, the export first reduces each Pauli product. Pauli factors on one qubit
 multiply. A qubit whose Pauli factors cancel is neither read out nor busy. A product that reduces

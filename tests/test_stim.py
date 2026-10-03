@@ -867,6 +867,23 @@ def test_layout_from_coords_says_what_to_do_without_coords():
     assert caught.value.hint == "add QUBIT_COORDS for each qubit or pass layout="
 
 
+def test_layout_from_coords_refuses_a_match_on_coords_of_two_enabled_qubits():
+    five = {"name": "five", "vendor": "test", "technology": "superconducting", "num_qubits": 5}
+    data = toy(device=five)
+    coords = [[0, 0], [0, 1], [0, 2], [5, 5], [5, 5]]
+    data["qubits"] = [{"index": i, "coords": c} for i, c in enumerate(coords)]
+    profile = Profile.model_validate(data)
+    with pytest.raises(LayoutError) as caught:
+        layout_from_coords("QUBIT_COORDS(5, 5) 0\nM 0", profile)
+    assert str(caught.value).startswith(
+        "test_five has qubits 3 and 4 at coords (5, 5), so the circuit's QUBIT_COORDS have no"
+        " single device qubit there"
+    )
+    assert caught.value.hint == "pass layout={stim qubit: physical qubit}"
+    line = "QUBIT_COORDS(0, 0) 0\nQUBIT_COORDS(0, 1) 1\nQUBIT_COORDS(0, 2) 2\nM 0 1 2"
+    assert layout_from_coords(line, profile) == {0: 0, 1: 1, 2: 2}
+
+
 @pytest.mark.parametrize(
     "circuit",
     ["QUBIT_COORDS(0, 0) 1\nCX sweep[0] 1\nM 1", "QUBIT_COORDS(0, 0) 1\nM 1\nCZ rec[-1] 1\nM 1"],
