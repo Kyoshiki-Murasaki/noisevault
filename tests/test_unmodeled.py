@@ -90,7 +90,7 @@ def test_a_fitted_kingston_passes_check_and_every_report_states_the_factors(
     result = check(fitted, frameworks=[framework])
     assert result.passed, result.summary()
     (ran,) = result.frameworks
-    assert ran.report.splitlines()[1] == (
+    assert {r.summary().splitlines()[1] for r in ran.reports} == {
         "unmodeled error: gate errors x1.8; readout errors x1.3; T1, T2 and preparation error"
         " are not scaled; readout of qubit 146 is not scaled (no better than chance)"
-    )
+    }

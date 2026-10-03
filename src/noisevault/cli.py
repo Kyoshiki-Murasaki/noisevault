@@ -1018,7 +1018,7 @@ def check(
                 {"framework": name, "result": "not installed" if name in missing else "skipped"}
                 for name, _ in result.skipped
             ]
-            columns = ["framework", "result", "TVD", "tolerance", "circuits", "method"]
+            columns = ["framework", "result", "deviation", "tolerance", "circuits", "method"]
             table = _fit(lambda shown: _check_table(rows, shown), columns, _CHECK_DROPS)
             _emit(table, natural_width=_natural_width(table))
             for f in result.frameworks:
@@ -1057,7 +1057,7 @@ def _check_row(f: FrameworkCheck, result: CheckResult) -> dict[str, str]:
     return {
         "framework": f.framework,
         "result": "[green]pass[/green]" if f.passed else "[red]FAIL[/red]",
-        "TVD": f"{f.worst.tvd:.1e}",
+        "deviation": f"{f.worst.deviation:.1e}",
         "tolerance": f"{f.worst.tolerance:.1e}",
         "circuits": f"{counted}, {len(reduced)} reduced" if reduced else counted,
         "method": method,
@@ -1067,7 +1067,7 @@ def _check_row(f: FrameworkCheck, result: CheckResult) -> dict[str, str]:
 def _check_table(rows: list[dict[str, str]], columns: list[str]) -> Table:
     table = Table(box=None, pad_edge=False, header_style="bold")
     for column in columns:
-        justify = "right" if column in ("TVD", "tolerance") else "left"
+        justify = "right" if column in ("deviation", "tolerance") else "left"
         table.add_column(column, justify=justify, no_wrap=True)
     for row in rows:
         table.add_row(*(row.get(column, "") for column in columns))

@@ -538,8 +538,85 @@ def test_result_serializes_and_prints() -> None:
     result = nv.load("ibm_manila").check(frameworks=["cirq"], layout=[2, 1, 0])
     data = json.loads(json.dumps(result.to_dict()))
     assert data["passed"] is True and data["layout"] == {"0": 2, "1": 1, "2": 0}
-    assert data["frameworks"][0]["report"]["approximated"] >= 1
+    (report,) = data["frameworks"][0]["reports"]
+    assert report["framework"] == "cirq" and report["approximated"]
     assert "A pass does not measure how well the model matches the hardware." in str(result)
+
+
+def _line(num_qubits: int, **sections) -> Profile:
+    device = {"name": "line", "vendor": "test", "technology": "superconducting"}
+    return Profile.model_validate(
+        toy(
+            device={**device, "num_qubits": num_qubits},
+            connectivity={"edges": [[q, q + 1] for q in range(num_qubits - 1)]},
+            **sections,
+        )
+    )
+
+
+def test_nv_check_json_names_every_qubit_that_an_export_report_names(tmp_path: Path) -> None:
+    readout = {"p1_given_0": 0.01, "p0_given_1": 0.02}
+    path = _line(8, qubits=[{"index": q, "readout": readout} for q in (3, 4, 5)]).save(
+        tmp_path / "eight.json"
+    )
+    result = CliRunner().invoke(app, ["check", str(path), "--framework", "qiskit", "--json"])
+    (report,) = json.loads(result.stdout)["frameworks"][0]["reports"]
+    assert report["unknown"] == [
+        "readout error of qubits 0, 1, 2, 6 and 7",
+        "preparation (reset) error of qubits 0, 1, 2, 3, 4, 5, 6 and 7",
+    ]
+
+
+def test_a_saved_stim_check_names_the_qubits_of_every_circuit_once() -> None:
+    result = check(
+        _line(4, gates={"z": {"avg_infidelity": 1e-3}}), frameworks=["stim"], layout=[0, 1, 2, 3]
+    )
+    assert [(c.name, c.num_qubits) for c in result.circuits] == [
+        ("single_qubit", 2),
+        ("readout", 4),
+    ]
+    saved = json.loads(json.dumps(result.to_dict()))
+    reports = saved["frameworks"][0]["reports"]
+    assert [r["options"]["readout"] for r in reports] == ["exact", "symmetrize"]
+    for report in reports:
+        assert report["unknown"] == ["readout error of physical qubits 0, 1, 2 and 3"]
+
+
+def _stim_without_the_readout_of_qubit_3(monkeypatch: pytest.MonkeyPatch) -> Profile:
+    from noisevault.frameworks import stim as nv_stim
+
+    flip = nv_stim._Exporter._readout_flip
+
+    def without_qubit_3(self, qubits):
+        return flip(self, [q for q in qubits if self.physical[q] != 3])
+
+    monkeypatch.setattr(nv_stim._Exporter, "_readout_flip", without_qubit_3)
+    return _line(
+        4,
+        gates={"h": {"avg_infidelity": 1e-3}, "cz": {"avg_infidelity": 1e-2}},
+        readout={"error": 0.1},
+        qubits=[{"index": 3, "readout": {"error": 0.003}}],
+    )
+
+
+def test_a_failing_sampled_check_names_a_circuit_that_failed(monkeypatch) -> None:
+    profile = _stim_without_the_readout_of_qubit_3(monkeypatch)
+    worst = [
+        check(profile, frameworks=["stim"], seed=seed).frameworks[0].worst for seed in range(4)
+    ]
+    assert [w.passed for w in worst] == [False] * 4
+    assert all(w.circuit == "readout" and w.deviation > w.tolerance for w in worst)
+
+
+def test_nv_check_prints_the_outcome_that_failed_against_its_tolerance(
+    monkeypatch, tmp_path: Path
+) -> None:
+    path = _stim_without_the_readout_of_qubit_3(monkeypatch).save(tmp_path / "four.json")
+    result = CliRunner().invoke(app, ["check", str(path), "--framework", "stim"])
+    lines = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()
+    assert lines[2].split()[:4] == ["framework", "result", "deviation", "tolerance"]
+    assert lines[3].split()[:4] == ["stim", "FAIL", "2.2e-03", "1.9e-03"]
+    assert result.exit_code == 1
 
 
 def test_profile_check_spells_out_its_options() -> None:

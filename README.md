@@ -159,11 +159,11 @@ NoiseVault's own density-matrix reference:
 $ nv check ibm_fez
 ibm_fez@2025-02-26T20:16:25Z nv:06404cefa54f on qubits 136-143-142-141
 4 circuits: ghz_chain, mirror, single_qubit, readout
-framework  result      TVD  tolerance  circuits  method
-qiskit     pass    1.1e-02    7.0e-02  4 of 4    exact + 20000 shots
-cirq       pass    3.7e-16    1.0e-09  4 of 4    exact
-pennylane  pass    6.1e-16    1.0e-09  4 of 4    exact
-stim       pass    1.3e-03    5.6e-03  4 of 4    20000 shots, 5 sigma
+framework  result  deviation  tolerance  circuits  method
+qiskit     pass      3.6e-03    8.8e-03  4 of 4    exact + 20000 shots
+cirq       pass      3.7e-16    1.0e-09  4 of 4    exact
+pennylane  pass      6.1e-16    1.0e-09  4 of 4    exact
+stim       pass      1.2e-03    2.8e-03  4 of 4    20000 shots, 5 sigma
 ```
 
 A pass means each export implements the same noise model as the NoiseVault reference on these

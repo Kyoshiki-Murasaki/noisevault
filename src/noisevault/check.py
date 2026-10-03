@@ -19,7 +19,7 @@ from __future__ import annotations
 import warnings
 from collections import Counter
 from collections.abc import Callable, Hashable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import pi
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -30,6 +30,7 @@ from .channels import pauli_kraus, pauli_twirl, readout_matrix
 from .conversion import resolve_op
 from .errors import (
     LayoutError,
+    LociText,
     NoiseApproximationWarning,
     NoiseVaultError,
     install_hint,
@@ -80,13 +81,27 @@ class Circuit:
 
 @dataclass(frozen=True)
 class CircuitCheck:
+    """One circuit run through one framework, compared with the reference.
+
+    ``gates`` are the gates that the framework's version of the circuit uses. The circuit passes
+    when ``deviation`` is at most ``tolerance``. In an exact check, ``deviation`` is the TVD and
+    ``tolerance`` is ``EXACT_TOLERANCE``. In a sampled check, each outcome has a tolerance of
+    ``SIGMAS`` standard errors plus ``SIGMAS / shots``. ``deviation`` is then the difference
+    between the frequency and the reference probability of the outcome with the highest ratio of
+    difference to tolerance. ``tolerance`` is the tolerance of that outcome.
+    """
+
     circuit: str
     num_qubits: int
-    gates: tuple[str, ...]  # the gates this framework's version of the circuit uses
+    gates: tuple[str, ...]
     tvd: float
+    deviation: float
     tolerance: float
-    passed: bool
-    sampled: bool = False  # True: shots through the framework's own measurement, 5 sigma
+    sampled: bool = False
+
+    @property
+    def passed(self) -> bool:
+        return self.deviation <= self.tolerance
 
 
 @dataclass(frozen=True)
@@ -109,17 +124,18 @@ class NotRun:
 
 @dataclass(frozen=True)
 class FrameworkCheck:
-    """One framework's export run on the check circuits it can express."""
+    """One framework's export run on the check circuits it can express.
+
+    ``reports`` holds one export report for each export configuration that the check ran. Each
+    report has the entries of every circuit that ran with that configuration.
+    """
 
     framework: str
     version: str
     method: str
     circuits: tuple[CircuitCheck, ...]
     not_run: tuple[NotRun, ...]  # what of the plan this framework cannot express
-    approximated: int
-    omitted: int
-    unknown: int
-    report: str  # the export report's summary
+    reports: tuple[Report, ...]
 
     @property
     def passed(self) -> bool:
@@ -127,8 +143,8 @@ class FrameworkCheck:
 
     @property
     def worst(self) -> CircuitCheck:
-        """The circuit closest to (or furthest past) its tolerance."""
-        return max(self.circuits, key=lambda c: c.tvd / c.tolerance)
+        """The circuit with the highest ratio of deviation to tolerance."""
+        return max(self.circuits, key=lambda c: c.deviation / c.tolerance)
 
     @property
     def max_tvd(self) -> float:
@@ -144,19 +160,17 @@ class FrameworkCheck:
             "worst": {
                 "circuit": self.worst.circuit,
                 "tvd": self.worst.tvd,
+                "deviation": self.worst.deviation,
                 "tolerance": self.worst.tolerance,
             },
-            "circuits": [{**c.__dict__, "gates": list(c.gates)} for c in self.circuits],
+            "circuits": [
+                {**c.__dict__, "gates": list(c.gates), "passed": c.passed} for c in self.circuits
+            ],
             "not_run": [
                 {"circuit": n.circuit, "reason": n.reason, "ran_without": list(n.ran_without)}
                 for n in self.not_run
             ],
-            "report": {
-                "approximated": self.approximated,
-                "omitted": self.omitted,
-                "unknown": self.unknown,
-                "summary": self.report,
-            },
+            "reports": [r.to_dict() for r in self.reports],
         }
 
 
@@ -183,10 +197,10 @@ class CheckResult:
             f" on {qubits}"
         ]
         for f in self.frameworks:
-            verdict = "pass" if f.passed else "FAIL"
+            verdict, worst = "pass" if f.passed else "FAIL", f.worst
             lines.append(
-                f"  {f.framework:<10} {verdict}  TVD {f.worst.tvd:.2g} on {f.worst.circuit}"
-                f" (tolerance {f.worst.tolerance:.2g}), {len(f.circuits)} circuits, {f.method}"
+                f"  {f.framework:<10} {verdict}  deviation {worst.deviation:.2g} on {worst.circuit}"
+                f" (tolerance {worst.tolerance:.2g}), {len(f.circuits)} circuits, {f.method}"
             )
             lines += [f"    {n.describe()}" for n in f.not_run]
         lines += [f"  {name:<10} skipped: {why}" for name, why in self.skipped]
@@ -597,11 +611,6 @@ def _run(
         checks.append(_compare(circuit, measured, want, shots, True))
         measured_names.append(circuit.name)
     names = " and ".join(measured_names)
-    reports = runner.reports()
-
-    def count(attr: str) -> int:
-        return len({str(item) for r in reports for item in getattr(r, attr)})
-
     if runner.sampled:
         method = f"sampled {shots} shots against the twirled reference"
         if names:
@@ -620,25 +629,65 @@ def _run(
         method=method,
         circuits=tuple(checks),
         not_run=tuple(not_run),
-        approximated=count("approximated"),
-        omitted=count("omitted"),
-        unknown=count("unknown"),
-        report=reports[0].summary(),
+        reports=_merged(runner.reports()),
     )
+
+
+def _merged(reports: Sequence[Report]) -> tuple[Report, ...]:
+    """One report for each export configuration, with the entries of every run of it.
+
+    Entries that differ only in their loci become one entry, so each affected qubit appears once.
+    """
+    merged: list[Report] = []
+    for report in reports:
+        into = next((m for m in merged if m.options == report.options), None)
+        if into is None:
+            into = replace(
+                report, exact=[], approximated=[], omitted=[], unknown=[], clamped=[], events={}
+            )
+            merged.append(into)
+        for what in report.exact:
+            into.mark_exact(what)
+        for a in report.approximated:
+            into.approximate(a.what, a.how, a.detail)
+        into.omitted[:] = _union(into.omitted, report.omitted)
+        into.unknown[:] = _union(into.unknown, report.unknown)
+        into.clamped += [c for c in report.clamped if c not in into.clamped]
+        for event, counts in report.events.items():
+            for key, n in counts.items():
+                into.count(event, key, n)
+    return tuple(merged)
+
+
+def _union(entries: Sequence[str], more: Sequence[str]) -> list[str]:
+    out = list(entries)
+    for entry in more:
+        new = LociText(entry)
+        i = next((i for i, old in enumerate(out) if _template(old) == _template(new)), None)
+        if i is None:
+            out.append(entry)
+        else:
+            parts = zip(LociText(out[i]).parts, new.parts, strict=True)
+            out[i] = LociText(*(a if isinstance(a, str) else sorted({*a, *b}) for a, b in parts))
+    return out
+
+
+def _template(text: str) -> tuple[str | None, ...]:
+    return tuple(part if isinstance(part, str) else None for part in LociText(text).parts)
 
 
 def _compare(
     circuit: Circuit, got: np.ndarray, want: np.ndarray, shots: int, sampled: bool
 ) -> CircuitCheck:
     tvd = _tvd(got, want)
+    deviation, tolerance = tvd, EXACT_TOLERANCE
     if sampled:
+        off = np.abs(got - want)
         bound = SIGMAS * np.sqrt(want * (1 - want) / shots) + SIGMAS / shots
-        passed = bool(np.all(np.abs(got - want) <= bound))
-        tolerance = min(1.0, 0.5 * float(bound.sum()))
-    else:
-        passed, tolerance = tvd <= EXACT_TOLERANCE, EXACT_TOLERANCE
+        worst = int(np.argmax(off / bound))
+        deviation, tolerance = float(off[worst]), float(bound[worst])
     names = tuple(sorted({op.name for op in circuit.ops}))
-    return CircuitCheck(circuit.name, circuit.num_qubits, names, tvd, tolerance, passed, sampled)
+    return CircuitCheck(circuit.name, circuit.num_qubits, names, tvd, deviation, tolerance, sampled)
 
 
 def _registry_missing(op: Op, framework: str, column: str | None) -> str | None:

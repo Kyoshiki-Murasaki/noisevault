@@ -1283,7 +1283,7 @@ def test_check_keeps_each_row_whole_at_60_columns_and_names_a_skip_once() -> Non
     lines = result.stdout.splitlines()
     assert max(map(len, lines)) <= 60
     header = next(line for line in lines if line.startswith("framework"))
-    assert header.split() == ["framework", "result", "TVD", "circuits", "method"]
+    assert header.split() == ["framework", "result", "deviation", "circuits", "method"]
     qiskit = next(line for line in lines if line.startswith("qiskit ")).split()
     assert qiskit[:2] + qiskit[3:] == [
         "qiskit",
@@ -1308,7 +1308,7 @@ def test_check_keeps_each_row_whole_at_60_columns_and_names_a_skip_once() -> Non
     assert next(line for line in wide if line.startswith("framework")).split() == [
         "framework",
         "result",
-        "TVD",
+        "deviation",
         "tolerance",
         "circuits",
         "method",

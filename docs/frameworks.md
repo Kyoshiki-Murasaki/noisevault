@@ -318,6 +318,17 @@ check needs the measurement-only circuit because readout error leaves a uniform 
 unchanged. When the profile calibrates `p`, the check also runs a fixed phase gate that the profile
 does not define, such as `s`. Every export must charge that gate as `p`.
 
+The `deviation` and `tolerance` columns show the circuit that is nearest to its tolerance, or
+furthest past it. For an exact framework, the deviation is the TVD from the reference, and the
+tolerance is 1e-9. A sampled check compares the frequency of each outcome with the reference
+probability of that outcome. Each outcome has its own tolerance, which is 5 times the standard
+error of its frequency plus 5/shots. The deviation is the difference of the outcome with the
+largest difference relative to its tolerance. The tolerance column then shows the tolerance of
+that outcome. A sampled circuit passes when every outcome is within its tolerance. Thus a row
+shows FAIL only when its deviation is larger than its tolerance. `--json` gives the `deviation`
+and the `tolerance` of each circuit. Under each framework, `reports` holds one full export report
+for each export configuration that the check ran. Each report names every affected qubit.
+
 A framework that cannot express one of a circuit's gates runs the circuit without that gate. It
 skips the circuit when nothing useful remains. The `circuits` column counts only circuits that
 ran whole, for example `3 of 4, 1 reduced`. A line under the table names each gate left out and
