@@ -455,6 +455,9 @@ class _Exporter:
             measured: list[int] = []
             for group in chunk:
                 qubits = _acted_on(inst.name, group)
+                self._refuse_disabled("measure", inst.name, qubits)
+                if resets:
+                    self._refuse_disabled("reset", inst.name, qubits)
                 measured += qubits
                 flip = _either(stated_flip, self._readout_flip(qubits))
                 if runs and runs[-1][0] == flip:
@@ -472,10 +475,19 @@ class _Exporter:
         chunks = _disjoint_chunks(inst.target_groups())
         for chunk in chunks:
             qubits = [t.value for group in chunk for t in group]
+            self._refuse_disabled("reset", inst.name, qubits)
             busy.update(qubits)
             lines.append(str(inst) if len(chunks) == 1 else _text(inst, chunk))
             self._prep(inst.name, qubits, lines)
         return busy
+
+    def _refuse_disabled(self, name: str, stim_name: str, qubits: Iterable[int]) -> None:
+        for q in qubits:
+            wire = self.physical[q]
+            found = self.table.gate(name, (wire,))
+            if isinstance(found, GateNoise) and found.state == "disabled":
+                exc = DisabledGateError(f"{name} on {(wire,)} is disabled in this profile")
+                raise self._explain(stim_name, (q,), (wire,), exc)
 
     def _prep(self, name: str, qubits: list[int], lines: list[str]) -> None:
         noise: dict[str, list[int]] = {}

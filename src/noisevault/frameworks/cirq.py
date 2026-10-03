@@ -22,7 +22,7 @@ from typing import Any, get_args
 
 import numpy as np
 
-from ..errors import LayoutError, install_hint, qubit_loci
+from ..errors import DisabledGateError, LayoutError, install_hint, qubit_loci
 
 try:
     import cirq
@@ -35,6 +35,7 @@ from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile, QubitRecord
 from ..report import Report
+from ..table import GateNoise
 
 CirqLayout = Mapping[Any, int] | Sequence[int]
 _ANGLE_TOL = 1e-9
@@ -354,13 +355,16 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
                 " None))"
             )
         physical = self._qubits.physical(operation.qubits)
-        if isinstance(gate, cirq.MeasurementGate):
-            return self._measure(operation, gate, physical, terminal=terminal)
         if cirq.is_measurement(gate):
+            self._refuse_disabled("measure", physical)
+            if isinstance(gate, cirq.MeasurementGate):
+                return self._measure(operation, gate, physical, terminal=terminal)
             return self._other_measurement(operation)
         if isinstance(gate, cirq.ResetChannel):
+            self._refuse_disabled("reset", physical)
             return self._reset(operation, physical)
         if isinstance(gate, cirq.WaitGate):
+            self._refuse_disabled("delay", physical)
             return self._wait(operation, gate, physical)
         if isinstance(gate, cirq.IdentityGate):
             pairs = zip(operation.qubits, physical, strict=True)
@@ -372,6 +376,12 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
             return operation
         name = gate_name(gate, self.profile.gates)
         return [operation, *self._noise(name, operation.qubits, physical)]
+
+    def _refuse_disabled(self, name: str, physical: Sequence[int]) -> None:
+        for index in physical:
+            found = self._table.gate(name, (index,))
+            if isinstance(found, GateNoise) and found.state == "disabled":
+                raise DisabledGateError(f"{name} on {(index,)} is disabled in this profile")
 
     def _noise(
         self, name: str, qids: Sequence[cirq.Qid], physical: Sequence[int]

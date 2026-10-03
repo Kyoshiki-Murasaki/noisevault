@@ -665,6 +665,51 @@ def test_reset_error_is_the_physical_qubits():
     ]
 
 
+def _disabling(gate: str, where: str) -> Profile:
+    """Readout and prep error on every qubit, with ``gate`` disabled on qubit 2 or everywhere."""
+    data = toy(readout={"p1_given_0": 0.02, "p0_given_1": 0.1}, prep={"error": 0.003})
+    data["gates"] = {"rz": {"virtual": True}, "x": {"virtual": True}, "cz": {"virtual": True}}
+    if where == "record":
+        data["gates"][gate] = {}
+        data["calibrations"] = [{"gate": gate, "qubits": [2], "disabled": True}]
+    else:
+        data["gates"][gate] = {"disabled": True}
+    return Profile.model_validate(data)
+
+
+_RESETS = ["R", "RX", "RY", "MR", "MRX", "MRY"]
+_MEASURES = ["M", "MX", "MY", "MR", "MRX", "MPP X1*Z0", "MZZ 1 0", "MXX 1 0", "MYY 1 0"]
+
+
+@pytest.mark.parametrize("readout", ["symmetrize", "none"])
+@pytest.mark.parametrize("where", ["record", "definition"])
+@pytest.mark.parametrize(
+    ("gate", "instruction"),
+    [*(("reset", i) for i in _RESETS), *(("measure", i) for i in _MEASURES)],
+)
+def test_a_reset_or_measurement_the_profile_disables_is_refused(gate, instruction, where, readout):
+    if " " not in instruction:
+        instruction += " 1 0"
+    layout = [2, 0]
+    q = 0 if where == "record" else stim.Circuit(instruction)[0].targets_copy()[0].value
+    name = instruction.split()[0]
+    pattern = rf"^{name} {q} \(physical qubit {layout[q]}\): {gate} on \({layout[q]},\) is disabled"
+    with pytest.raises(DisabledGateError, match=pattern):
+        to_stim(_disabling(gate, where), instruction, layout=layout, readout=readout)
+
+
+@pytest.mark.parametrize("gate", ["reset", "measure"])
+def test_a_reset_or_measurement_where_the_profile_allows_it_keeps_its_noise(gate):
+    profile = _disabling(gate, "record")
+    data = profile.model_dump(mode="json", exclude_none=True)
+    del data["gates"][gate], data["calibrations"]
+    circuit = "R 1\nRX 1\nM 1\nMR 1\nMRY 1\nMPP X1\nMZZ 1 2"
+    allowed = Profile.model_validate(data)
+    noisy, plain = (str(to_stim(p, circuit, layout=[2, 0, 1])) for p in (profile, allowed))
+    assert noisy == plain
+    assert "X_ERROR(0.003) 1" in noisy.splitlines()
+
+
 def test_readout_none_adds_nothing_and_reports_it():
     out = to_stim(_readout_profile(), "X 0\nM 0 1", readout="none")
     assert str(out) == "X 0\nM 0 1"

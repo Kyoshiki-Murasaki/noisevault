@@ -708,6 +708,58 @@ def test_disabled_gate_raises() -> None:
         model.noisy_operation(cirq.CNOT(*cirq.LineQubit.range(2)))
 
 
+def _disabling(gate: str, where: str) -> Profile:
+    """Readout, prep and T1/T2 on every qubit, with ``gate`` disabled on qubit 2 or everywhere."""
+    data = toy(
+        readout={"p1_given_0": 0.02, "p0_given_1": 0.1},
+        prep={"error": 0.03},
+        idle={"t1_us": 50, "t2_us": 40},
+    )
+    if where == "record":
+        data["gates"][gate] = {}
+        data["calibrations"] = [{"gate": gate, "qubits": [2], "disabled": True}]
+    else:
+        data["gates"][gate] = {"disabled": True}
+    return Profile.model_validate(data)
+
+
+_MEASURE_X = cirq.PauliMeasurementGate(cirq.DensePauliString("X"), key="p")
+_SPECIAL = {
+    "reset": lambda a, b: cirq.reset(b),
+    "measure": lambda a, b: cirq.measure(a, b, key="m"),
+    "pauli_measure": lambda a, b: _MEASURE_X.on(b),
+    "delay": lambda a, b: cirq.wait(a, b, nanos=100),
+}
+
+
+@pytest.mark.parametrize("readout", [True, False])
+@pytest.mark.parametrize("where", ["record", "definition"])
+@pytest.mark.parametrize("kind", list(_SPECIAL))
+def test_a_reset_measure_or_wait_the_profile_disables_is_refused(kind, where, readout) -> None:
+    gate = "measure" if kind == "pauli_measure" else kind
+    layout = [0, 2]
+    model = to_cirq(_disabling(gate, where), layout=layout, readout=readout)
+    operation = _SPECIAL[kind](*cirq.LineQubit.range(2))
+    index = 2 if where == "record" else layout[operation.qubits[0].x]
+    with pytest.raises(DisabledGateError, match=rf"^{gate} on \({index},\) is disabled in this "):
+        model.noisy_operation(operation)
+
+
+@pytest.mark.parametrize("gate", ["reset", "measure", "delay"])
+def test_a_reset_measure_or_wait_where_the_profile_allows_it_keeps_its_noise(gate) -> None:
+    q = cirq.LineQubit(0)
+    ops = {"reset": cirq.reset(q), "measure": cirq.measure(q), "delay": cirq.wait(q, nanos=100)}
+    profile = _disabling(gate, "record")
+    data = profile.model_dump(mode="json", exclude_none=True)
+    del data["gates"][gate], data["calibrations"]
+    allowed = Profile.model_validate(data)
+    noisy, plain = (
+        to_cirq(p, layout=[0, 2]).noisy_operation(ops[gate]) for p in (profile, allowed)
+    )
+    assert repr(_ops(noisy)) == repr(_ops(plain))
+    assert len(_ops(noisy)) == (1 if gate == "measure" else 2)
+
+
 def test_circuit_channels_are_kept_and_counted() -> None:
     model = to_cirq(_distinct())
     op = cirq.depolarize(0.1).on(cirq.LineQubit(0))
