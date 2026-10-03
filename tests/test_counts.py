@@ -277,6 +277,53 @@ _REFUSALS: dict[str, _Refusal] = {
         "circuits[0].count: not a counts format 1.0 key",
         None,
     ),
+    "run_at as a number": _Refusal(
+        _set("run_at", value=20260930),
+        "run_at: 20260930 is not an ISO 8601 time with a timezone. Give a time such as"
+        " 2026-09-30T08:00:00Z",
+        None,
+    ),
+    "run_at as a string of digits": _Refusal(
+        _set("run_at", value="20260930"),
+        'run_at: "20260930" is not an ISO 8601 time with a timezone',
+        None,
+    ),
+    "surrogate in backend": _Refusal(
+        _set("backend", value="ibm_\ud800"),
+        "backend: the string holds the unpaired surrogate \\ud800, which UTF-8 cannot encode."
+        " Remove the surrogate or write the whole character",
+        None,
+    ),
+    "surrogate in profile id": _Refusal(
+        _set("profile", "id", value="\ud800"),
+        "profile.id: the string holds the unpaired surrogate \\ud800",
+        None,
+    ),
+    "surrogate in client": _Refusal(
+        _set("execution", "client", value="q\udfff"),
+        "execution.client: the string holds the unpaired surrogate \\udfff",
+        None,
+    ),
+    "surrogate in a job id": _Refusal(
+        _set("execution", "job_ids", 0, value="\ud800"),
+        "execution.job_ids[0]: the string holds the unpaired surrogate \\ud800",
+        None,
+    ),
+    "surrogate in a circuit name": _Refusal(
+        _set("circuits", 1, "name", value="\ud800"),
+        "circuits[1].name: the string holds the unpaired surrogate \\ud800",
+        None,
+    ),
+    "surrogate in an option key": _Refusal(
+        _set("execution", "options", "\ud800", value=1),
+        "execution.options: the key '\\ud800' holds the unpaired surrogate \\ud800",
+        None,
+    ),
+    "surrogate in an option value": _Refusal(
+        _set("execution", "options", "note", value="\ud800"),
+        "execution.options: note: the string holds the unpaired surrogate \\ud800",
+        None,
+    ),
 }
 
 

@@ -206,6 +206,57 @@ def test_round_trip(tmp_path: Path, suffix: str) -> None:
     assert loaded.device.calibrated_at == datetime(2025, 2, 26, 9, 12, tzinfo=UTC)
 
 
+TIME_FIELDS = ["device.calibrated_at", "provenance.retrieved_at", "unmodeled_error.fit.run_at"]
+
+
+def _timed(where: str, value: Any) -> dict:
+    if where == "device.calibrated_at":
+        return toy(device={**toy()["device"], "calibrated_at": value})
+    if where == "provenance.retrieved_at":
+        return toy(provenance={"retrieved_at": value})
+    base = Profile.model_validate(toy(readout={"error": 0.01}))
+    return {**base.to_dict(), "unmodeled_error": _block(base, run_at=value)}
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        (20260930, "20260930"),
+        (20260930.5, "20260930.5"),
+        ("20260930", '"20260930"'),
+        ("-1", '"-1"'),
+        (True, "true"),
+    ],
+)
+@pytest.mark.parametrize("where", TIME_FIELDS)
+def test_a_time_field_refuses_a_number_or_a_string_of_digits(
+    where: str, value: Any, shown: str
+) -> None:
+    with pytest.raises(ValidationError) as caught:
+        Profile.model_validate(_timed(where, value))
+    assert [(e["loc"], e["msg"]) for e in caught.value.errors()] == [
+        (
+            tuple(where.split(".")),
+            f"Value error, {shown} is not an ISO 8601 time with a timezone."
+            " Give a time such as 2026-09-30T08:00:00Z",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["2026-09-30T05:00:00-03:00", "2026-09-30 08:00Z", datetime(2026, 9, 30, 8, tzinfo=UTC)],
+)
+@pytest.mark.parametrize("where", TIME_FIELDS)
+def test_a_time_field_takes_an_iso_time_with_a_timezone_or_a_datetime(
+    where: str, value: Any
+) -> None:
+    saved = Profile.model_validate(_timed(where, value)).to_dict()
+    for key in where.split("."):
+        saved = saved[key]
+    assert saved == "2026-09-30T08:00:00Z"
+
+
 def test_a_file_nested_deeper_than_the_parser_takes_is_not_json(tmp_path: Path) -> None:
     nested = deeper_than_the_parser_takes()
     data = toy(extensions={"deep": 0})
@@ -588,6 +639,99 @@ def test_free_form_data_is_frozen_at_every_level() -> None:
         with pytest.raises(TypeError, match="immutable"):
             mutate()
     assert Profile.from_dict(profile.to_dict()).fingerprint == fingerprint
+
+
+def _every_text_field() -> dict:
+    return toy(
+        device={**toy()["device"], "processor": "Falcon"},
+        gates={
+            **toy()["gates"],
+            "cz": {"avg_infidelity": 1e-2, "assumption": "the device median"},
+            "my_gate": {"qubits": 1, "avg_infidelity": 1e-3},
+        },
+        qubits=[{"index": 0, "label": "Q0"}],
+        calibrations=[{"gate": "cz", "qubits": [0, 1], "avg_infidelity": 0.02}],
+        effects=[{"type": "leakage", "gate": "cz", "prob": 1e-4}],
+        benchmarks={"eplg": {"method": "layer", "runs": ["a"]}},
+        provenance={
+            "source": "s",
+            "source_url": "https://example.org",
+            "license": "CC-BY-4.0",
+            "attribution": "a",
+            "tool": "t",
+            "derived_from": "d",
+            "notes": ["n"],
+            "extra": {"k": "v"},
+        },
+        extensions={"x": {"y": ["z"]}},
+    )
+
+
+def _one_surrogate(value: Any, where: str = "") -> Iterator[tuple[str, Any]]:
+    if isinstance(value, str):
+        yield where, value + "\ud800"
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            renamed = {(k + "\ud800" if k == key else k): v for k, v in value.items()}
+            yield f"{where}.{key} (key)", renamed
+            for at, changed in _one_surrogate(item, f"{where}.{key}"):
+                yield at, {**value, key: changed}
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            for at, changed in _one_surrogate(item, f"{where}[{i}]"):
+                yield at, [*value[:i], changed, *value[i + 1 :]]
+
+
+def test_no_string_or_key_with_an_unpaired_surrogate_validates() -> None:
+    data = _every_text_field()
+    Profile.model_validate(data)
+    not_refused = {}
+    for where, changed in _one_surrogate(data):
+        try:
+            Profile.model_validate(changed)
+        except ValidationError:
+            continue
+        except UnicodeEncodeError:
+            not_refused[where] = "UnicodeEncodeError"
+        else:
+            not_refused[where] = "validates"
+    assert not_refused == {}
+
+
+@pytest.mark.parametrize(
+    ("section", "loc", "message"),
+    [
+        (
+            {"provenance": {"notes": ["\ud800"]}},
+            ("provenance", "notes", 0),
+            "the string holds the unpaired surrogate \\ud800",
+        ),
+        (
+            {"extensions": {"x": ["a\ud800"]}},
+            ("extensions",),
+            "x[0]: the string holds the unpaired surrogate \\ud800",
+        ),
+        (
+            {"extensions": {"x": {"\udfffb": 1}}},
+            ("extensions",),
+            "x: the key '\\udfffb' holds the unpaired surrogate \\udfff",
+        ),
+    ],
+)
+def test_a_file_with_an_escaped_unpaired_surrogate_is_refused_where_it_stands(
+    tmp_path: Path, section: dict, loc: tuple, message: str
+) -> None:
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps(toy(**section)))
+    with pytest.raises(ValidationError) as caught:
+        load_file(path)
+    assert [(e["loc"], e["msg"]) for e in caught.value.errors()] == [
+        (
+            loc,
+            f"Value error, {message}, which UTF-8 cannot encode."
+            " Remove the surrogate or write the whole character",
+        )
+    ]
 
 
 CACHED = ("fingerprint", "artifact_hash", "calibration_fingerprint", "table")

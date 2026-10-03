@@ -70,9 +70,42 @@ def exact_ref(name: str, when: datetime | None) -> str:
     return f"{name}@{iso_z(when)}" if when else name
 
 
+_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+
+def _iso_time(value: Any) -> Any:
+    """Refuse a number or a string of digits, which pydantic would read as a Unix timestamp."""
+    if isinstance(value, datetime) or (isinstance(value, str) and _ISO_DATE.match(value)):
+        return value
+    scalar = value is None or isinstance(value, str | int | float)
+    shown = json.dumps(value) if scalar else f"a {type(value).__name__}"
+    raise ValueError(
+        f"{shown} is not an ISO 8601 time with a timezone. Give a time such as 2026-09-30T08:00:00Z"
+    )
+
+
+def _encodable(text: str, what: str = "the string") -> str:
+    """Refuse a surrogate code point, such as one from a JSON escape "\\ud800" without its pair.
+
+    UTF-8 cannot encode a surrogate, so a save and every hash would fail.
+    """
+    found = _SURROGATE.search(text)
+    if found:
+        raise ValueError(
+            f"{what} holds the unpaired surrogate \\u{ord(found.group()):04x},"
+            " which UTF-8 cannot encode. Remove the surrogate or write the whole character"
+        )
+    return text
+
+
 UtcDatetime = Annotated[
-    AwareDatetime, AfterValidator(_to_utc), PlainSerializer(iso_z, when_used="json")
+    AwareDatetime,
+    BeforeValidator(_iso_time),
+    AfterValidator(_to_utc),
+    PlainSerializer(iso_z, when_used="json"),
 ]
+Text = Annotated[str, AfterValidator(_encodable)]
 # Strict scalars: a hand-written true, "1" or 3.0 is a typo to report, not a value to coerce.
 Real = Annotated[float, Strict()]  # still accepts an int
 Flag = Annotated[bool, Strict()]
@@ -123,11 +156,12 @@ _MAX_NESTING = 64
 def _freeze(value: Any, where: str = "", depth: int = 1) -> Any:
     """Read-only copy of JSON data: mappings become FrozenDict, lists and tuples become tuples.
 
-    The copy refuses each value that a save would change. One such value is a non-string key,
-    because ``0`` and ``"0"`` would collide. Others are a set or other object, and a nonfinite
-    number, which JSON would write as null. ``allow_inf_nan=False`` does not reach values typed
-    ``Any``. The copy also refuses nesting deeper than ``_MAX_NESTING`` levels, because pydantic
-    cannot save nesting deeper than 255 levels.
+    The copy refuses each value that a save would change or cannot write. One such value is a
+    non-string key, because ``0`` and ``"0"`` would collide. Others are a set or other object,
+    and a nonfinite number, which JSON would write as null. A key or string with a surrogate is
+    another, because UTF-8 cannot encode a surrogate. ``allow_inf_nan=False`` does not reach
+    values typed ``Any``. The copy also refuses nesting deeper than ``_MAX_NESTING`` levels,
+    because pydantic cannot save nesting deeper than 255 levels.
     """
     if isinstance(value, Mapping | list | tuple) and depth > _MAX_NESTING:
         raise ValueError(f"nested more than {_MAX_NESTING} levels deep")
@@ -136,10 +170,13 @@ def _freeze(value: Any, where: str = "", depth: int = 1) -> Any:
         for key, item in value.items():
             if not isinstance(key, str):
                 raise ValueError(f"{where}: the key {key!r} is not a string")
+            _encodable(key, f"{where}: the key {key!r}" if where else f"the key {key!r}")
             frozen[key] = _freeze(item, f"{where}.{key}" if where else key, depth + 1)
         return FrozenDict(frozen)
     if isinstance(value, list | tuple):
         return tuple(_freeze(item, f"{where}[{i}]", depth + 1) for i, item in enumerate(value))
+    if isinstance(value, str):
+        return _encodable(value, f"{where}: the string")
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{where}: {value} is not a finite number")
     if value is not None and not isinstance(value, str | int | float):
@@ -160,11 +197,11 @@ JsonObject = Annotated[dict[str, Any], BeforeValidator(_string_keys), AfterValid
 
 
 class Device(_Model):
-    name: str
-    vendor: str | None = None
+    name: Text
+    vendor: Text | None = None
     technology: Technology
     num_qubits: Count
-    processor: str | None = None
+    processor: Text | None = None
     calibrated_at: UtcDatetime | None = None
 
     @field_validator("name", "vendor")
@@ -215,7 +252,7 @@ class _GateFields(_Model):
     scope: Literal["gate", "cycle"] | None = None
     includes: tuple[Literal["1q_dressing", "leakage", "spam"], ...] | None = None
     stderr: NonNegative | None = None
-    assumption: str | None = None
+    assumption: Text | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -251,7 +288,7 @@ class GateSpec(_GateFields):
 
 
 class _RecordKey(_Model):
-    gate: str
+    gate: Text
     qubits: tuple[QubitIndex, ...] = Field(min_length=1)
 
 
@@ -318,7 +355,7 @@ class QubitRecord(Idle, _QubitKey):
 
     readout: Readout | None = None
     prep: Prep | None = None
-    label: str | None = None
+    label: Text | None = None
     coords: tuple[Real, ...] | None = None
     disabled: Flag | None = None
 
@@ -330,7 +367,7 @@ class Effect(_Model):
     """
 
     type: EffectType
-    gate: str | None = None
+    gate: Text | None = None
     on: Literal["readout", "idle"] | None = None
     qubits: tuple[QubitIndex, ...] | None = None
     prob: Probability | None = None
@@ -365,16 +402,16 @@ class Provenance(_Model):
         ]
         | None
     ) = None
-    source: str | None = None
-    source_url: str | None = None
-    license: str | None = None
-    attribution: str | None = None
+    source: Text | None = None
+    source_url: Text | None = None
+    license: Text | None = None
+    attribution: Text | None = None
     redistributable: Literal["yes", "no", "unknown"] = "unknown"
     retrieved_at: UtcDatetime | None = None
     source_hash: Sha256 | None = None
-    tool: str | None = None
-    derived_from: str | None = None
-    notes: tuple[str, ...] = ()
+    tool: Text | None = None
+    derived_from: Text | None = None
+    notes: tuple[Text, ...] = ()
     extra: JsonObject = Field(default_factory=FrozenDict)
 
 
@@ -582,7 +619,7 @@ class Profile(_Model):
     noisevault: Literal["1.0"]
     device: Device
     connectivity: Literal["all_to_all"] | Connectivity
-    gates: Annotated[dict[str, GateSpec], BeforeValidator(_string_keys)]
+    gates: Annotated[dict[Text, GateSpec], BeforeValidator(_string_keys)]
     readout: Readout | None = None
     prep: Prep | None = None
     idle: Idle | None = None

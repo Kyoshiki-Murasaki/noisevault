@@ -24,7 +24,8 @@ This file lists all notable changes to NoiseVault. Versions follow
     `profile.uncorrected()` returns the profile without the field, with the calibration's
     fingerprint. `profile.calibration_fingerprint` is that fingerprint, the one a counts file
     names. Profiles without the field keep their fingerprints.
-  - NoiseVault 0.2.0 refuses a profile that sets the field.
+  - A NoiseVault install that does not know the field refuses a profile that sets it, because
+    format 1.0 forbids unknown keys.
 
   See [Unmodeled error](docs/profile-format.md#unmodeled-error).
 - **IBM calibration history from Hugging Face.** `nv.from_calibration_archive(path, device,

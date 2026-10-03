@@ -108,7 +108,9 @@ Unknown keys are errors everywhere except inside `benchmarks`, `extensions` and
 string keys, arrays, strings, finite numbers, `true`, `false` and `null`. From Python, a key that
 is not a string, a set, or any other object is an error rather than a value converted on save.
 Values are strict. `"1"`, `3.0` for an integer field, or `1` for a boolean are errors, not
-coercions.
+coercions. The time fields `calibrated_at`, `retrieved_at` and `run_at` take an ISO 8601 time with
+a timezone, such as `2026-09-30T08:00:00Z`. In these fields, a number or a string of digits is an
+error, not a Unix timestamp.
 
 ## Device
 
@@ -464,7 +466,8 @@ that profile is `fit.calibration`. `nv cite` names the factors and the counts.
 `nv show` and `profile.summary()` print the calibration as stated, then the factors on a row of
 their own. Every export applies the factors, and its report states them in one line.
 
-NoiseVault 0.2.0 does not know this field and refuses a file that sets it.
+A NoiseVault install that does not know this field refuses a profile that sets it, because format
+1.0 forbids unknown keys.
 
 ## Benchmarks and extensions
 

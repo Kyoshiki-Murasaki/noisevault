@@ -43,6 +43,7 @@ from .profile import (
     JsonObject,
     Profile,
     QubitIndex,
+    Text,
     UtcDatetime,
     _Model,
     _readable_json,
@@ -204,7 +205,7 @@ SAMPLER_V2_OPTIONS: Mapping[str, Any] = MappingProxyType(
 class ProfileBinding(_Model):
     """The profile a run was planned from: its id and its fingerprint without unmodeled_error."""
 
-    id: str
+    id: Text
     fingerprint: Fingerprint
 
 
@@ -216,13 +217,13 @@ class Execution(_Model):
     ``options`` holds the options as submitted.
     """
 
-    client: str
+    client: Text
     transpiled: Literal[False]
     gate_twirling: Literal[False]
     measure_twirling: Literal[False]
     dynamical_decoupling: Literal[False]
     init_qubits: Literal[True]
-    job_ids: tuple[str, ...] = ()
+    job_ids: tuple[Text, ...] = ()
     options: JsonObject = Field(default_factory=FrozenDict)
 
     @model_validator(mode="before")
@@ -279,7 +280,7 @@ class PlannedCircuit(_Model):
     After every op, the device measures all qubits together, circuit qubit i into classical bit i.
     """
 
-    name: str
+    name: Text
     qubits: Annotated[tuple[QubitIndex, ...], Field(min_length=1, max_length=MAX_QUBITS)]
     ops: tuple[WireOp, ...]
 
@@ -356,7 +357,7 @@ class MeasuredCounts(_Model):
     nv_counts: Literal["1.0"]
     source: CountsSource
     profile: ProfileBinding
-    backend: str
+    backend: Text
     run_at: UtcDatetime
     bit_order: BitOrder
     execution: Execution
