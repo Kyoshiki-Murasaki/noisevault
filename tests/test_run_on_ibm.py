@@ -1119,6 +1119,75 @@ def test_a_job_file_that_changes_on_a_full_disk_while_the_job_is_submitted_names
     assert pending.read_text() == "another run\n"
 
 
+@pytest.mark.parametrize("fault", ["replaced", "not cut back"])
+def test_a_failed_job_id_write_that_leaves_no_job_file_to_collect_keeps_the_job_in_a_new_job_file(
+    fault: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    submissions = _recording_sampler(monkeypatch)
+    _account(monkeypatch, _fractional_fez(), submissions)
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    output, pending = folder / "fez.counts.json", folder / "fez.job.json"
+    another_run = tmp_path / "another.job.json"
+    _save_job_file(_submitted_and_ran(_fez_profile())[0], another_run)
+    disk = _disk(monkeypatch, folder)
+    submit, write, ftruncate = script.submit, os.write, os.ftruncate
+    planned: list[bytes] = []
+
+    def submit_and_fill_the_disk(*args: Any) -> Any:
+        job = submit(*args)
+        planned.append(pending.read_bytes())
+        disk.bytes_left = 5
+        return job
+
+    def another_run_replaces_the_job_file_on_the_full_disk(fd: int, data: Any) -> int:
+        if fault == "replaced" and disk.bytes_left == 0:
+            _put(pending, another_run.read_text())
+        return write(fd, data)
+
+    def space_frees_while_the_script_cuts_back(fd: int, length: int) -> None:
+        disk.bytes_left = None
+        if fault == "not cut back":
+            raise OSError(errno.EIO, "Input/output error")
+        ftruncate(fd, length)
+
+    monkeypatch.setattr(script, "submit", submit_and_fill_the_disk)
+    monkeypatch.setattr(os, "write", another_run_replaces_the_job_file_on_the_full_disk)
+    monkeypatch.setattr(os, "ftruncate", space_frees_while_the_script_cuts_back)
+    command = ["ibm_fez", "--yes", "-o", str(output)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert script.main(command) == 1
+        (submission,) = submissions
+        job_id = submission.job.job_id()
+        kept = folder / f"fez.{job_id}.job.json"
+        job_line = script._line({"job_id": job_id})
+        problem, left = {
+            "replaced": (
+                f"{pending} changed while the script submitted job {job_id}",
+                another_run.read_bytes(),
+            ),
+            "not cut back": (
+                f"could not save job {job_id} to {pending} ([Errno 28] No space left on device)",
+                planned[0] + job_line[:5],
+            ),
+        }[fault]
+        assert capsys.readouterr().err == (
+            f"error: {problem}. The script saved job {job_id} to {kept}\n"
+            f"hint: run the same command with --collect {kept} to collect the job\n"
+        )
+        assert kept.read_bytes() == planned[0] + job_line
+        assert pending.read_bytes() == left
+        assert script.main([*command, "--collect", str(kept)]) == 0
+    assert len(submissions) == 1
+    assert load_counts(output).execution.job_ids == (job_id,)
+    assert not kept.exists()
+    assert pending.read_bytes() == left
+
+
 def test_a_job_file_that_the_script_cannot_read_gives_an_error_and_submits_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1242,6 +1311,65 @@ def test_a_job_file_without_the_given_job_id_stops_before_the_job_opens(
         f"error: {message.format(pending=pending)}\nhint: {hint.format(pending=pending)}\n"
     )
     assert submissions == []
+    assert sorted(tmp_path.iterdir()) == [pending]
+    assert pending.read_bytes() == record
+
+
+def _with(**changes: Any) -> Callable[[dict[str, Any]], str]:
+    return lambda data: json.dumps({**data, **changes}) + "\n"
+
+
+def _plan_line_cut_short(data: dict[str, Any]) -> str:
+    return '{"profile": {\n' + json.dumps({"job_id": data["job_id"]}) + "\n"
+
+
+@pytest.mark.parametrize(
+    ("damage", "problem", "named"),
+    [
+        (_with(options=5), "Input should be a valid dictionary", "job-1"),
+        (
+            _with(options={"twirling": {"enable_gates": True}}),
+            "options.twirling.enable_gates is true",
+            "job-1",
+        ),
+        (_plan_line_cut_short, "Expecting property name", "job-1"),
+        (_with(job_id=5), "Input should be a valid string", None),
+        (_with(job_id=""), "the job id is empty", None),
+    ],
+    ids=[
+        "options not an object",
+        "options against the format",
+        "plan line cut short",
+        "job id a number",
+        "no job id",
+    ],
+)
+def test_a_damaged_job_file_stops_before_the_calibration_pull_and_names_its_job(
+    damage: Callable[[dict[str, Any]], str],
+    problem: str,
+    named: str | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    submissions = _recording_sampler(monkeypatch)
+    seen = _account(monkeypatch, _fractional_fez(), submissions)
+    output, pending = tmp_path / "fez.counts.json", tmp_path / "fez.job.json"
+    _save_job_file(_submitted_and_ran(_fez_profile())[0], pending)
+    pending.write_text(damage(json.loads(pending.read_text())))
+    record = pending.read_bytes()
+    assert script.main(["ibm_fez", "--yes", "-o", str(output)]) == 1
+    printed = capsys.readouterr().err
+    hint = (
+        "delete it to submit a new job"
+        if named is None
+        else f"the script cannot collect job {named} from the damaged job file. Find job {named}"
+        " in your IBM Quantum account. To submit a new job, delete the job file"
+    )
+    assert printed.startswith(f"error: {pending} is damaged (")
+    assert problem in printed
+    assert printed.endswith(f")\nhint: {hint}\n")
+    assert (submissions, seen.pulled_at, seen.opened) == ([], [], [])
     assert sorted(tmp_path.iterdir()) == [pending]
     assert pending.read_bytes() == record
 

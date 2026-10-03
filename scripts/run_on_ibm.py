@@ -48,6 +48,7 @@ from noisevault.counts import (  # noqa: E402
     _RUN_RULES,
     COUNTS_FORMAT,
     SAMPLER_V2_OPTIONS,
+    Execution,
     MeasuredCounts,
     PlannedCircuit,
     _duration,
@@ -338,11 +339,6 @@ def _unlike_the_plan(latest: Profile, submitted: Submitted, ran: Ran) -> str | N
 
 
 def counts_file(profile: Profile, submitted: Submitted, ran: Ran) -> MeasuredCounts:
-    import qiskit
-    import qiskit_ibm_runtime
-
-    runtime, framework = qiskit_ibm_runtime.__version__, qiskit.__version__
-    flags = {rule.flag: rule.required for rule in _RUN_RULES if rule.flag}
     return MeasuredCounts.model_validate(
         {
             "nv_counts": COUNTS_FORMAT,
@@ -351,12 +347,7 @@ def counts_file(profile: Profile, submitted: Submitted, ran: Ran) -> MeasuredCou
             "backend": profile.device.name,
             "run_at": ran.run_at,
             "bit_order": "qiskit",
-            "execution": {
-                "client": f"qiskit-ibm-runtime {runtime} SamplerV2, qiskit {framework}",
-                **flags,
-                "job_ids": [ran.job_id],
-                "options": submitted.options,
-            },
+            "execution": _execution(submitted.options, ran.job_id),
             "circuits": [
                 {
                     "name": circuit.name,
@@ -369,6 +360,19 @@ def counts_file(profile: Profile, submitted: Submitted, ran: Ran) -> MeasuredCou
             ],
         }
     )
+
+
+def _execution(options: Any, job_id: Any) -> dict[str, Any]:
+    import qiskit
+    import qiskit_ibm_runtime
+
+    runtime, framework = qiskit_ibm_runtime.__version__, qiskit.__version__
+    return {
+        "client": f"qiskit-ibm-runtime {runtime} SamplerV2, qiskit {framework}",
+        **{rule.flag: rule.required for rule in _RUN_RULES if rule.flag},
+        "job_ids": [] if job_id is None else [job_id],
+        "options": options,
+    }
 
 
 def catalog_ref(profile: Profile) -> str | None:
@@ -432,23 +436,33 @@ def run(
             raise
         submitted = Submitted(job.job_id(), batch.profile, batch.planned, batch.options)
         job_line = _line({"job_id": submitted.job_id})
+        kept = _beside(output, f".{submitted.job_id}.job.json")
+        changed = f"{pending} changed while the script submitted job {submitted.job_id}"
         if _ours(pending, record):
             try:
                 _write(record, job_line)
             except BaseException as exc:
-                with contextlib.suppress(OSError):
+                failed = f"could not save job {submitted.job_id} to {pending} ({_reason(exc)})"
+                try:
                     os.ftruncate(record, len(plan))
+                    trimmed = True
+                except OSError:
+                    trimmed = False
+                ours = _ours(pending, record)
                 with contextlib.suppress(OSError):
                     os.close(record)
-                raise NoiseVaultError(
-                    f"could not save job {submitted.job_id} to {pending} ({_reason(exc)})",
-                    hint=f"run the same command with --job-id {submitted.job_id} to collect the"
-                    " job",
-                ) from None
+                if trimmed and ours:
+                    raise NoiseVaultError(
+                        failed,
+                        hint=f"run the same command with --job-id {submitted.job_id} to collect"
+                        " the job",
+                    ) from None
+                _save_elsewhere(
+                    failed if ours else changed, kept, submitted.job_id, plan + job_line
+                )
         if not _ours(pending, record):
             os.close(record)
-            kept = _beside(output, f".{submitted.job_id}.job.json")
-            _save_elsewhere(pending, kept, submitted.job_id, plan + job_line)
+            _save_elsewhere(changed, kept, submitted.job_id, plan + job_line)
         print(f"submitted job {submitted.job_id} to {device}")
     print("waiting for it to run")
     print("Ctrl-C stops waiting. Run the same command again to collect the job")
@@ -552,36 +566,45 @@ def _resume(
         raise
 
 
-def _save_elsewhere(pending: Path, kept: Path, job_id: str, data: bytes) -> NoReturn:
-    changed = f"{pending} changed while the script submitted job {job_id}"
+def _save_elsewhere(problem: str, kept: Path, job_id: str, data: bytes) -> NoReturn:
     try:
         os.close(_create({kept: data})[kept])
     except OSError as exc:
         raise NoiseVaultError(
-            f"{changed}, and the script could not save job {job_id} to {kept} ({_reason(exc)})",
+            f"{problem}, and the script could not save job {job_id} to {kept} ({_reason(exc)})",
             hint=f"find job {job_id} in your IBM Quantum account. The script did not save the"
             " planned circuits of the job",
         ) from None
     raise NoiseVaultError(
-        f"{changed}. The script saved job {job_id} to {kept}",
+        f"{problem}. The script saved job {job_id} to {kept}",
         hint=f"run the same command with --collect {kept} to collect the job",
     )
 
 
 def _submitted(pending: Path, record: int, job_id: str | None) -> Submitted:
+    lines: list[bytes] = []
     try:
-        data: dict[str, Any] = {}
         with open(record, "rb", closefd=False) as handle:
-            for line in handle:
-                data.update(json.loads(line))
+            lines = handle.readlines()
+        data: dict[str, Any] = {}
+        for line in lines:
+            data.update(json.loads(line))
         profile = Profile.model_validate(data["profile"])
         planned = tuple(PlannedCircuit.model_validate(c) for c in data["planned"])
         options = data["options"]
+        recorded = data.get("job_id")
+        Execution.model_validate(_execution(options, recorded))
+        if recorded == "":
+            raise ValueError("the job id is empty")
     except Exception as exc:
+        named = _job_id_in(lines)
         raise NoiseVaultError(
-            f"{pending} is damaged ({_reason(exc)})", hint="delete it to submit a new job"
+            f"{pending} is damaged ({_reason(exc)})",
+            hint="delete it to submit a new job"
+            if named is None
+            else f"the script cannot collect job {named} from the damaged job file. Find job"
+            f" {named} in your IBM Quantum account. To submit a new job, delete the job file",
         ) from None
-    recorded = data.get("job_id")
     if recorded is None and job_id is None:
         raise NoiseVaultError(
             f"{pending} has no job id",
@@ -594,6 +617,16 @@ def _submitted(pending: Path, record: int, job_id: str | None) -> Submitted:
             hint=f"run the same command without --job-id to collect job {recorded}",
         )
     return Submitted(recorded or job_id, profile, planned, options)
+
+
+def _job_id_in(lines: list[bytes]) -> str | None:
+    found = None
+    for line in lines:
+        with contextlib.suppress(ValueError, RecursionError):
+            entry = json.loads(line)
+            if isinstance(entry, dict) and isinstance(entry.get("job_id"), str) and entry["job_id"]:
+                found = entry["job_id"]
+    return found
 
 
 def summary(batch: Batch, output: Path) -> str:

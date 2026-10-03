@@ -235,7 +235,9 @@ The script checks for the job file before it opens your account. If the job file
 time, the script collects the job that the file records. The script also collects a job when you
 give `--collect` or `--job-id`. When the script collects a job, it never submits a job. If the
 script cannot read the job file, or the job file is gone when the script reads it, the script
-stops with an error.
+stops with an error. If a value in the job file is not valid, the script stops before it opens the
+job. If the script can read a job id in the damaged file, the hint names that job. The script
+cannot collect that job, so find it in your IBM Quantum account.
 
 ### If the script cannot save the job id
 
@@ -251,8 +253,14 @@ hint: run the same command with --job-id d1h9q8k5x4w0008r7t2g to collect the job
 The job file keeps the planned circuits. Make space on the disk, then run the command in the
 hint. The script collects that job and does not submit another.
 
-Another program can replace, move or delete the job file while the script submits the job. In
-that case, the script saves the planned circuits and the job id to `<stem>.<job id>.job.json`.
+In two cases, the script saves the planned circuits and the job id to a new job file,
+`<stem>.<job id>.job.json`:
+
+- Another program replaced, moved or deleted the job file while the script submitted the job or
+  added the job id.
+- A failed write left a part of the job id in the job file, and the script could not remove that
+  part.
+
 The script creates this file only if no file has that name. The hint gives the command that
 collects the job:
 
