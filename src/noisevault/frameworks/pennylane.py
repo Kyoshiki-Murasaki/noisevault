@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sys
 from collections import Counter
-from collections.abc import Callable, Container, Hashable, Mapping, Sequence
+from collections.abc import Callable, Container, Hashable, Iterable, Mapping, Sequence
 from itertools import compress
 from math import pi
 from types import FrameType
@@ -24,7 +24,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from ..errors import LayoutError, NoiseVaultError, install_hint
+from ..errors import DisabledGateError, LayoutError, NoiseVaultError, install_hint
 
 try:
     import pennylane as qml
@@ -50,6 +50,7 @@ from ..conversion import UnknownGates, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
+from ..table import GateNoise
 
 Layout = Mapping[Hashable, int] | Sequence[int]
 Kraus = tuple[np.ndarray, ...]
@@ -224,6 +225,9 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
 
     def _reset_noise(self, op: MidMeasureMP, **_: Any) -> None:
         qubit = self.physical_qubit(op.wires[0])
+        reset = self.profile.table.gate("reset", (qubit,))
+        if isinstance(reset, GateNoise) and reset.state == "disabled":
+            raise DisabledGateError(f"reset on {reset.qubits} is disabled in this profile")
         error = self.profile.table.qubit(qubit).prep_error
         if error is None:
             self.report.mark_unknown(f"reset error on qubit {qubit}")
@@ -516,8 +520,9 @@ def _measured_basis(obs: Operator | None) -> tuple[Operator, ...] | None:
     """
     if obs is None:
         return ()
-    if obs.pauli_rep is not None:
-        return _pauli_basis(obs.pauli_rep)
+    words = _pauli_terms(obs)
+    if words is not None:
+        return _pauli_basis(words)
     try:
         with qml.QueuingManager.stop_recording():
             basis = tuple(obs.diagonalizing_gates())
@@ -526,7 +531,23 @@ def _measured_basis(obs: Operator | None) -> tuple[Operator, ...] | None:
     return basis if all(len(gate.wires) == 1 for gate in basis) else None
 
 
-def _pauli_basis(words: qml.pauli.PauliSentence) -> tuple[Operator, ...] | None:
+def _pauli_terms(obs: Operator | None) -> qml.pauli.PauliSentence | None:
+    """The Pauli words of ``obs`` after PennyLane's simplification, or None if ``obs`` has no
+    Pauli form.
+
+    ``default.mixed`` measures the simplified observable. The simplification removes each word
+    whose coefficient is at most 1e-8. Thus ``X(0) + 0 * Y(1)`` reads only wire 0, in the X
+    basis. The copy keeps the Pauli form of ``obs`` unchanged.
+    """
+    words = getattr(obs, "pauli_rep", None)
+    if words is None:
+        return None
+    words = qml.pauli.PauliSentence(words)
+    words.simplify()
+    return words
+
+
+def _pauli_basis(words: Iterable[qml.pauli.PauliWord]) -> tuple[Operator, ...] | None:
     """Rotations that make every +1 eigenstate read 0, from the Pauli letter of each wire.
 
     The rotations come from the letters and not from the observable's own diagonalizing gates.
@@ -595,7 +616,7 @@ def _shot_group(mp: Any, words: list[Any]) -> tuple[tuple[Operator, ...], list[H
                     hint="wrap the QNode in qml.transforms.split_non_commuting before"
                     " qml.add_noise",
                 )
-        rotations += [g for g in _pauli_basis(m.obs.pauli_rep) if reader[g.wires[0]][0] == i]
+        rotations += [g for g in _pauli_basis([word]) if reader[g.wires[0]][0] == i]
         wires += [wire for wire in m.wires if wire not in wires]
     return tuple(rotations), wires
 
@@ -603,7 +624,7 @@ def _shot_group(mp: Any, words: list[Any]) -> tuple[tuple[Operator, ...], list[H
 def _word(mp: Any) -> qml.pauli.PauliWord | None:
     """The Pauli letter of each wire of ``mp``'s observable, or None if the observable is not
     one Pauli word with at least one letter."""
-    words = getattr(mp.obs, "pauli_rep", None)
+    words = _pauli_terms(mp.obs)
     if not _reads_out(mp) or words is None or len(words) != 1:
         return None
     return next(iter(words)) or None

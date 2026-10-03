@@ -12,6 +12,7 @@ from conftest import MANILA_V01, migrated, require, toy
 from noisevault.channels import ChannelSpec, superoperator
 from noisevault.conversion import resolve_op
 from noisevault.errors import (
+    DisabledGateError,
     LayoutError,
     MissingCalibrationError,
     NoiseApproximationWarning,
@@ -689,6 +690,45 @@ def test_shots_refuse_pauli_words_whose_shared_shots_default_mixed_decides(qml) 
     assert np.asarray(probs_1) == pytest.approx(in_z0.reshape(2, 2).sum(axis=0), abs=sigma)
 
 
+@pytest.mark.parametrize("readout_error", [0.01, 0.0])
+def test_a_zero_coefficient_term_does_not_split_shared_shots(qml, readout_error) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    profile = _ideal_gates(readout_error)
+    bell = [Op("h", (0,)), Op("cx", (0, 1))]
+    shots = 10_000
+
+    @qml.qnode(qml.device("default.mixed", wires=2, seed=19))
+    def circuit():
+        _pl_ops(qml, bell)
+        return qml.sample(qml.X(0) + 0 * qml.Y(1)), qml.sample(qml.X(1))
+
+    x0, x1 = qml.set_shots(qml.add_noise(circuit, to_pennylane(profile)), shots=shots)()
+    expected = probabilities(profile, bell + [Op("h", (0,)), Op("h", (1,))], 2) @ [1, -1, -1, 1]
+    product = np.mean(np.asarray(x0) * np.asarray(x1))
+    assert product == pytest.approx(expected, abs=5 / np.sqrt(shots))
+
+
+def test_a_zero_coefficient_term_does_not_hide_the_measured_basis(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    data = toy(
+        gates={"h": {"avg_infidelity": 0.0}},
+        qubits=[{"index": 0, "readout": {"p1_given_0": 0.2, "p0_given_1": 0.2}}],
+    )
+    profile = Profile.model_validate(data)
+    model = to_pennylane(profile)
+
+    @qml.qnode(qml.device("default.mixed", wires=1))
+    def circuit():
+        qml.Hadamard(0)
+        return qml.expval(qml.dot([1, 0], [qml.X(0), qml.Z(0)]))
+
+    in_x0 = probabilities(profile, [Op("h", (0,)), Op("h", (0,))], 1)
+    assert float(qml.add_noise(circuit, model)()) == pytest.approx(in_x0 @ [1, -1], abs=1e-12)
+    assert "readout on observables not measured in one product basis" not in model.report.omitted
+
+
 def test_shot_vectors_with_readout_raise_instead_of_dropping_results(qml) -> None:
     from noisevault.frameworks.pennylane import to_pennylane
 
@@ -840,6 +880,33 @@ def test_reset_gets_the_preparation_error(qml) -> None:
     unknown = to_pennylane(Profile.model_validate(toy()), readout=False)
     assert np.asarray(qml.add_noise(circuit, unknown)()) == pytest.approx([1, 0], abs=1e-12)
     assert "reset error on qubit 0" in unknown.report.unknown
+
+
+@pytest.mark.parametrize("where", ["record", "definition"])
+def test_a_reset_the_profile_disables_is_refused(qml, where) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    data = toy(gates={"x": {"avg_infidelity": 0.0}}, prep={"error": 0.03})
+    if where == "record":
+        data["gates"]["reset"] = {}
+        data["calibrations"] = [{"gate": "reset", "qubits": [2], "disabled": True}]
+    else:
+        data["gates"]["reset"] = {"disabled": True}
+    model = to_pennylane(Profile.model_validate(data), layout=[0, 2, 1], readout=False)
+
+    def run(wire):
+        @qml.qnode(qml.device("default.mixed", wires=3))  # deferred measurement needs a spare wire
+        def circuit():
+            qml.PauliX(wire)
+            qml.measure(wire, reset=True)
+            return qml.probs(wires=[wire])
+
+        return np.asarray(qml.add_noise(circuit, model)())
+
+    with pytest.raises(DisabledGateError, match=r"^reset on \(2,\) is disabled in this profile$"):
+        run(1)
+    if where == "record":
+        assert run(0) == pytest.approx([0.97, 0.03], abs=1e-12)
 
 
 # unknown gates, report -----------------------------------------------------------------------
