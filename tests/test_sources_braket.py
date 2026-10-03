@@ -568,6 +568,26 @@ def test_a_value_a_profile_cannot_hold_names_the_file_and_the_value(tmp_path: Pa
     )
 
 
+@pytest.mark.parametrize(
+    ("file", "device", "hint"),
+    [
+        ("rigetti.json.bak", None, "rename rigetti.json.bak or pass device= with another name"),
+        ("rigetti.json", "rigetti.gz", "pass device= with another name"),
+    ],
+    ids=["file-name", "device"],
+)
+def test_a_name_that_is_not_a_profile_id_says_how_to_name_the_device(
+    tmp_path: Path, file: str, device: str | None, hint: str
+) -> None:
+    path = tmp_path / file
+    path.write_bytes(RIGETTI.read_bytes())
+    with pytest.raises(nv.SourceDataError) as info:
+        from_braket(path, device=device)
+    id_from = device or path.stem
+    assert info.value.message.startswith(f"{file}: device: the profile id {id_from!r}")
+    assert info.value.hint == hint
+
+
 def _set(path: tuple[str | int, ...], value: object) -> Callable[[Any], None]:
     return lambda doc: _parent(doc, path).__setitem__(path[-1], value)
 

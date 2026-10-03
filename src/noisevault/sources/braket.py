@@ -228,30 +228,35 @@ def from_braket(
     ]
     physics = build(std, paradigm, notes)
     calibrated_at = _calibrated_at(caps, std, notes, origin)
-    return origin.profile(
-        {
-            "noisevault": "1.0",
-            "device": {
-                "vendor": vendor,
-                "name": name,
-                "technology": _TECHNOLOGY.get(vendor or "", "other"),
-                "num_qubits": physics.pop("num_qubits"),
-                "calibrated_at": calibrated_at,
-            },
-            **physics,
-            "provenance": {
-                "data_kind": "measured",
-                "source_kind": "user_file",
-                "source": f"Amazon Braket device properties (standardized v{version})",
-                "license": "AWS Customer Agreement (not an open license)",
-                "attribution": f"{vendor or 'the hardware provider'} via Amazon Braket",
-                "redistributable": "no",
-                "source_hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
-                "tool": f"noisevault {__version__}",
-                "notes": notes,
-            },
-        }
-    )
+    fields = {
+        "noisevault": "1.0",
+        "device": {
+            "vendor": vendor,
+            "name": name,
+            "technology": _TECHNOLOGY.get(vendor or "", "other"),
+            "num_qubits": physics.pop("num_qubits"),
+            "calibrated_at": calibrated_at,
+        },
+        **physics,
+        "provenance": {
+            "data_kind": "measured",
+            "source_kind": "user_file",
+            "source": f"Amazon Braket device properties (standardized v{version})",
+            "license": "AWS Customer Agreement (not an open license)",
+            "attribution": f"{vendor or 'the hardware provider'} via Amazon Braket",
+            "redistributable": "no",
+            "source_hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
+            "tool": f"noisevault {__version__}",
+            "notes": notes,
+        },
+    }
+    try:
+        return origin.profile(fields)
+    except SourceDataError as exc:
+        if not exc.message.startswith(f"{source}: device: the profile id "):
+            raise
+        rename = "" if device else f"rename {source} or "
+        raise SourceDataError(exc.message, hint=f"{rename}pass device= with another name") from None
 
 
 def _calibrated_at(
