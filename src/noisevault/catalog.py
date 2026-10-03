@@ -34,15 +34,20 @@ from .errors import (
     parse_json,
 )
 from .profile import (
+    Held,
     Profile,
     Ref,
+    _FileInTheWay,
     canonical_json,
+    drop,
     exact_ref,
     file_bytes,
     iso_z,
     load_bytes,
     load_file,
     parse_ref,
+    publish,
+    take,
     write_atomically,
     write_new,
 )
@@ -71,9 +76,6 @@ _ENTRY_TYPES: dict[str, Any] = {
 
 
 class _BadArgument(NoiseVaultError, ValueError): ...
-
-
-class _FileInTheWay(NoiseVaultError, FileExistsError): ...
 
 
 @dataclass(frozen=True)
@@ -448,40 +450,71 @@ def pull_and_save(
     if held is not None:
         return Pulled(profile, Path(str(held.path)), written=False)
     old = next((i for i in same_id if i.calibrated_at == profile.device.calibrated_at), None)
-    if old is None:
-        path = vault_path(profile)
-        if write_new(path, file_bytes(profile, path)):
-            return Pulled(profile, path, written=True)
-        old = _same_calibration_at(path, profile)
-        if old.fingerprint == profile.fingerprint:
-            return Pulled(profile, path, written=False)
-    path = Path(str(old.path))  # can have an older naming scheme, so replace that file
-    warnings.warn(
-        f"replaced {path.name} (nv:{old.fingerprint[:12]}) with this pull"
-        f" ({profile.short_fingerprint}), which imports the same calibration differently."
-        " Update any expect= pins",
-        NoiseVaultWarning,
-        stacklevel=3,
-    )
-    return Pulled(profile, profile.save(path), written=True)
+    path = vault_path(profile) if old is None else Path(str(old.path))  # can have an older name
+    return Pulled(profile, path, _save_in_vault(profile, path))
 
 
-def _same_calibration_at(path: Path, profile: Profile) -> ProfileInfo:
-    """The vault file at ``path``. Raises _FileInTheWay unless it holds the calibration of
-    ``profile``."""
+def _save_in_vault(profile: Profile, path: Path) -> bool:
+    """Save ``profile`` at ``path``. False if the file at ``path`` already holds this import.
+
+    The pull replaces only a file that imports the same calibration differently, and warns. It
+    first moves that file to a hidden name. If the moved file is not the file that the pull read,
+    the pull moves it back and reads ``path`` again.
+    """
+    data = file_bytes(profile, path)
+    replaced: list[tuple[Held, str]] = []
     try:
-        _, there = _vault_entry(path, None)
+        written = write_new(path, data)
+        while not written:
+            raw, fingerprint = _same_calibration_at(path, profile)
+            if fingerprint == profile.fingerprint:
+                break
+            taken = take(path)
+            if taken is not None and taken.data == raw:
+                replaced.append((taken, fingerprint))
+            elif taken is not None:
+                if not publish(taken, path):
+                    raise _FileInTheWay(
+                        f"{path} changed during the pull. The pull saved nothing and moved the"
+                        f" file that was there to {taken.path.name}",
+                        hint=f"move {taken.path.name} out of {path.parent}, then pull again",
+                    )
+                drop(taken)
+            written = write_new(path, data)
+    finally:
+        for taken, _ in replaced:
+            drop(taken)
+    for _, fingerprint in replaced:
+        warnings.warn(
+            f"replaced {path.name} (nv:{fingerprint[:12]}) with this pull"
+            f" ({profile.short_fingerprint}), which imports the same calibration differently."
+            " Update any expect= pins",
+            NoiseVaultWarning,
+            stacklevel=4,
+        )
+    return written
+
+
+def _same_calibration_at(path: Path, profile: Profile) -> tuple[bytes, str]:
+    """The bytes and fingerprint of the vault file at ``path``. Raises _FileInTheWay unless the
+    file holds the calibration of ``profile``."""
+    try:
+        if not S_ISREG(path.stat().st_mode):
+            raise OSError("not a regular file")
+        raw = path.read_bytes()
+        there = load_bytes(raw)
     except Exception:
         raise _FileInTheWay(
             f"{path} exists but is not readable",
             hint=f"make the file readable or move the file out of {path.parent}, then pull again",
         ) from None
-    if (there.id, there.calibrated_at) != (profile.id, profile.device.calibrated_at):
+    if (there.id, there.device.calibrated_at) != (profile.id, profile.device.calibrated_at):
         raise _FileInTheWay(
-            f"{path} already holds {there.ref}, another calibration",
+            f"{path} already holds {exact_ref(there.id, there.device.calibrated_at)}, another"
+            " calibration",
             hint=f"move that file out of {path.parent} and pull again",
         )
-    return there
+    return raw, there.fingerprint
 
 
 _DEFAULT_SOURCES = {"ibm_": "ibm", "ionq": "ionq"}  # id prefix -> source that pulls it

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import errno
 import json
 import os
 import pickle
 import random
 import re
+import shutil
 import stat
 import threading
 from collections.abc import Iterator
@@ -320,6 +322,73 @@ def test_an_interrupted_save_leaves_the_existing_file_whole(
             Profile.model_validate(toy(readout={"error": 0.05})).save(target)
     assert target.read_bytes() == before
     assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize(
+    ("failing", "error"), [("write", "Bad file descriptor"), ("replace", "Input/output error")]
+)
+def test_a_failed_save_never_deletes_a_file_that_replaced_its_hidden_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failing: str, error: str
+) -> None:
+    path = tmp_path / "noise.json"
+    theirs: list[Path] = []
+
+    def other_writer(hidden: Any) -> None:
+        other = tmp_path / "theirs"
+        other.write_bytes(b"theirs")
+        os.rename(other, hidden)
+        theirs.append(Path(hidden))
+
+    if failing == "write":
+        real_open = os.open
+
+        def read_only_then_replaced(file: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            if not Path(file).name.startswith(f".{path.name}."):
+                return real_open(file, flags, *args, **kwargs)
+            fd = real_open(file, flags & ~os.O_WRONLY, *args, **kwargs)
+            other_writer(file)
+            return fd
+
+        monkeypatch.setattr(os, "open", read_only_then_replaced)
+    else:
+
+        def replaced_then_failing(src: Any, dst: Any) -> None:
+            other_writer(src)
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+        monkeypatch.setattr(os, "replace", replaced_then_failing)
+    with pytest.raises(OSError, match=error):
+        Profile.model_validate(toy()).save(path)
+    assert theirs[0].read_bytes() == b"theirs"
+    assert not path.exists()
+
+
+def test_a_save_never_publishes_a_file_that_replaced_its_hidden_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = Profile.model_validate(toy()).save(tmp_path / "p.json")
+    before = target.read_bytes()
+    real_copymode = shutil.copymode
+    theirs: list[Path] = []
+
+    def copymode_after_another_writer(src: Any, dst: Any) -> None:
+        other = tmp_path / "theirs"
+        other.write_bytes(b"theirs")
+        os.rename(other, dst)
+        theirs.append(Path(dst))
+        real_copymode(src, dst)
+
+    monkeypatch.setattr(shutil, "copymode", copymode_after_another_writer)
+    with pytest.raises(FileExistsError) as info:
+        Profile.model_validate(toy(readout={"error": 0.05})).save(target)
+    assert isinstance(info.value, nv.NoiseVaultError)
+    assert (info.value.message, info.value.hint) == (
+        f"the save wrote nothing to {target}, because another file replaced the hidden copy"
+        f" {theirs[0].name}",
+        "save again",
+    )
+    assert (target.read_bytes(), theirs[0].read_bytes()) == (before, b"theirs")
+    assert sorted(tmp_path.iterdir()) == sorted([target, theirs[0]])
 
 
 @pytest.fixture
