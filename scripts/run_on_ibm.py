@@ -36,7 +36,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -431,17 +431,24 @@ def run(
             _drop(pending, record)
             raise
         submitted = Submitted(job.job_id(), batch.profile, batch.planned, batch.options)
-        try:
-            _write(record, _line({"job_id": submitted.job_id}))
-        except BaseException as exc:
-            with contextlib.suppress(OSError):
-                os.ftruncate(record, len(plan))
-            with contextlib.suppress(OSError):
-                os.close(record)
-            raise NoiseVaultError(
-                f"could not save job {submitted.job_id} to {pending} ({_reason(exc)})",
-                hint=f"run the same command with --job-id {submitted.job_id} to collect the job",
-            ) from None
+        job_line = _line({"job_id": submitted.job_id})
+        if _ours(pending, record):
+            try:
+                _write(record, job_line)
+            except BaseException as exc:
+                with contextlib.suppress(OSError):
+                    os.ftruncate(record, len(plan))
+                with contextlib.suppress(OSError):
+                    os.close(record)
+                raise NoiseVaultError(
+                    f"could not save job {submitted.job_id} to {pending} ({_reason(exc)})",
+                    hint=f"run the same command with --job-id {submitted.job_id} to collect the"
+                    " job",
+                ) from None
+        if not _ours(pending, record):
+            os.close(record)
+            kept = _beside(output, f".{submitted.job_id}.job.json")
+            _save_elsewhere(pending, kept, submitted.job_id, plan + job_line)
         print(f"submitted job {submitted.job_id} to {device}")
     print("waiting for it to run")
     print("Ctrl-C stops waiting. Run the same command again to collect the job")
@@ -482,7 +489,14 @@ def run(
                 f"stopped before the script saved the counts of job {submitted.job_id}", hint=again
             ) from None
         raise
-    _drop(pending, record)
+    try:
+        _drop(pending, record)
+    except OSError as exc:
+        print(
+            f"warning: could not delete {pending} ({_reason(exc)}). The script saved the"
+            " counts, so you can delete the job file",
+            file=sys.stderr,
+        )
     if binding.warning:
         print(f"warning: {binding.warning}", file=sys.stderr)
         if binding.hint:
@@ -514,7 +528,16 @@ def _resume(
     try:
         record = os.open(pending, os.O_RDONLY | BINARY)
     except FileNotFoundError:
-        raise _no_job_file(pending) from None
+        raise NoiseVaultError(
+            f"no job file {pending}",
+            hint="another run collected the job or deleted the job file. The script did not submit"
+            " a job",
+        ) from None
+    except OSError as exc:
+        raise NoiseVaultError(
+            f"could not read {pending} ({_reason(exc)})",
+            hint="make the job file readable. Then run the same command again",
+        ) from None
     try:
         submitted = _submitted(pending, record, job_id)
         try:
@@ -527,6 +550,22 @@ def _resume(
     except BaseException:
         os.close(record)
         raise
+
+
+def _save_elsewhere(pending: Path, kept: Path, job_id: str, data: bytes) -> NoReturn:
+    changed = f"{pending} changed while the script submitted job {job_id}"
+    try:
+        os.close(_create({kept: data})[kept])
+    except OSError as exc:
+        raise NoiseVaultError(
+            f"{changed}, and the script could not save job {job_id} to {kept} ({_reason(exc)})",
+            hint=f"find job {job_id} in your IBM Quantum account. The script did not save the"
+            " planned circuits of the job",
+        ) from None
+    raise NoiseVaultError(
+        f"{changed}. The script saved job {job_id} to {kept}",
+        hint=f"run the same command with --collect {kept} to collect the job",
+    )
 
 
 def _submitted(pending: Path, record: int, job_id: str | None) -> Submitted:
@@ -597,11 +636,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         import qiskit_ibm_runtime  # noqa: F401
     except ImportError:
         return _fail("run_on_ibm.py needs qiskit-ibm-runtime", install_hint("ibm"))
-    collect_only = args.collect is not None or args.job_id is not None
     pending = args.collect or _beside(args.output, ".job.json")
+    collect_only = args.collect is not None or args.job_id is not None or pending.exists()
     try:
         if collect_only and not pending.exists():
-            raise _no_job_file(pending)
+            raise NoiseVaultError(
+                f"no job file {pending}",
+                hint="give --collect the .job.json file that the script saved beside the counts"
+                " file",
+            )
         _writable(args.output, pending)
         service = _service()
         measured = run(
@@ -669,13 +712,6 @@ def _positive(text: str) -> int:
     if value < 1:
         raise argparse.ArgumentTypeError(f"{text!r} is not a positive whole number")
     return value
-
-
-def _no_job_file(pending: Path) -> NoiseVaultError:
-    return NoiseVaultError(
-        f"no job file {pending}",
-        hint="give --collect the .job.json file that the script saved beside the counts file",
-    )
 
 
 def _writable(output: Path, pending: Path) -> None:

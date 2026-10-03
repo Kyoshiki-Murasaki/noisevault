@@ -212,12 +212,18 @@ to the `.timing.json`, `.profile.json` and `.job.json` files beside it.
 - Before the script submits the job, it creates the job file and writes the planned circuits
   into it. If the job file exists at that time, the script stops and submits nothing. A second
   run of the same command can create the job file while the first run waits for your answer.
-- After IBM accepts the job, the script adds the job id to the job file.
+- After IBM accepts the job, the script adds the job id to the job file. Before and after it adds
+  the job id, the script checks that the job file is still the file that it created. If another
+  program replaced, moved or deleted the job file, the script does not change that file. The
+  script saves the job to a new job file and stops. See
+  [If the script cannot save the job id](#if-the-script-cannot-save-the-job-id).
 - After the job runs, the script writes the counts, timing and profile files together. If
   another program created or replaced one of them before the script finished, the script keeps
   none of its own files. It keeps the other program's file and the job file.
 - The script deletes a job file only if that file is still the job file that it read or created.
   If another run saved a new job file at the same path, the script keeps the new job file.
+- If the script cannot delete the job file after it saves the counts, it prints a warning. Then
+  it prints the saved files and the `nv compare` command. You can delete the job file yourself.
 
 To collect a job to a new counts file, give `--collect` the job file. Then give `-o` a new file
 name. For example, run the same command with
@@ -225,8 +231,11 @@ name. For example, run the same command with
 does not submit another. You can also move the other program's file to a different path. Then run
 the same command again.
 
-With `--collect` or `--job-id`, the script never submits a job. If the job file is gone when the
-script reads it, the script stops with an error.
+The script checks for the job file before it opens your account. If the job file exists at that
+time, the script collects the job that the file records. The script also collects a job when you
+give `--collect` or `--job-id`. When the script collects a job, it never submits a job. If the
+script cannot read the job file, or the job file is gone when the script reads it, the script
+stops with an error.
 
 ### If the script cannot save the job id
 
@@ -241,6 +250,19 @@ hint: run the same command with --job-id d1h9q8k5x4w0008r7t2g to collect the job
 
 The job file keeps the planned circuits. Make space on the disk, then run the command in the
 hint. The script collects that job and does not submit another.
+
+Another program can replace, move or delete the job file while the script submits the job. In
+that case, the script saves the planned circuits and the job id to `<stem>.<job id>.job.json`.
+The script creates this file only if no file has that name. The hint gives the command that
+collects the job:
+
+```text
+error: kingston-0416.job.json changed while the script submitted job d1h9q8k5x4w0008r7t2g. The script saved job d1h9q8k5x4w0008r7t2g to kingston-0416.d1h9q8k5x4w0008r7t2g.job.json
+hint: run the same command with --collect kingston-0416.d1h9q8k5x4w0008r7t2g.job.json to collect the job
+```
+
+If the script cannot save that file either, the error names the job id. Find the job in your IBM
+Quantum account.
 
 ### Errors from IBM
 

@@ -999,8 +999,12 @@ def test_a_file_that_appears_at_the_output_while_the_job_waits_is_kept_with_the_
     assert not pending.exists()
 
 
+@pytest.mark.parametrize("collect", [True, False], ids=["--collect", "the same command again"])
 def test_collect_submits_nothing_when_another_collect_removes_the_job_file_first(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    collect: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     submissions = _recording_sampler(monkeypatch)
     _account(monkeypatch, _fractional_fez(), submissions)
@@ -1015,16 +1019,153 @@ def test_collect_submits_nothing_when_another_collect_removes_the_job_file_first
         return service()
 
     monkeypatch.setattr(script, "_service", the_other_collect_ends_while_the_account_opens)
-    output = folder / "fez-2.counts.json"
+    output = folder / ("fez-2.counts.json" if collect else "fez.counts.json")
+    command = ["ibm_fez", "--yes", "-o", str(output)]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        code = script.main(["ibm_fez", "--yes", "-o", str(output), "--collect", str(pending)])
+        code = script.main([*command, "--collect", str(pending)] if collect else command)
     assert (code, submissions) == (1, [])
     assert capsys.readouterr().err == (
         f"error: no job file {pending}\n"
-        "hint: give --collect the .job.json file that the script saved beside the counts file\n"
+        "hint: another run collected the job or deleted the job file. The script did not submit"
+        " a job\n"
     )
     assert list(folder.iterdir()) == []
+
+
+@pytest.mark.parametrize("change", ["replaced", "moved"])
+def test_a_job_file_that_changes_while_the_job_is_submitted_keeps_the_job_in_a_new_job_file(
+    change: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    submissions = _recording_sampler(monkeypatch, lose_the_first_wait=True)
+    _account(monkeypatch, _fractional_fez(), submissions)
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    output, pending, moved = (
+        folder / "fez.counts.json",
+        folder / "fez.job.json",
+        tmp_path / "moved.json",
+    )
+    submit = script.submit
+    planned: list[bytes] = []
+
+    def another_program_changes_the_job_file(*args: Any) -> Any:
+        job = submit(*args)
+        planned.append(pending.read_bytes())
+        if change == "moved":
+            pending.rename(moved)
+        _put(pending, "another run\n")
+        return job
+
+    monkeypatch.setattr(script, "submit", another_program_changes_the_job_file)
+    command = ["ibm_fez", "--yes", "-o", str(output)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert script.main(command) == 1
+        (submission,) = submissions
+        job_id = submission.job.job_id()
+        kept = folder / f"fez.{job_id}.job.json"
+        assert capsys.readouterr().err == (
+            f"error: {pending} changed while the script submitted job {job_id}. The script saved"
+            f" job {job_id} to {kept}\n"
+            f"hint: run the same command with --collect {kept} to collect the job\n"
+        )
+        assert pending.read_text() == "another run\n"
+        assert kept.read_bytes() == planned[0] + script._line({"job_id": job_id})
+        if change == "moved":
+            assert moved.read_bytes() == planned[0]
+        del submission.job.result
+        assert script.main([*command, "--collect", str(kept)]) == 0
+    assert len(submissions) == 1
+    assert load_counts(output).execution.job_ids == (job_id,)
+    assert not kept.exists()
+    assert pending.read_text() == "another run\n"
+
+
+def test_a_job_file_that_changes_on_a_full_disk_while_the_job_is_submitted_names_the_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    submissions = _recording_sampler(monkeypatch)
+    _account(monkeypatch, _fractional_fez(), submissions)
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    output, pending = folder / "fez.counts.json", folder / "fez.job.json"
+    disk = _disk(monkeypatch, folder)
+    submit = script.submit
+
+    def another_program_replaces_the_job_file_and_fills_the_disk(*args: Any) -> Any:
+        job = submit(*args)
+        _put(pending, "another run\n")
+        disk.bytes_left = 0
+        return job
+
+    monkeypatch.setattr(script, "submit", another_program_replaces_the_job_file_and_fills_the_disk)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert script.main(["ibm_fez", "--yes", "-o", str(output)]) == 1
+    (submission,) = submissions
+    job_id = submission.job.job_id()
+    kept = folder / f"fez.{job_id}.job.json"
+    assert capsys.readouterr().err == (
+        f"error: {pending} changed while the script submitted job {job_id}, and the script could"
+        f" not save job {job_id} to {kept} ([Errno 28] No space left on device: '{kept}')\n"
+        f"hint: find job {job_id} in your IBM Quantum account. The script did not save the planned"
+        " circuits of the job\n"
+    )
+    assert sorted(folder.iterdir()) == [pending]
+    assert pending.read_text() == "another run\n"
+
+
+def test_a_job_file_that_the_script_cannot_read_gives_an_error_and_submits_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    submissions = _recording_sampler(monkeypatch)
+    _account(monkeypatch, _fractional_fez(), submissions)
+    output, pending = tmp_path / "fez.counts.json", tmp_path / "fez.job.json"
+    _save_job_file(_submitted_and_ran(_fez_profile())[0], pending)
+    real_open = os.open
+
+    def open_(file: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if Path(file) == pending and not flags & os.O_CREAT:
+            raise PermissionError(errno.EACCES, "Permission denied", str(file))
+        return real_open(file, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_)
+    assert script.main(["ibm_fez", "--yes", "-o", str(output)]) == 1
+    assert capsys.readouterr().err == (
+        f"error: could not read {pending} ([Errno 13] Permission denied: '{pending}')\n"
+        "hint: make the job file readable. Then run the same command again\n"
+    )
+    assert submissions == []
+    assert sorted(tmp_path.iterdir()) == [pending]
+
+
+def test_a_job_file_that_the_script_cannot_delete_after_it_saves_the_counts_gives_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run = _collecting_job_1(tmp_path, monkeypatch)
+    output, pending = tmp_path / "fez.counts.json", tmp_path / "fez.job.json"
+    unlink = Path.unlink
+
+    def refused(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path == pending:
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refused)
+    assert run() is not None
+    printed = capsys.readouterr()
+    assert printed.err == (
+        f"warning: could not delete {pending} ([Errno 13] Permission denied: '{pending}'). The"
+        " script saved the counts, so you can delete the job file\n"
+    )
+    label, *command, _, path = printed.out.rstrip("\n").splitlines()[-1].split()
+    assert (label, command, path) == ("next", ["nv", "compare"], str(output))
+    assert load_counts(output).execution.job_ids == ("job-1",)
+    assert pending.exists()
 
 
 def test_a_disk_that_fills_when_the_job_is_submitted_keeps_the_job_for_the_next_run(
