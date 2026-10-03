@@ -358,6 +358,81 @@ def test_p_values_on_dense_counts_spread_over_the_whole_range() -> None:
     assert high - low > 0.3, (low, high)
 
 
+MOST_SHOTS = 10_000_000_000
+
+
+def test_the_search_follows_a_ridge_to_a_maximum_far_from_the_grid_peak() -> None:
+    profile = one_qubit(
+        "ridge", {"x": {"avg_infidelity": 0.01}}, readout={"p1_given_0": 0.3, "p0_given_1": 0}
+    )
+    empty = {"0": 669337, "1": 3330663}
+    circuits = [("xx", XX, {"0": 654400, "1": 3345600}), ("e1", (), empty), ("e2", (), empty)]
+    result = compare(profile, written(profile, circuits))
+    assert result.deviance < 1e-3, result.deviance
+    assert result.gates.factor == pytest.approx(1.13002, rel=1e-3), result.gates
+    assert "within shot noise on every circuit" in str(result)
+
+
+def test_a_held_factor_gets_the_other_factor_refitted_to_the_likelihood_tolerance() -> None:
+    profile = Profile.model_validate(
+        {
+            "noisevault": "1.0",
+            "device": {"name": "orthogonal", "technology": "superconducting", "num_qubits": 2},
+            "connectivity": "all_to_all",
+            "gates": {"x": {"avg_infidelity": 0.01}},
+            "qubits": [{"index": 1, "readout": {"p1_given_0": 0.3, "p0_given_1": 0}}],
+        }
+    )
+    xx = ("xx", XX, {"0": 9_776_842_646, "1": 223_157_354})
+    empty = {"0": 1_673_342_748, "1": 8_326_657_252}
+    data = written(profile, [xx, ("empty1", (), empty), ("empty2", (), empty)]).to_dict()
+    for entry in data["circuits"][1:]:
+        entry["qubits"] = [1]
+    gates = compare(profile, MeasuredCounts.model_validate(data)).gates
+    alone = compare(profile, written(profile, [xx])).gates
+    half = math.log(alone.high / alone.low) / 2
+    for end, expected in ((gates.low, alone.low), (gates.high, alone.high)):
+        assert abs(math.log(end / expected)) < 0.05 * half, (gates, alone)
+
+
+def test_an_interval_narrower_than_any_fixed_step_keeps_its_width() -> None:
+    zeros = round(MOST_SHOTS * 0.7**3)
+    counts = {"0": zeros, "1": MOST_SHOTS - zeros}
+    profile = dense_pair()
+    circuits = [(f"readout{i}", (), counts) for i in range(1000)]
+    result = compare(profile, written(profile, circuits)).readout
+    frequency = zeros / MOST_SHOTS
+
+    def lr(factor: float) -> float:
+        zero = 0.7**factor
+        terms = zeros * math.log(frequency / zero) + (MOST_SHOTS - zeros) * math.log(
+            (1 - frequency) / (1 - zero)
+        )
+        return 2 * 1000 * terms
+
+    assert 3.6 < lr(result.low) < 5 and 3.6 < lr(result.high) < 5, result
+
+
+def test_nodes_follow_the_shots_below_any_fixed_gap() -> None:
+    profile, ops = one_qubit("gap", {"x": {"avg_infidelity": 0.2}}), (Op("x", (0,)),) * 3
+
+    def probabilities(factor: float) -> np.ndarray:
+        return reference(scaled(profile, factor), ops, 1, unknown_gates="error")
+
+    ones = round(MOST_SHOTS * probabilities(1.73663)[1])
+    observed = np.array([MOST_SHOTS - ones, ones])
+    circuits = [(f"x{i}", ops, {"0": MOST_SHOTS - ones, "1": ones}) for i in range(50)]
+    result = compare(profile, written(profile, circuits)).gates
+
+    def lr(factor: float) -> float:
+        return 100 * float(
+            np.sum(observed * np.log(observed / (MOST_SHOTS * probabilities(factor))))
+        )
+
+    assert 3.6 < lr(result.low) < 5 and 3.6 < lr(result.high) < 5, result
+    assert lr(result.factor) < 0.04, result
+
+
 def test_two_runs_of_one_plan_build_the_surface_once(monkeypatch: pytest.MonkeyPatch) -> None:
     built = []
     build = fit._Surface.build.__func__

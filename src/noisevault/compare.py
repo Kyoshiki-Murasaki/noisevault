@@ -66,8 +66,6 @@ _AXES: tuple[Axis, Axis] = ("gate", "readout")
 _LO, _HI = math.log(FACTOR_RANGE[0]), math.log(FACTOR_RANGE[1])
 _STEP = (_HI - _LO) / (FINE_POINTS - 1)
 _MIN_WINDOW = 0.05
-_MIN_GAP = _STEP / 16
-_ZOOMS = 64
 _SAME_WAY = "gate error and readout error move these counts the same way"
 _LABEL = 16
 _WIDTH = 80
@@ -575,8 +573,8 @@ class _Surface:
         k = 0
         while k < len(nodes) - 1:
             a, b = nodes[k], nodes[k + 1]
-            if b - a > 2 * _MIN_GAP and any(a <= hi and b >= lo for lo, hi in region):
-                middle = (a + b) / 2
+            middle = (a + b) / 2
+            if a < middle < b and any(a <= hi and b >= lo for lo, hi in region):
                 exact = self.run(middle)
                 if _distance(exact, (unread[k] + unread[k + 1]) / 2, weights) > REFINE_TOL:
                     nodes.insert(k + 1, middle)
@@ -690,6 +688,7 @@ class _Fit:
         self._wilks: dict[Axis, dict[int, float | None]] = {}
         self._peak_ends: dict[Axis, dict[int, float | None]] = {}
         self._windows: tuple[_Window, ...] = ()
+        self._restricted: dict[tuple[Axis, float], tuple[float, float]] = {}
 
     def interval(self, axis: Axis) -> FactorResult:
         at = self.at[axis]
@@ -724,14 +723,14 @@ class _Fit:
 
     def _end(self, axis: Axis, wilks: float, side: int, edge: float) -> float | None:
         near = self._peak_ends[axis][side]
-        half = max(abs((wilks if near is None else near) - self.at[axis]), 1e-6)
-        tol = max(END_TOL * half, 1e-6)
+        half = abs((wilks if near is None else near) - self.at[axis])
+        tol = END_TOL * half
 
         def beyond(x: float) -> bool:
             return (x - edge) * side >= 0
 
         inside = edge if beyond(wilks + side * tol) else wilks + side * tol
-        if not self.accepts(axis, inside):
+        if inside == wilks or not self.accepts(axis, inside):
             return wilks
         step = 0.25 * half
         while True:
@@ -747,7 +746,7 @@ class _Fit:
                 outside = candidate
                 break
             inside, step = candidate, 2 * step
-        return _bisect(inside, outside, partial(self.accepts, axis), tol)
+        return _bisect(inside, outside, partial(self.accepts, axis), lambda a, b: abs(b - a) <= tol)
 
     def wilks(self, axis: Axis) -> dict[int, float | None]:
         if axis not in self._wilks:
@@ -757,6 +756,9 @@ class _Fit:
             def within_cutoff(held: float) -> bool:
                 return self.lr(axis, held) <= self.cutoff
 
+            def resolved(inside: float, outside: float) -> bool:
+                return self.lr(axis, outside) - self.lr(axis, inside) <= 2 * ASCENT_TOL
+
             line = _grid(self.surface.axis(axis))
             profile = self.values.max(axis=1 if axis == "gate" else 0)
             accepted = line[2 * (self.best - profile) <= self.cutoff]
@@ -765,7 +767,7 @@ class _Fit:
                 if within_cutoff(edge):
                     ends[side] = peak_ends[side] = None
                     continue
-                end = peak_ends[side] = _bisect(at, edge, within_cutoff, 1e-6)
+                end = peak_ends[side] = _bisect(at, edge, within_cutoff, resolved)
                 farther = [*accepted[(accepted - end) * side > 0]]
                 farther += [x for x in self._beyond(axis, end, side) if within_cutoff(x)]
                 if farther:
@@ -773,7 +775,7 @@ class _Fit:
                     outward = line[(line - inside) * side > 0][::side]
                     for outside in outward:
                         if not within_cutoff(outside):
-                            end = _bisect(inside, float(outside), within_cutoff, 1e-6)
+                            end = _bisect(inside, float(outside), within_cutoff, resolved)
                             break
                         inside = float(outside)
                 ends[side] = end
@@ -784,15 +786,27 @@ class _Fit:
         return 2 * (self.best - self.restricted(axis, held)[1])
 
     def restricted(self, axis: Axis, held: float) -> tuple[float, float]:
+        if (axis, held) not in self._restricted:
+            self._restricted[axis, held] = self._restrict(axis, held)
+        return self._restricted[axis, held]
+
+    def _restrict(self, axis: Axis, held: float) -> tuple[float, float]:
         other = self.surface.axis(_other(axis))
         if other is None:
             return 0.0, float(self._line(axis, held, np.zeros(1), self.observed)[0])
-        center = float(other[int(np.argmax(self._line(axis, held, other, self.observed)))])
+
+        def f(others: ByPoint) -> ByPoint:
+            return self._line(axis, held, others, self.observed)
+
+        center = float(other[int(np.argmax(f(other)))])
         line = np.linspace(max(center - _STEP, _LO), min(center + _STEP, _HI), WINDOW_POINTS)
-        values = self._line(axis, held, line, self.observed)[:, None]
+        values = f(line)[:, None]
         k = np.argmax(values, axis=0)
         vertex = _refine(values, k, line[1] - line[0])
-        return float(line[k[0]] + vertex.shift[0]), float(values[k[0], 0] + vertex.gain[0])
+        x, top = float(line[k[0]] + vertex.shift[0]), float(values[k[0], 0] + vertex.gain[0])
+        if not _at_edge(line, int(k[0])) and abs(float(f(np.array([x]))[0]) - top) <= ASCENT_TOL:
+            return x, top
+        return _zoom(f, x)
 
     def accepts(self, axis: Axis, held: float) -> bool:
         observed = self.lr(axis, held)
@@ -1217,7 +1231,7 @@ def _settled(window: np.ndarray, a: int, b: int, g: np.ndarray, r: np.ndarray) -
 def _zoom(f: Callable[[ByPoint], ByPoint], x: float) -> tuple[float, float]:
     best = float(f(np.array([x]))[0])
     span = _STEP / 8
-    for _ in range(_ZOOMS):
+    while True:
         line = np.unique(
             np.append(np.linspace(max(x - span, _LO), min(x + span, _HI), WINDOW_POINTS), x)
         )
@@ -1225,14 +1239,18 @@ def _zoom(f: Callable[[ByPoint], ByPoint], x: float) -> tuple[float, float]:
         k = int(np.argmax(values))
         if values[k] > best:
             x, best = float(line[k]), float(values[k])
-        edge = k in (0, len(line) - 1) and _LO < line[k] < _HI
-        if edge:
-            continue
+            if _at_edge(line, k):
+                span *= 2
+                continue
         near = values[max(k - 1, 0) : k + 2]
-        if best - near.min() <= max(ASCENT_TOL, 1e-12 * abs(best)):
-            break
-        span = 2 * float(np.diff(line).max())
-    return x, best
+        finer = 2 * float(np.diff(line).max())
+        if best - near.min() <= ASCENT_TOL or finer >= span:
+            return x, best
+        span = finer
+
+
+def _at_edge(line: np.ndarray, k: int) -> bool:
+    return k in (0, len(line) - 1) and _LO < line[k] < _HI
 
 
 def _inside(window: np.ndarray, a: int, b: int, g: np.ndarray, r: np.ndarray) -> bool:
@@ -1321,9 +1339,16 @@ def _confusion(pair: tuple[float, float], log_factor: float) -> np.ndarray:
     return np.array([[1 - a, b], [a, 1 - b]])
 
 
-def _bisect(inside: float, outside: float, accepts: Callable[[float], bool], tol: float) -> float:
-    while abs(outside - inside) > tol:
+def _bisect(
+    inside: float,
+    outside: float,
+    accepts: Callable[[float], bool],
+    close: Callable[[float, float], bool],
+) -> float:
+    while not close(inside, outside):
         middle = (inside + outside) / 2
+        if middle in (inside, outside):
+            break
         if accepts(middle):
             inside = middle
         else:

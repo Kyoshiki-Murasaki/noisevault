@@ -143,7 +143,11 @@ step 8 times smaller until the next step changes the log-likelihood by less than
 billion shots in a circuit, the step therefore becomes much smaller than the grid spacing. Thus
 the deviance does not grow with the shots because of the search. Steps on both axes at once can
 stop before the top of a narrow, curved peak. For such a peak near the maximum, the search moves
-along the gate axis and finds the best readout factor at each gate factor.
+along the gate axis and finds the best readout factor at each gate factor. When the best point is
+at the edge of the search window, the window becomes 2 times wider. Thus the search can reach a
+maximum far from the grid peak. Above about 10^12 shots in total, the rounding error of the
+log-likelihood can be more than 0.001. There, the search stops when the computer cannot represent
+a smaller step.
 
 ### Which factors the counts identify
 
@@ -190,6 +194,12 @@ level. `nv compare` refits the other factor at each value. The starting cutoff i
 value 3.84. When the deviance exceeds its degrees of freedom, `nv compare` multiplies the cutoff by
 their ratio, the dispersion. As a result, a fit that misses by more than shot noise gets wider
 intervals.
+
+The refit of the other factor stops at the same 0.001 in log-likelihood as the search for the
+maximum. The search for each end of an interval keeps two values: the last value that the test
+accepts and the first value that it rejects. The search stops when the refitted log-likelihood at
+these two values differs by less than 0.001. Thus the search makes no interval narrower than the
+test allows, at any number of shots.
 
 The chi-square cutoff is a large-sample approximation. It covers too little when a factor depends
 on a few error shots. On one qubit with a readout error of 0.00055 and 4000 shots, about two shots
