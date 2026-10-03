@@ -965,6 +965,94 @@ def test_a_measurement_where_the_profile_allows_it_keeps_its_noise(qml, kind) ->
         assert noisy == pytest.approx([0.1, 0.9], abs=1e-12)
 
 
+_ONLY_WIRE_0 = {
+    "a zero term": lambda qml: qml.X(0) + 0 * qml.Z(1),
+    "an identity factor": lambda qml: qml.X(0) @ qml.I(1),
+    "a Hamiltonian": lambda qml: qml.Hamiltonian([1.0, 0.0], [qml.X(0), qml.Z(1)]),
+}
+
+
+def _wire_0_reads(qml, model, measure: str, observable):
+    @qml.qnode(qml.device("default.mixed", wires=2, seed=5))
+    def circuit():
+        qml.Hadamard(0)
+        return getattr(qml, measure)(op=observable)
+
+    noisy = qml.add_noise(circuit, model)
+    return qml.set_shots(noisy, shots=50)() if measure in ("sample", "counts") else noisy()
+
+
+@pytest.mark.parametrize("readout", [True, False])
+@pytest.mark.parametrize("measure", ["expval", "var", "sample", "counts"])
+@pytest.mark.parametrize("obs", list(_ONLY_WIRE_0))
+def test_a_pauli_observable_reads_only_the_wires_of_its_simplified_words(
+    qml, obs, measure, readout
+) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    data = toy(
+        gates={"h": {"avg_infidelity": 0.0}, "measure": {}},
+        qubits=[{"index": 0, "readout": {"p1_given_0": 0.1, "p0_given_1": 0.1}}],
+        calibrations=[{"gate": "measure", "qubits": [1], "disabled": True}],
+    )
+    model = to_pennylane(Profile.model_validate(data), readout=readout)
+    got = _wire_0_reads(qml, model, measure, _ONLY_WIRE_0[obs](qml))
+    assert got == pytest.approx(_wire_0_reads(qml, model, measure, qml.X(0)), abs=1e-12)
+    if measure == "expval":
+        assert got == pytest.approx(0.8 if readout else 1.0, abs=1e-12)
+
+
+@pytest.mark.parametrize("readout", [True, False])
+@pytest.mark.parametrize("measure", ["probs", "expval"])
+def test_a_measurement_of_every_wire_of_its_observable_is_refused(qml, measure, readout) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    data = toy(
+        gates={"h": {"avg_infidelity": 0.0}, "measure": {}},
+        calibrations=[{"gate": "measure", "qubits": [1], "disabled": True}],
+    )
+    model = to_pennylane(Profile.model_validate(data), readout=readout)
+    x0 = np.kron([[0, 1], [1, 0]], np.eye(2))
+    observable = qml.X(0) @ qml.I(1) if measure == "probs" else qml.Hermitian(x0, wires=[0, 1])
+    message = r"^measure on qubit 1 is disabled in this profile$"
+    with pytest.raises(DisabledGateError, match=message):
+        _wire_0_reads(qml, model, measure, observable)
+
+
+def test_readout_on_a_wire_with_only_zero_terms_is_not_unknown(qml) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    data = toy(
+        gates={"h": {"avg_infidelity": 0.0}},
+        qubits=[{"index": 0, "readout": {"p1_given_0": 0.1, "p0_given_1": 0.1}}],
+    )
+    model = to_pennylane(Profile.model_validate(data))
+    assert _wire_0_reads(qml, model, "expval", qml.X(0) + 0 * qml.Z(1)) == pytest.approx(0.8)
+    assert model.report.unknown == []
+    _wire_0_reads(qml, model, "expval", qml.X(0) + qml.Z(1))
+    assert model.report.unknown == ["readout on qubit 1"]
+
+
+@pytest.mark.parametrize("shots", [None, 100])
+def test_readout_goes_only_on_the_wires_of_the_simplified_words(qml, shots) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    readout = {"p1_given_0": 0.1, "p0_given_1": 0.1}
+    data = toy(
+        gates={"h": {"avg_infidelity": 0.0}},
+        qubits=[{"index": q, "readout": readout} for q in range(2)],
+    )
+    measured = [qml.expval(qml.X(0) + 0 * qml.Z(1)), qml.var(qml.X(0) @ qml.I(1))]
+    tape = qml.tape.QuantumScript([qml.Hadamard(0)], measured, shots=shots)
+    [noisy], _ = qml.noise.add_noise(tape, to_pennylane(Profile.model_validate(data)))
+    assert [(op.name, op.wires.tolist()) for op in noisy.operations] == [
+        ("Hadamard", [0]),
+        ("Hadamard", [0]),
+        ("QubitChannel", [0]),
+        ("Hadamard", [0]),
+    ]
+
+
 # unknown gates, report -----------------------------------------------------------------------
 
 

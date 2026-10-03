@@ -662,6 +662,50 @@ def test_scheduling_gives_a_reset_the_profile_reset_duration(level: int) -> None
     assert scheduled.estimate_duration(sim.target, unit="s") == pytest.approx(expected_ns * 1e-9)
 
 
+def _prepared(gates: dict[str, Any], *preps: dict[str, float] | None) -> Profile:
+    return Profile.model_validate(
+        toy(
+            device={
+                "name": "prep",
+                "vendor": "test",
+                "technology": "superconducting",
+                "num_qubits": len(preps),
+            },
+            connectivity="all_to_all",
+            gates=gates,
+            readout={"error": 0.0, "duration_ns": 800},
+            qubits=[{"index": q, "prep": p} for q, p in enumerate(preps) if p is not None],
+        )
+    )
+
+
+@pytest.mark.parametrize("level", [2, 3])
+def test_transpile_places_a_reset_on_the_qubit_with_the_lower_preparation_error(level: int) -> None:
+    gates = {
+        "x": {"avg_infidelity": 1e-3, "duration_ns": 10},
+        "h": {"avg_infidelity": 1e-3, "duration_ns": 10},
+        "reset": {"duration_ns": 1000},
+    }
+    sim = quiet_export(_prepared(gates, {"error": 0.04}, {"error": 0.0}))
+    circuit = QuantumCircuit(1, 1)
+    circuit.x(0)
+    circuit.reset(0)
+    circuit.measure(0, 0)
+    placed = transpile(circuit, sim, optimization_level=level, seed_transpiler=19)
+    assert placed.layout.initial_index_layout(filter_ancillas=True) == [1]
+    assert sim.run(placed, shots=10_000, seed_simulator=19).result().get_counts() == {"0": 10_000}
+
+
+def test_a_reset_keeps_its_preparation_error_without_a_duration() -> None:
+    profile = _prepared({"x": {"avg_infidelity": 1e-3}}, {"error": 0.04}, {"error": 0.0}, None)
+    reset = quiet_export(profile).target["reset"]
+    assert {q: None if p is None else (p.error, p.duration) for (q,), p in reset.items()} == {
+        0: (0.04, None),
+        1: (0.0, None),
+        2: None,
+    }
+
+
 def _turned_off(gate: str, *qubits: int) -> Profile:
     return Profile.model_validate(
         toy(

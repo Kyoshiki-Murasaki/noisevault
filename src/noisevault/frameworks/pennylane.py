@@ -88,6 +88,7 @@ _READOUT_MEASUREMENTS = (
     CountsMP,
     *_SHADOW_MEASUREMENTS,
 )
+_EIGENVALUE_MEASUREMENTS = (ExpectationMP, VarianceMP, SampleMP, CountsMP)
 _ROTATED_PAULIS = {"X": qml.PauliX, "Y": qml.PauliY}
 _ADD_NOISE = ("pennylane.noise.add_noise", "add_noise")  # module and name of its tape transform
 _NO_BASIS_FIX = (
@@ -175,7 +176,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             self.physical_qubit(wire)
         for mp in tape.measurements:
             if _reads_out(mp):
-                for wire in mp.wires or tape.wires:
+                for wire in _read_wires(mp, tape):
                     qubit = self.physical_qubit(wire)
                     refuse_disabled(self.profile.table.gate("measure", (qubit,)))
         return tape
@@ -298,7 +299,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
                 "add the rotation to the circuit to give it gate noise",
             )
         tape = self._noised_tape()
-        for wire in mp.wires or tape.wires:
+        for wire in _read_wires(mp, tape):
             if self._readout_matrix(wire) is None:
                 self.report.mark_unknown(f"readout on qubit {self.physical_qubit(wire)}")
         rotations, wires = _shared_readout(mp, basis, tape)
@@ -586,13 +587,15 @@ def _shared_readout(
     Confusion on a wire that a measurement does not read leaves its results alone. Thus
     computational-basis readout goes on every tape wire, and those measurements share a tape.
     """
-    rotations, wires = basis, list(mp.wires)
+    rotations, wires = basis, _read_wires(mp, tape)
     if tape.shots and _word(mp):
-        rotations, wires = _shot_group(mp, [m for m in tape.measurements if _word(m)])
+        rotations, wires = _shot_group(mp, [m for m in tape.measurements if _word(m)], tape)
     return rotations, wires if rotations else list(tape.wires)
 
 
-def _shot_group(mp: Any, words: list[Any]) -> tuple[tuple[Operator, ...], list[Hashable]]:
+def _shot_group(
+    mp: Any, words: list[Any], tape: qml.tape.QuantumScript
+) -> tuple[tuple[Operator, ...], list[Hashable]]:
     letters = [_word(m) for m in words]
     inside = [_commute(_word(mp), word) for word in letters]
     grown = True
@@ -619,8 +622,18 @@ def _shot_group(mp: Any, words: list[Any]) -> tuple[tuple[Operator, ...], list[H
                     " qml.add_noise",
                 )
         rotations += [g for g in _pauli_basis([word]) if reader[g.wires[0]][0] == i]
-        wires += [wire for wire in m.wires if wire not in wires]
+        wires += [wire for wire in _read_wires(m, tape) if wire not in wires]
     return tuple(rotations), wires
+
+
+def _read_wires(mp: Any, tape: qml.tape.QuantumScript) -> list[Hashable]:
+    """The wires whose results ``mp`` reads. An eigenvalue of a Pauli observable reads only the
+    wires of its simplified words. ``qml.probs(op=...)`` gives outcomes on every observable wire.
+    """
+    words = _pauli_terms(mp.obs) if isinstance(mp, _EIGENVALUE_MEASUREMENTS) else None
+    if words is None:
+        return list(mp.wires or tape.wires)
+    return [wire for wire in mp.wires if wire in words.wires]
 
 
 def _word(mp: Any) -> qml.pauli.PauliWord | None:

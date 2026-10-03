@@ -562,6 +562,61 @@ def test_the_default_chain_leaves_out_a_link_only_a_custom_gate_calibrates() -> 
     assert any("cz" in c.gates for c in result.frameworks[0].circuits)
 
 
+def test_the_default_chain_routes_around_a_link_only_a_custom_gate_calibrates() -> None:
+    gates = {"h": {"avg_infidelity": 1e-3}, "cz": {"qubits": 2}, "custom": {"qubits": 2}}
+    calibrations = [
+        {"gate": "custom", "qubits": [0, 1], "avg_infidelity": 1e-3},
+        *({"gate": "cz", "qubits": [q, q + 1], "avg_infidelity": 1e-2} for q in (1, 2, 3)),
+    ]
+    line = toy(
+        device={"name": "line", "technology": "superconducting", "num_qubits": 5},
+        connectivity={"edges": [[q, q + 1] for q in range(4)]},
+        gates=gates,
+        calibrations=calibrations,
+        readout={"error": 0.01},
+    )
+    result = check(Profile.model_validate(line), frameworks=["cirq"])
+    assert result.layout == {0: 1, 1: 2, 2: 3, 3: 4}
+    assert result.passed, result
+
+
+def _measure_off(*qubits: int) -> Profile:
+    gates = {
+        "h": {"avg_infidelity": 0.001},
+        "x": {"avg_infidelity": 0.001},
+        "cx": {"avg_infidelity": 0.01},
+        "measure": {},
+    }
+    off = [{"gate": "measure", "qubits": [q], "disabled": True} for q in qubits]
+    return Profile.model_validate(toy(gates=gates, calibrations=off, readout={"error": 0.01}))
+
+
+def test_the_default_chain_leaves_out_a_qubit_that_cannot_measure() -> None:
+    result = check(_measure_off(0))
+    assert result.layout == {0: 1, 1: 2}
+    assert result.passed, result
+    assert [f.framework for f in result.frameworks] == ["qiskit", "cirq", "pennylane", "stim"]
+
+
+def test_a_layout_with_a_qubit_that_cannot_measure_names_the_qubits_that_can() -> None:
+    with pytest.raises(LayoutError) as info:
+        check(_measure_off(1), layout=[0, 1, 2])
+    assert info.value.message == (
+        "test_toy disables measure on qubit 1, but every check circuit measures all its qubits"
+    )
+    assert info.value.hint == "use qubits that can measure, such as qubits 0 and 2"
+    with pytest.raises(LayoutError) as info:
+        check(_measure_off(0, 1, 2), layout=[0])
+    assert info.value.hint is None
+
+
+def test_a_device_where_no_qubit_can_measure_has_no_default_chain() -> None:
+    with pytest.raises(
+        LayoutError, match=r"^test_toy has only 0 enabled qubits that can measure, not 1$"
+    ):
+        check(_measure_off(0, 1, 2))
+
+
 def _sx_calibrated_on(*qubits: int) -> Profile:
     gates = {"rz": {"virtual": True}, "sx": {}, "cz": {"avg_infidelity": 1e-2}}
     sx = [{"gate": "sx", "qubits": [q], "avg_infidelity": 1e-2} for q in qubits]

@@ -73,9 +73,11 @@ print(fez.suggest_layout(4))
 # {0: 136, 1: 143, 2: 142, 3: 141}
 ```
 
-`suggest_layout(n)` returns a connected chain of n enabled qubits with low summed gate and
-readout error. It prefers complete qubits. A complete qubit has every single-qubit native,
-apart from the identity, that is usable on at least one qubit of the device. The records that
+`suggest_layout(n)` returns a connected chain of n enabled qubits that can measure, with low
+summed gate and readout error. `noisevault.layout.suggest_layout(profile, n, usable_pair=f)`
+also does not make qubits `a < b` neighbors in the chain when `f(a, b)` is false.
+`suggest_layout` prefers complete qubits. A complete qubit has every single-qubit native, apart
+from the identity, that is usable on at least one qubit of the device. The records that
 enable or disable a gate decide where it is usable. `suggest_layout` is a starting point, not a
 placer. A layout onto a disabled or missing qubit raises `LayoutError` with the fix.
 
@@ -259,9 +261,12 @@ third word commutes with both, `default.mixed` decides which shots that word sha
 cannot see that decision, so the model raises an error. To fix the error, wrap the QNode in
 `qml.transforms.split_non_commuting` before `qml.add_noise`.
 
-Before the model selects the measured basis and the words that share shots, the model simplifies
-each Pauli observable as PennyLane does. The simplification removes each word whose coefficient
-is at most 1e-8. For example, `qml.X(0) + 0 * qml.Y(1)` reads only wire 0, in the X basis.
+The model simplifies each Pauli observable as PennyLane does. The model then selects the measured
+basis, the words that share shots and the wires that a measurement reads. The simplification
+removes each word whose coefficient is at most 1e-8. For example,
+`qml.expval(qml.X(0) + 0 * qml.Y(1))` reads only wire 0, in the X basis. Thus the model checks
+the `measure` entry only on wire 0. `qml.probs(op=...)` gives outcomes on every wire of its
+observable, so the model checks the `measure` entry on each of those wires.
 
 PennyLane has no operation named after the `r`, `zz` and `ms` natives of trapped-ion profiles.
 A `qml.Rot(a, theta, -a)` gets the profile's `r` noise, and `qml.IsingZZ(pi/2)` gets its `zz`

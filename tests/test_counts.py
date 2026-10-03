@@ -15,7 +15,7 @@ from conftest import deeper_than_the_parser_takes, require, toy
 from pydantic import ValidationError
 
 import noisevault as nv
-from noisevault import CountsError, NoiseVaultError
+from noisevault import CountsError, LayoutError, NoiseVaultError
 from noisevault.counts import (
     SAMPLER_V2_OPTIONS,
     MeasuredCircuit,
@@ -608,6 +608,15 @@ def test_plan_refuses_a_profile_with_no_calibrated_native_on_the_chain() -> None
         plan(profile, layout=[1])
     assert info.value.message.endswith("on qubit 1, so there is nothing to run")
     assert info.value.hint == "pass layout= with other qubits"
+
+
+def test_plan_measures_no_qubit_whose_measurement_the_profile_disables() -> None:
+    gates = {**toy()["gates"], "measure": {}}
+    off = [{"gate": "measure", "qubits": [0], "disabled": True}]
+    profile = Profile.model_validate(toy(gates=gates, calibrations=off))
+    assert {c.qubits for c in plan(profile)} == {(1, 2)}
+    with pytest.raises(LayoutError, match=r"^test_toy disables measure on qubit 0, but"):
+        plan(profile, layout=[0, 1])
 
 
 def test_simulate_refuses_a_shot_count_that_is_not_positive() -> None:

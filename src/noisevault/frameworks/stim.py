@@ -41,7 +41,7 @@ from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
-from ..table import GateNoise, Unavailable, refuse_disabled
+from ..table import GateNoise, refuse_disabled
 
 Readout = Literal["symmetrize", "exact", "none"]
 ExistingNoise = Literal["error", "keep", "strip"]
@@ -69,6 +69,14 @@ _NAMES: dict[str, tuple[str, str | None]] = {
     "SQRT_YY_DAG": ("ms", "ryy"),
 }
 _NOISELESS = frozenset({"II"})  # a 2-qubit identity is no entangling gate
+_CONTROLLED_PAULI = {
+    ("CX", 1): "X",
+    ("CY", 1): "Y",
+    ("CZ", 0): "Z",
+    ("CZ", 1): "Z",
+    ("XCZ", 0): "X",
+    ("YCZ", 0): "Y",
+}
 # The Pauli that undoes each reset: a failed Z reset leaves |1>, a failed X reset |->.
 _PREP_FLIP = {
     "R": "X_ERROR",
@@ -429,6 +437,7 @@ class _Exporter:
             noise: dict[str, list[int]] = {}
             for group in chunk:
                 if any(t.is_measurement_record_target or t.is_sweep_bit_target for t in group):
+                    self._refuse_controlled_pauli(inst, group)
                     self.report.approximate(
                         "classically controlled Paulis", "no gate noise", "Pauli-frame updates"
                     )
@@ -481,13 +490,24 @@ class _Exporter:
             self._prep(inst.name, qubits, lines)
         return busy
 
+    def _refuse_controlled_pauli(
+        self, inst: stim.CircuitInstruction, group: list[stim.GateTarget]
+    ) -> None:
+        for position, target in enumerate(group):
+            pauli = _CONTROLLED_PAULI.get((inst.name, position))
+            if pauli and target.qubit_value is not None:
+                wires = (self.physical[target.value],)
+                self._refuse(gate_name(pauli, self.defined), _text(inst, [group]), wires)
+
     def _refuse_disabled(self, name: str, stim_name: str, qubits: Iterable[int]) -> None:
         for q in qubits:
-            wire = self.physical[q]
-            try:
-                refuse_disabled(self.table.gate(name, (wire,)))
-            except DisabledGateError as exc:
-                raise self._explain(stim_name, (q,), (wire,), exc) from None
+            self._refuse(name, f"{stim_name} {q}", (self.physical[q],))
+
+    def _refuse(self, name: str, instruction: str, wires: tuple[int, ...]) -> None:
+        try:
+            refuse_disabled(self.table.gate(name, wires))
+        except DisabledGateError as exc:
+            raise self._explain(instruction, wires, exc) from None
 
     def _prep(self, name: str, qubits: list[int], lines: list[str]) -> None:
         noise: dict[str, list[int]] = {}
@@ -512,17 +532,19 @@ class _Exporter:
 
     def _resolve(self, stim_name: str, qubits: tuple[int, ...]) -> _Resolved:
         """Twirled channel of one gate and the report events that resolving it counted."""
-        if stim_name in _NOISELESS:
-            return _Resolved(())
         wires = tuple(self.physical[q] for q in qubits)
         name = gate_name(stim_name, self.defined)
+        instruction = f"{stim_name} {' '.join(map(str, qubits))}"
+        if stim_name in _NOISELESS:
+            self._refuse(name, instruction, wires)
+            return _Resolved(())
         before = {event: Counter(counts) for event, counts in self.report.events.items()}
         try:
             built = resolve_op(
                 self.table, name, wires, unknown_gates=self.unknown_gates, report=self.report
             )
         except (MissingCalibrationError, DisabledGateError, LayoutError) as exc:
-            raise self._explain(stim_name, qubits, wires, exc) from exc
+            raise self._explain(instruction, wires, exc) from exc
         events = _added_events(before, self.report.events)
         if len(qubits) > 2:
             probs = pauli_twirl(built.channels, wires)
@@ -530,23 +552,33 @@ class _Exporter:
         return _Resolved(events, prefix=self._twirl(built.channels, wires))
 
     def _explain(
-        self,
-        stim_name: str,
-        qubits: tuple[int, ...],
-        wires: tuple[int, ...],
-        exc: NoiseVaultError,
+        self, instruction: str, wires: tuple[int, ...], exc: NoiseVaultError
     ) -> NoiseVaultError:
         steps = [exc.hint] if exc.hint else []
-        if len(wires) == 2 and isinstance(self.table.typical(2, wires), Unavailable):
-            steps.append(
+        if len(wires) == 2 and (hint := self._layout_hint(wires)):
+            steps.append(hint)
+        return type(exc)(
+            f"{instruction} (physical {qubit_loci(wires)}): {exc.message}",
+            hint="; ".join(steps) or None,
+        )
+
+    def _layout_hint(self, wires: tuple[int, ...]) -> str | None:
+        table = self.table
+        if not (table.all_to_all or tuple(sorted(wires)) in table.listed_pairs()):
+            return (
                 "pass layout= to put 2-qubit gates on connected pairs"
                 " (profile.suggest_layout(n) proposes a layout, and"
                 " noisevault.stim.layout_from_coords matches the circuit's QUBIT_COORDS)"
             )
-        instruction = f"{stim_name} {' '.join(map(str, qubits))}"
-        return type(exc)(
-            f"{instruction} (physical {qubit_loci(wires)}): {exc.message}",
-            hint="; ".join(steps) or None,
+        if isinstance(table.typical(2, wires), GateNoise):
+            return None
+        pairs = table.edges() if table.all_to_all else table.listed_pairs()
+        sides = (side for pair in pairs for side in (pair, pair[::-1]))
+        if not any(isinstance(table.typical(2, side), GateNoise) for side in sides):
+            return None
+        return (
+            "pass layout= to put 2-qubit gates on pairs with a usable 2-qubit gate"
+            " (profile.suggest_layout(n) proposes a chain of such pairs)"
         )
 
     def _twirl(self, channels: Sequence[ChannelSpec], wires: tuple[int, ...]) -> str:

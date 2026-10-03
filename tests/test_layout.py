@@ -121,6 +121,31 @@ def test_suggest_layout_avoids_disabled_qubits_and_gates() -> None:
     assert set(suggest_layout(broken, 3).values()) == {0, 1, 2}
 
 
+@pytest.mark.parametrize("where", ["record", "definition"])
+def test_suggest_layout_leaves_out_qubits_that_cannot_measure(where) -> None:
+    gates = {**toy()["gates"], "measure": {"disabled": where == "definition"}}
+    on = [{"gate": "measure", "qubits": [q], "disabled": False} for q in (2, 3, 4)]
+    off = [{"gate": "measure", "qubits": [q], "disabled": True} for q in (0, 1)]
+    profile = _line(5, gates=gates, calibrations=on if where == "definition" else off)
+    assert set(suggest_layout(profile, 3).values()) == {2, 3, 4}
+    with pytest.raises(
+        LayoutError, match=r"^line has only 3 enabled qubits that can measure, not 4$"
+    ):
+        suggest_layout(profile, 4)
+
+
+def test_suggest_layout_leaves_out_pairs_the_caller_rules_out() -> None:
+    profile = _line(4)
+    assert suggest_layout(profile, 3) == {0: 0, 1: 1, 2: 2}
+    assert suggest_layout(profile, 3, usable_pair=lambda a, b: (a, b) != (0, 1)) == {
+        0: 1,
+        1: 2,
+        2: 3,
+    }
+    with pytest.raises(LayoutError, match="no connected chain of 4 usable qubits"):
+        suggest_layout(profile, 4, usable_pair=lambda a, b: (a, b) != (1, 2))
+
+
 @pytest.mark.timing
 def test_suggest_layout_is_fast_at_156_qubits() -> None:
     profile = _grid(12, 13)

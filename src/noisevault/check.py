@@ -36,7 +36,7 @@ from .errors import (
     install_hint,
     qubit_loci,
 )
-from .layout import normalize_layout
+from .layout import can_measure, normalize_layout, suggest_layout
 from .reference import Op, _apply, charged_as
 from .reference import probabilities as reference_probabilities
 from .report import Report
@@ -225,9 +225,11 @@ def check(
 ) -> CheckResult:
     """Run the check circuits through every installed export (or ``frameworks``).
 
-    ``layout`` gives the chain of physical qubits to use: 1 to 4 qubits, with connected
-    neighbors. The default is ``profile.suggest_layout(n)`` for the largest ``n`` that has a
-    check circuit on its chain. ``shots`` and ``seed`` apply to sampled frameworks (Stim).
+    ``layout`` gives the chain of physical qubits to use: 1 to 4 qubits that can measure, with
+    connected neighbors. The default chain comes from the ``profile.suggest_layout(n)`` search
+    for the largest ``n`` that has a check circuit on its chain. Here the search also requires a
+    calibrated 2-qubit native with a known unitary on each pair of neighbors. ``shots`` and
+    ``seed`` apply to sampled frameworks (Stim).
     """
     names = list(FRAMEWORKS if frameworks is None else frameworks)
     unknown = [n for n in names if n not in FRAMEWORKS]
@@ -296,7 +298,10 @@ def _chain_and_circuits(
         return chain, build_circuits(profile, chain)
     for n in range(min(MAX_QUBITS, profile.device.num_qubits), 1, -1):
         try:
-            chain = _chain(profile, profile.suggest_layout(n))
+            suggested = suggest_layout(
+                profile, n, usable_pair=lambda a, b: _usable_pair(profile, a, b)
+            )
+            chain = _chain(profile, suggested)
         except LayoutError:
             continue
         circuits = build_circuits(profile, chain)
@@ -312,15 +317,33 @@ def _chain(profile: Profile, layout: Mapping[Hashable, int] | Sequence[int]) -> 
         raise LayoutError(f"a check layout has 1 to {MAX_QUBITS} qubits, got {n}")
     mapping = normalize_layout(range(n), layout, profile)
     chain = [mapping[i] for i in range(n)]
-    if _unitary_natives(profile, 2):
-        for i in range(n - 1):
-            if not _two_qubit_ops(profile, chain, i):
-                raise LayoutError(
-                    f"qubits {chain[i]} and {chain[i + 1]} share no calibrated 2-qubit native gate",
-                    hint="pass a layout whose neighbors are connected"
-                    " (profile.suggest_layout(n) gives one)",
-                )
+    table = profile.table
+    unmeasured = [(q,) for q in chain if not can_measure(table, q)]
+    if unmeasured:
+        measured = [
+            (q,)
+            for q in range(table.num_qubits)
+            if not table.qubit(q).disabled and can_measure(table, q)
+        ]
+        raise LayoutError(
+            f"{profile.id} disables measure on {qubit_loci(*unmeasured)}, but every check"
+            " circuit measures all its qubits",
+            hint=f"use qubits that can measure, such as {qubit_loci(*measured)}"
+            if measured
+            else None,
+        )
+    for a, b in zip(chain, chain[1:], strict=False):
+        if not _usable_pair(profile, a, b):
+            raise LayoutError(
+                f"qubits {a} and {b} share no calibrated 2-qubit native gate",
+                hint="pass a layout whose neighbors are connected"
+                " (profile.suggest_layout(n) gives one)",
+            )
     return chain
+
+
+def _usable_pair(profile: Profile, a: int, b: int) -> bool:
+    return not _unitary_natives(profile, 2) or bool(_two_qubit_ops(profile, (a, b), 0))
 
 
 def build_circuits(

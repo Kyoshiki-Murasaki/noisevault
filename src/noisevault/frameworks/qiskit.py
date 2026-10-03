@@ -589,7 +589,9 @@ def _reset_properties(
     for q in _allowed_qubits(table, "reset", enabled):
         found = table.gate("reset", (q,))
         seconds = None if isinstance(found, Unavailable) else _seconds(found)
-        out[(q,)] = None if seconds is None else InstructionProperties(duration=seconds)
+        error = table.qubit(q).prep_error
+        known = seconds is not None or error is not None
+        out[(q,)] = InstructionProperties(error=error, duration=seconds) if known else None
     return out
 
 

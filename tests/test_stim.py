@@ -1,6 +1,7 @@
 import copy
 import json
 import pickle
+import re
 import time
 import warnings
 from itertools import product
@@ -330,6 +331,69 @@ def test_a_two_entangler_gate_takes_the_profiles_own_calibration_of_it(gate):
 
 def test_two_qubit_identity_gets_no_noise():
     assert str(to_stim(_manila(), "II 0 1")) == "II 0 1"
+
+
+def test_a_two_qubit_identity_the_profile_disables_is_refused():
+    def export(spec: dict) -> stim.Circuit:
+        profile = _all_to_all(3, "ii", {"qubits": 2, **spec})
+        return to_stim(profile, "II 0 1", layout=[2, 0], readout="none")
+
+    for spec in ({}, {"virtual": True}, {"avg_infidelity": 0.02}):
+        assert str(export(spec)) == "II 0 1"
+    pattern = r"^II 0 1 \(physical qubits 2-0\): ii on qubits 2-0 is disabled in this profile"
+    with pytest.raises(DisabledGateError, match=pattern) as caught:
+        export({"disabled": True})
+    assert caught.value.hint is None
+
+
+_USABLE_PAIRS = (
+    "pass layout= to put 2-qubit gates on pairs with a usable 2-qubit gate"
+    " (profile.suggest_layout(n) proposes a chain of such pairs)"
+)
+
+
+def test_the_layout_hint_names_what_the_pair_lacks():
+    data = toy(calibrations=[{"gate": "cz", "qubits": [0, 1], "disabled": True}])
+    data["gates"]["cx"] = {"disabled": True}
+    profile = Profile.model_validate(data)
+
+    def hint(error: type[Exception], gate: str, layout: list[int]) -> str | None:
+        where = rf"^{gate} 0 1 \(physical qubits {layout[0]}-{layout[1]}\)"
+        with pytest.raises(error, match=where) as caught:
+            to_stim(profile, f"{gate} 0 1", layout=layout)
+        return caught.value.hint
+
+    assert hint(DisabledGateError, "CZ", [0, 1]) == _USABLE_PAIRS
+    assert hint(DisabledGateError, "CX", [1, 2]) is None
+    assert hint(MissingCalibrationError, "CZ", [0, 2]) == _CONNECTED_PAIRS
+
+
+_CONTROLLED_PAULIS = [
+    ("MPAD 1\nCX rec[-1] 0", "CX rec[-1] 0", "x"),
+    ("MPAD 1\nCY rec[-1] 0", "CY rec[-1] 0", "y"),
+    ("MPAD 1\nCZ rec[-1] 0", "CZ rec[-1] 0", "z"),
+    ("MPAD 1\nCZ 0 rec[-1]", "CZ 0 rec[-1]", "z"),
+    ("MPAD 1\nXCZ 0 rec[-1]", "XCZ 0 rec[-1]", "x"),
+    ("MPAD 1\nYCZ 0 rec[-1]", "YCZ 0 rec[-1]", "y"),
+    ("CX sweep[0] 0", "CX sweep[0] 0", "x"),
+    ("MPAD 1\nREPEAT 2 {\n    CY rec[-1] 0\n}", "CY rec[-1] 0", "y"),
+]
+
+
+@pytest.mark.parametrize("where", ["record", "definition"])
+@pytest.mark.parametrize(("circuit", "instruction", "pauli"), _CONTROLLED_PAULIS)
+def test_a_classically_controlled_pauli_the_profile_disables_is_refused(
+    circuit, instruction, pauli, where
+):
+    pattern = (
+        rf"^{re.escape(instruction)} \(physical qubit 2\): {pauli} on qubit 2 is disabled in this"
+        " profile$"
+    )
+    with pytest.raises(DisabledGateError, match=pattern):
+        to_stim(_disabling(pauli, where), circuit, layout=[2], readout="none")
+    for other in {"x", "y", "z"} - {pauli}:
+        out = to_stim(_disabling(other, where), circuit, layout=[2], readout="none")
+        assert str(out) == circuit
 
 
 _CONNECTED_PAIRS = (

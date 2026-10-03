@@ -112,14 +112,18 @@ def normalize_layout(
     return result
 
 
-def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
+def suggest_layout(
+    profile: Profile, n: int, *, usable_pair: Callable[[int, int], bool] | None = None
+) -> dict[int, int]:
     """A connected chain of ``n`` well-calibrated qubits as ``{0: p0, 1: p1, ...}``.
 
     A deterministic beam search finds the chain. The search minimizes the summed average
     infidelity of the typical 1-qubit gate, mean readout error and typical 2-qubit gate along
     the chain. Two qubits can be consecutive in the chain if and only if the pair has a usable
     2-qubit gate. The pair counts when connectivity lists it, and also when only a calibration
-    record lists it.
+    record lists it. ``usable_pair(a, b)``, with ``a < b``, can remove more pairs: the chain
+    then has no consecutive pair for which ``usable_pair`` returns False. The chain has no qubit
+    whose measurement the profile disables.
 
     When such a chain exists, every qubit in the chain has every 1-qubit native that the device
     has. Those natives are the unitary 1-qubit gates, other than the identity, that are usable
@@ -141,9 +145,14 @@ def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
     table = profile.table
     if not 1 <= n <= table.num_qubits:
         raise LayoutError(f"cannot choose {n} qubits on {profile.id} ({table.num_qubits} qubits)")
-    usable = [q for q in range(table.num_qubits) if not table.qubit(q).disabled]
+    enabled = [q for q in range(table.num_qubits) if not table.qubit(q).disabled]
+    if len(enabled) < n:
+        raise LayoutError(f"{profile.id} has only {len(enabled)} usable qubits, not {n}")
+    usable = [q for q in enabled if can_measure(table, q)]
     if len(usable) < n:
-        raise LayoutError(f"{profile.id} has only {len(usable)} usable qubits, not {n}")
+        raise LayoutError(
+            f"{profile.id} has only {len(usable)} enabled qubits that can measure, not {n}"
+        )
     required = [
         name
         for name in table.profile.gates
@@ -158,7 +167,8 @@ def suggest_layout(profile: Profile, n: int) -> dict[int, int]:
     def edge(a: int, b: int) -> _Cost | None:
         key = (min(a, b), max(a, b))
         if key not in edge_costs:
-            edge_costs[key] = _edge_cost(table, *key)
+            ruled_out = usable_pair is not None and not usable_pair(*key)
+            edge_costs[key] = None if ruled_out else _edge_cost(table, *key)
         return edge_costs[key]
 
     complete = [q for q in usable if not lacking[q]]
@@ -259,6 +269,11 @@ def _neighbors(table: NoiseTable, usable: list[int]) -> dict[int, list[int]]:
             out[a].add(b)
             out[b].add(a)
     return {q: sorted(nbs) for q, nbs in out.items()}
+
+
+def can_measure(table: NoiseTable, q: int) -> bool:
+    found = table.gate("measure", (q,))
+    return not (isinstance(found, GateNoise) and found.state == "disabled")
 
 
 def _needed(name: str) -> bool:
