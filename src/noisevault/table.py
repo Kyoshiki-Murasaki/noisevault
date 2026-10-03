@@ -12,7 +12,7 @@ from itertools import combinations
 from typing import TYPE_CHECKING, Literal
 
 from . import gates, metrics
-from .errors import LociText, qubit_loci
+from .errors import DisabledGateError, LociText, qubit_loci
 from .profile import Connectivity, GateSpec, GateState, Idle, merge_spec
 
 if TYPE_CHECKING:
@@ -317,6 +317,13 @@ class NoiseTable:
                 if self._gate_factor is not None:
                     r = metrics.scale_avg_infidelity(r, len(qubits), self._gate_factor)
         return GateNoise(name, qubits, state, r, pauli, spec.duration_ns, origin, spec)
+
+
+def refuse_disabled(found: GateNoise | Unavailable) -> None:
+    """Raise DisabledGateError when the profile disables the gate that ``found`` resolves."""
+    if isinstance(found, GateNoise) and found.state == "disabled":
+        where = qubit_loci(found.qubits)
+        raise DisabledGateError(f"{found.gate} on {where} is disabled in this profile")
 
 
 def _unscalable(metric: tuple[metrics.MetricKind, Any] | None, num_qubits: int) -> str | None:

@@ -704,12 +704,11 @@ def test_swap_must_be_decomposed() -> None:
 def test_disabled_gate_raises() -> None:
     profile = _distinct(calibrations=[{"gate": "cx", "qubits": [0, 1], "disabled": True}])
     model = to_cirq(profile)
-    with pytest.raises(DisabledGateError):
+    with pytest.raises(DisabledGateError, match=r"^cx on qubits 0-1 is disabled in this profile$"):
         model.noisy_operation(cirq.CNOT(*cirq.LineQubit.range(2)))
 
 
 def _disabling(gate: str, where: str) -> Profile:
-    """Readout, prep and T1/T2 on every qubit, with ``gate`` disabled on qubit 2 or everywhere."""
     data = toy(
         readout={"p1_given_0": 0.02, "p0_given_1": 0.1},
         prep={"error": 0.03},
@@ -741,7 +740,8 @@ def test_a_reset_measure_or_wait_the_profile_disables_is_refused(kind, where, re
     model = to_cirq(_disabling(gate, where), layout=layout, readout=readout)
     operation = _SPECIAL[kind](*cirq.LineQubit.range(2))
     index = 2 if where == "record" else layout[operation.qubits[0].x]
-    with pytest.raises(DisabledGateError, match=rf"^{gate} on \({index},\) is disabled in this "):
+    message = rf"^{gate} on qubit {index} is disabled in this profile$"
+    with pytest.raises(DisabledGateError, match=message):
         model.noisy_operation(operation)
 
 

@@ -1,19 +1,6 @@
-"""PennyLane export: a ``qml.NoiseModel`` that carries its report.
-
-Use the model with ``qml.add_noise(qnode, model)`` on ``default.mixed``. Every gate gets the
-channels that the shared conversion rules give the gate on its physical qubits, as
-``qml.QubitChannel`` operations after the gate. Readout confusion goes directly before each
-computational-basis measurement, on every wire that the circuit's operations or measurements use.
-Thus all these measurements share one simulation. Readout confusion also goes before each Pauli
-measurement, in its measured basis. With shots, Pauli words that commute on each wire get one
-set of readout operations, so they share one simulation and its shots. A measurement without
-wires (``qml.probs()``, ``qml.sample()``, ``qml.counts()``) reads every device wire. Such a
-measurement gets readout confusion on the wires that the circuit uses, because a noise model
-never sees the device's wires.
-"""
-
 from __future__ import annotations
 
+import re
 import sys
 from collections import Counter
 from collections.abc import Callable, Container, Hashable, Iterable, Mapping, Sequence
@@ -24,7 +11,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from ..errors import DisabledGateError, LayoutError, NoiseVaultError, install_hint
+from ..errors import LayoutError, NoiseVaultError, install_hint
 
 try:
     import pennylane as qml
@@ -50,7 +37,7 @@ from ..conversion import UnknownGates, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
-from ..table import GateNoise
+from ..table import refuse_disabled
 
 Layout = Mapping[Hashable, int] | Sequence[int]
 Kraus = tuple[np.ndarray, ...]
@@ -147,7 +134,7 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         gate_map = {
             qml.BooleanFn(_is_operation, "NoiseVaultWireCheck"): self._check_wires,
             qml.BooleanFn(_is_gate, "NoiseVaultGate"): self._gate_noise,
-            qml.BooleanFn(_is_reset, "NoiseVaultReset"): self._reset_noise,
+            qml.BooleanFn(_is_mid_measure, "NoiseVaultMidMeasure"): self._mid_measure_noise,
         }
         meas_map = {qml.BooleanFn(_reads_out, "NoiseVaultReadout"): self._readout_noise}
         super().__init__(gate_map, meas_map=meas_map if readout else None)
@@ -161,7 +148,8 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         return super().model_map
 
     def _noised_tape(self) -> qml.tape.QuantumScript:
-        """The tape qml.add_noise is noising, after checking every wire it uses against the layout.
+        """The tape qml.add_noise is noising, after checking every wire it uses against the layout
+        and every qubit that a measurement reads against the profile's ``measure`` entry.
 
         Noise functions see one operation or measurement, but readout needs the whole tape and only
         add_noise's frame holds the tape. Each call gets the tape from that frame and does not
@@ -185,6 +173,11 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
             )
         for wire in tape.wires:
             self.physical_qubit(wire)
+        for mp in tape.measurements:
+            if _reads_out(mp):
+                for wire in mp.wires or tape.wires:
+                    qubit = self.physical_qubit(wire)
+                    refuse_disabled(self.profile.table.gate("measure", (qubit,)))
         return tape
 
     def _check_wires(self, _: Operator, **__: Any) -> None:
@@ -235,11 +228,12 @@ class NoiseVaultPennyLaneModel(qml.NoiseModel):
         for kraus, wires in noise:
             qml.QubitChannel(list(kraus), wires=wires)
 
-    def _reset_noise(self, op: MidMeasureMP, **_: Any) -> None:
+    def _mid_measure_noise(self, op: MidMeasureMP, **_: Any) -> None:
         qubit = self.physical_qubit(op.wires[0])
-        reset = self.profile.table.gate("reset", (qubit,))
-        if isinstance(reset, GateNoise) and reset.state == "disabled":
-            raise DisabledGateError(f"reset on {reset.qubits} is disabled in this profile")
+        refuse_disabled(self.profile.table.gate("measure", (qubit,)))
+        if not op.reset:
+            return
+        refuse_disabled(self.profile.table.gate("reset", (qubit,)))
         error = self.profile.table.qubit(qubit).prep_error
         if error is None:
             self.report.mark_unknown(f"reset error on qubit {qubit}")
@@ -390,11 +384,18 @@ def operation_for(name: str) -> Callable[..., Operator] | None:
     and ``wires=``, or None if PennyLane has no such operation.
     ``operation_for("r")(theta, phi, wires=0)`` is a ``qml.Rot`` with the unitary of ``r``,
     which the noise model recognizes as ``r``. ``operation_for("ms")`` builds only ms(0, 0), as
-    ``qml.IsingXX(pi/2)``, and raises ValueError at other phases."""
+    ``qml.IsingXX(pi/2)``, and raises ValueError at other phases. ``operation_for("sdg")``
+    builds ``qml.adjoint(qml.S(wires))``."""
     if name in _BUILDERS:
         return _BUILDERS[name]
     info = gates.lookup(name)
-    return getattr(qml, info.pennylane, None) if info is not None and info.pennylane else None
+    if info is None or not info.pennylane:
+        return None
+    adjoint = re.fullmatch(r"Adjoint\((\w+)\)", info.pennylane)
+    if adjoint is None:
+        return getattr(qml, info.pennylane, None)
+    base = getattr(qml, adjoint[1])
+    return lambda *params, wires: qml.adjoint(base(*params, wires=wires))
 
 
 def confusion_kraus(matrix: np.ndarray) -> list[np.ndarray]:
@@ -517,8 +518,8 @@ def _splits_at_user_level(op: Operator) -> bool:
     return _is_arithmetic(op) or (isinstance(op, Adjoint) and op.has_decomposition)
 
 
-def _is_reset(op: Operator) -> bool:
-    return isinstance(op, MidMeasureMP) and op.reset
+def _is_mid_measure(op: Operator) -> bool:
+    return isinstance(op, MidMeasureMP)
 
 
 def _reads_out(mp: Any) -> bool:
@@ -545,12 +546,8 @@ def _measured_basis(obs: Operator | None) -> tuple[Operator, ...] | None:
 
 
 def _pauli_terms(obs: Operator | None) -> qml.pauli.PauliSentence | None:
-    """The Pauli words of ``obs`` after PennyLane's simplification, or None if ``obs`` has no
-    Pauli form.
-
-    ``default.mixed`` measures the simplified observable. The simplification removes each word
-    whose coefficient is at most 1e-8. Thus ``X(0) + 0 * Y(1)`` reads only wire 0, in the X
-    basis. The copy keeps the Pauli form of ``obs`` unchanged.
+    """``default.mixed`` measures the simplified observable. The simplification removes each word
+    whose coefficient is at most 1e-8. The copy keeps the Pauli form of ``obs`` unchanged.
     """
     words = getattr(obs, "pauli_rep", None)
     if words is None:
@@ -583,9 +580,7 @@ def _pauli_basis(words: Iterable[qml.pauli.PauliWord]) -> tuple[Operator, ...] |
 def _shared_readout(
     mp: Any, basis: tuple[Operator, ...], tape: qml.tape.QuantumScript
 ) -> tuple[tuple[Operator, ...], list[Hashable]]:
-    """Rotations into the measured basis, and the wires that get readout confusion.
-
-    qml.add_noise puts measurements with different readout operations on separate tapes, and
+    """qml.add_noise puts measurements with different readout operations on separate tapes, and
     separate tapes get separate shots. With shots, default.mixed gives Pauli words that commute
     on each wire the same shots. Thus each such word gets the readout of its whole group.
     Confusion on a wire that a measurement does not read leaves its results alone. Thus
@@ -598,12 +593,6 @@ def _shared_readout(
 
 
 def _shot_group(mp: Any, words: list[Any]) -> tuple[tuple[Operator, ...], list[Hashable]]:
-    """The rotations and wires of the Pauli words that share shots with ``mp``, in tape order.
-
-    A chain of words that commute on each wire joins the words of one group. When two words of
-    a group read a wire in different bases, default.mixed decides how to split the group. A
-    noise model cannot see that decision.
-    """
     letters = [_word(m) for m in words]
     inside = [_commute(_word(mp), word) for word in letters]
     grown = True
@@ -635,8 +624,6 @@ def _shot_group(mp: Any, words: list[Any]) -> tuple[tuple[Operator, ...], list[H
 
 
 def _word(mp: Any) -> qml.pauli.PauliWord | None:
-    """The Pauli letter of each wire of ``mp``'s observable, or None if the observable is not
-    one Pauli word with at least one letter."""
     words = _pauli_terms(mp.obs)
     if not _reads_out(mp) or words is None or len(words) != 1:
         return None

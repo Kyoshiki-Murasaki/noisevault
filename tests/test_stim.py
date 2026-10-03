@@ -666,7 +666,6 @@ def test_reset_error_is_the_physical_qubits():
 
 
 def _disabling(gate: str, where: str) -> Profile:
-    """Readout and prep error on every qubit, with ``gate`` disabled on qubit 2 or everywhere."""
     data = toy(readout={"p1_given_0": 0.02, "p0_given_1": 0.1}, prep={"error": 0.003})
     data["gates"] = {"rz": {"virtual": True}, "x": {"virtual": True}, "cz": {"virtual": True}}
     if where == "record":
@@ -693,7 +692,10 @@ def test_a_reset_or_measurement_the_profile_disables_is_refused(gate, instructio
     layout = [2, 0]
     q = 0 if where == "record" else stim.Circuit(instruction)[0].targets_copy()[0].value
     name = instruction.split()[0]
-    pattern = rf"^{name} {q} \(physical qubit {layout[q]}\): {gate} on \({layout[q]},\) is disabled"
+    pattern = (
+        rf"^{name} {q} \(physical qubit {layout[q]}\): {gate} on qubit {layout[q]} is disabled"
+        " in this profile$"
+    )
     with pytest.raises(DisabledGateError, match=pattern):
         to_stim(_disabling(gate, where), instruction, layout=layout, readout=readout)
 

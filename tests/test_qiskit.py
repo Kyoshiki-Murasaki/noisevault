@@ -15,6 +15,7 @@ import noisevault as nv
 from noisevault.channels import ChannelSpec, gate_channels, superoperator
 from noisevault.conversion import resolve_op
 from noisevault.errors import (
+    DisabledGateError,
     NoiseApproximationWarning,
     UnsupportedEffect,
 )
@@ -661,7 +662,7 @@ def test_scheduling_gives_a_reset_the_profile_reset_duration(level: int) -> None
     assert scheduled.estimate_duration(sim.target, unit="s") == pytest.approx(expected_ns * 1e-9)
 
 
-def _reset_off(*qubits: int) -> Profile:
+def _turned_off(gate: str, *qubits: int) -> Profile:
     return Profile.model_validate(
         toy(
             device={
@@ -671,38 +672,92 @@ def _reset_off(*qubits: int) -> Profile:
                 "num_qubits": 2,
             },
             connectivity="all_to_all",
-            gates={**_LINE_GATES, "reset": {"duration_ns": 1000}},
-            calibrations=[{"gate": "reset", "qubits": [q], "disabled": True} for q in qubits],
+            gates={**_LINE_GATES, "reset": {"duration_ns": 1000}, gate: {}},
+            readout={"error": 0.0, "duration_ns": 800},
+            calibrations=[{"gate": gate, "qubits": [q], "disabled": True} for q in qubits],
         )
     )
 
 
-def _x_reset_measure(q: int) -> QuantumCircuit:
-    circuit = QuantumCircuit(2, 1)
+def _probe(gate: str, q: int) -> QuantumCircuit:
+    circuit = QuantumCircuit(2, 1, name="probe")
     circuit.x(q)
-    circuit.reset(q)
+    if gate == "reset":
+        circuit.reset(q)
+    elif gate == "delay":
+        circuit.delay(100, q, unit="ns")
     circuit.measure(q, 0)
     return circuit
 
 
-def test_a_reset_the_profile_disables_on_a_qubit_is_refused_there() -> None:
-    sim = quiet_export(_reset_off(0))
-    assert list(sim.target["reset"]) == [(1,)]
-    assert sim.target["reset"][(1,)].duration == pytest.approx(1e-6)
-    assert sim.run(_x_reset_measure(1), shots=10).result().get_counts() == {"0": 10}
-    with pytest.raises(CircuitNotNativeError, match="reset on qubit 0 is not available"):
-        sim.run(_x_reset_measure(0), shots=10)
-    with pytest.raises(TranspilerError):
-        transpile(_x_reset_measure(0), sim, initial_layout=[0, 1], optimization_level=0)
+_SINGLE_QUBIT_OPS = ["measure", "reset", "delay"]
 
 
-def test_a_reset_the_profile_disables_everywhere_is_refused() -> None:
-    sim = quiet_export(_reset_off(0, 1))
-    assert "reset" not in sim.target.operation_names
-    with pytest.raises(CircuitNotNativeError, match="reset on qubit 1 is not available"):
-        sim.run(_x_reset_measure(1), shots=10)
+@pytest.mark.parametrize("gate", _SINGLE_QUBIT_OPS)
+def test_a_measure_reset_or_delay_the_profile_disables_on_a_qubit_is_refused_there(gate) -> None:
+    sim = quiet_export(_turned_off(gate, 0))
+    assert list(sim.target[gate]) == [(1,)]
+    assert sim.run(_probe(gate, 1), shots=10).result().get_counts() == {
+        "0" if gate == "reset" else "1": 10
+    }
+    message = f"^circuit 'probe': {gate} on qubit 0 is disabled in this profile$"
+    with pytest.raises(DisabledGateError, match=message):
+        sim.run(_probe(gate, 0), shots=10)
     with pytest.raises(TranspilerError):
-        transpile(_x_reset_measure(1), sim, optimization_level=0)
+        transpile(_probe(gate, 0), sim, initial_layout=[0, 1], optimization_level=0)
+
+
+@pytest.mark.parametrize("gate", _SINGLE_QUBIT_OPS)
+def test_a_measure_reset_or_delay_the_profile_disables_everywhere_is_refused(gate) -> None:
+    sim = quiet_export(_turned_off(gate, 0, 1))
+    assert gate not in sim.target.operation_names
+    message = f"^circuit 'probe': {gate} on qubit 1 is disabled in this profile$"
+    with pytest.raises(DisabledGateError, match=message):
+        sim.run(_probe(gate, 1), shots=10)
+    with pytest.raises(TranspilerError):
+        transpile(_probe(gate, 1), sim, optimization_level=0)
+
+
+def _target_entries(sim: NoiseVaultSimulator) -> dict[tuple[str, Any], Any]:
+    return {
+        (name, qargs): None if props is None else (props.error, props.duration)
+        for name in sim.target.operation_names
+        for qargs, props in sim.target[name].items()
+    }
+
+
+def _noise_entries(sim: NoiseVaultSimulator) -> list[dict[str, Any]]:
+    """The noise model's errors without their random ids."""
+    errors = sim.noise_model.to_dict(serializable=True)["errors"]
+    return [{key: value for key, value in error.items() if key != "id"} for error in errors]
+
+
+@pytest.mark.parametrize("gate", _SINGLE_QUBIT_OPS)
+def test_disabling_a_measure_reset_or_delay_on_a_qubit_changes_only_that_entry(gate) -> None:
+    turned_off, allowed = quiet_export(_turned_off(gate, 0)), quiet_export(_turned_off(gate))
+    expected = _target_entries(allowed)
+    del expected[(gate, (0,))]
+    assert _target_entries(turned_off) == expected
+    assert _noise_entries(turned_off) == _noise_entries(allowed)
+
+
+def test_scheduling_leaves_out_a_delay_the_profile_disables() -> None:
+    circuit = QuantumCircuit(2)
+    circuit.x(0)
+    for _ in range(3):
+        circuit.sx(1)
+    circuit.measure_all()
+
+    def delayed(profile: Profile) -> set[int]:
+        sim = quiet_export(profile)
+        scheduled = transpile(
+            circuit, sim, initial_layout=[0, 1], optimization_level=0, scheduling_method="alap"
+        )
+        sim.run(scheduled, shots=1)
+        return {scheduled.find_bit(i.qubits[0]).index for i in scheduled.data if i.name == "delay"}
+
+    assert delayed(_turned_off("delay")) == {0}
+    assert delayed(_turned_off("delay", 0)) == set()
 
 
 def _delayed(prepare: str, ns: float) -> QuantumCircuit:

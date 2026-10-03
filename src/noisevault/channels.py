@@ -25,8 +25,7 @@ from typing import Literal
 import numpy as np
 
 from . import metrics
-from .errors import DisabledGateError
-from .table import GateNoise, QubitNoise
+from .table import GateNoise, QubitNoise, refuse_disabled
 
 _I2 = np.eye(2, dtype=complex)
 _PAULIS = {
@@ -66,8 +65,7 @@ def gate_channels(gate: GateNoise, qubits: Sequence[QubitNoise]) -> GateChannels
     """Channels for ``gate``. ``qubits`` are the resolved qubits in ``gate.qubits`` order."""
     if [q.index for q in qubits] != list(gate.qubits):
         raise ValueError(f"qubits {[q.index for q in qubits]} do not match {gate.qubits}")
-    if gate.state == "disabled":
-        raise DisabledGateError(f"{gate.gate} on {gate.qubits} is disabled in this profile")
+    refuse_disabled(gate)
     if gate.state == "ideal":
         return GateChannels(gate, (), None, 0.0, 0.0, ())
     if gate.pauli is not None:

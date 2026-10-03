@@ -85,7 +85,9 @@ placer. A layout onto a disabled or missing qubit raises `LayoutError` with the 
 gate on every allowed locus, with the error and duration that the simulator applies.
 `transpile(circuit, sim)` therefore compiles to the device's natives, routes around disabled
 gates and places circuits by noise. The `Target` also holds `measure`, `delay` and `reset` on
-every enabled qubit, but not a `reset` that the profile disables. Each `reset` has the profile's
+every enabled qubit, but not on a qubit where the profile disables them. `transpile` then raises
+`TranspilerError` for a circuit that needs one of them there, and `sim.run` raises
+`DisabledGateError`. Scheduling adds no `delay` on such a qubit. Each `reset` has the profile's
 reset duration, so `scheduling_method="alap"` can schedule circuits with resets. `to_qiskit()`
 keys the noise model on physical qubits.
 
@@ -274,9 +276,10 @@ The model checks every wire that a circuit uses against the layout and the profi
 `readout=False`. The check includes wires that the circuit only measures. A model built by adding
 or subtracting noise models checks only the wires its operations or readout reach.
 
-A gate or a reset on a qubit where the profile disables it raises `DisabledGateError`. For
-example, `qml.measure(0, reset=True)` raises the error when the profile disables `reset` on
-qubit 0.
+A gate, a measurement or a reset on a qubit where the profile disables it raises
+`DisabledGateError`. Measurements, `qml.measure` included, use the profile's `measure` entry.
+`qml.measure(0, reset=True)` also uses its `reset` entry. PennyLane has no delay operation, so
+the `delay` entry has no effect.
 
 ## Stim
 
@@ -307,7 +310,8 @@ have, the function raises `LayoutError`. Then give `layout=` to `to_stim`.
 
 An instruction on a qubit where the profile disables it raises `DisabledGateError`. Measurements
 (`M`, `MX`, `MY`, `MPP`, `MXX` and the others) use the profile's `measure` entry. Resets (`R`,
-`RX` and `RY`) use its `reset` entry. `MR`, `MRX` and `MRY` use both entries.
+`RX` and `RY`) use its `reset` entry. `MR`, `MRX` and `MRY` use both entries. Stim has no delay
+instruction, so the `delay` entry has no effect.
 
 In `MPP` and `SPP`, the export first reduces each Pauli product. Pauli factors on one qubit
 multiply. A qubit whose Pauli factors cancel is neither read out nor busy. A product that reduces

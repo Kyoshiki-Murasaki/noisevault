@@ -41,7 +41,7 @@ from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile
 from ..report import Report
-from ..table import GateNoise, Unavailable
+from ..table import GateNoise, Unavailable, refuse_disabled
 
 Readout = Literal["symmetrize", "exact", "none"]
 ExistingNoise = Literal["error", "keep", "strip"]
@@ -484,10 +484,10 @@ class _Exporter:
     def _refuse_disabled(self, name: str, stim_name: str, qubits: Iterable[int]) -> None:
         for q in qubits:
             wire = self.physical[q]
-            found = self.table.gate(name, (wire,))
-            if isinstance(found, GateNoise) and found.state == "disabled":
-                exc = DisabledGateError(f"{name} on {(wire,)} is disabled in this profile")
-                raise self._explain(stim_name, (q,), (wire,), exc)
+            try:
+                refuse_disabled(self.table.gate(name, (wire,)))
+            except DisabledGateError as exc:
+                raise self._explain(stim_name, (q,), (wire,), exc) from None
 
     def _prep(self, name: str, qubits: list[int], lines: list[str]) -> None:
         noise: dict[str, list[int]] = {}

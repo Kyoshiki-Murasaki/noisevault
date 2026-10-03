@@ -1,15 +1,3 @@
-"""Cirq export: a ``cirq.NoiseModel`` that adds a profile's noise to every operation.
-
-After each gate, the export adds the channels that the shared conversion rules give the gate,
-as ``cirq.KrausChannel`` on the same qubits. A mid-circuit measurement gets the readout
-assignment error as a ``MeasurementGate`` confusion map. A terminal measurement gets the same
-error as a channel directly before it (see :class:`NoiseVaultNoiseModel`). A reset gets the
-preparation error, and ``WaitGate`` gets thermal relaxation. ``LineQubit(i)`` is device qubit
-``i`` unless ``layout`` gives a different qubit. ``GridQubit(r, c)`` is the qubit at coords
-``(r, c)`` when the profile records coords. If two enabled qubits have the same coords, give
-``layout``.
-"""
-
 from __future__ import annotations
 
 import numbers
@@ -22,7 +10,7 @@ from typing import Any, get_args
 
 import numpy as np
 
-from ..errors import DisabledGateError, LayoutError, install_hint, qubit_loci
+from ..errors import LayoutError, install_hint, qubit_loci
 
 try:
     import cirq
@@ -35,7 +23,7 @@ from ..conversion import UnknownGates, idle_channel, native_name, resolve_op
 from ..layout import normalize_layout
 from ..profile import Profile, QubitRecord
 from ..report import Report
-from ..table import GateNoise
+from ..table import refuse_disabled
 
 CirqLayout = Mapping[Any, int] | Sequence[int]
 _ANGLE_TOL = 1e-9
@@ -379,9 +367,7 @@ class NoiseVaultNoiseModel(cirq.NoiseModel):
 
     def _refuse_disabled(self, name: str, physical: Sequence[int]) -> None:
         for index in physical:
-            found = self._table.gate(name, (index,))
-            if isinstance(found, GateNoise) and found.state == "disabled":
-                raise DisabledGateError(f"{name} on {(index,)} is disabled in this profile")
+            refuse_disabled(self._table.gate(name, (index,)))
 
     def _noise(
         self, name: str, qids: Sequence[cirq.Qid], physical: Sequence[int]

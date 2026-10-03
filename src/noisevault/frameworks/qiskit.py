@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ..errors import LociText, NoiseVaultError, install_hint, qubit_loci
+from ..errors import DisabledGateError, LociText, NoiseVaultError, install_hint, qubit_loci
 
 try:
     import qiskit
@@ -66,7 +66,7 @@ from .. import gates
 from ..channels import ChannelSpec, GateChannels, readout_matrix
 from ..conversion import UnknownGates, idle_channel, resolve_op
 from ..report import Report
-from ..table import GateNoise, NoiseTable, QubitNoise, Unavailable
+from ..table import GateNoise, NoiseTable, QubitNoise, Unavailable, refuse_disabled
 
 if TYPE_CHECKING:
     from ..profile import Profile
@@ -227,11 +227,20 @@ class NoiseVaultSimulator(AerSimulator):
                 continue
             qargs = tuple(circuit.find_bit(q).index for q in instruction.qubits)
             if not target.instruction_supported(op.name, qargs):
+                if isinstance(op, Measure | Reset | Delay):
+                    self._refuse_disabled(circuit, op.name, qargs)
                 raise CircuitNotNativeError(
                     f"circuit {circuit.name!r}: {op.name} on {qubit_loci(qargs)} is not"
                     f" available on {self.profile.id} ({self._why(op.name, qargs)})",
                     hint=_TRANSPILE_FIX,
                 )
+
+    def _refuse_disabled(self, circuit: QuantumCircuit, name: str, qargs: tuple[int, ...]) -> None:
+        for q in qargs:
+            try:
+                refuse_disabled(self.profile.table.gate(name, (q,)))
+            except DisabledGateError as exc:
+                raise DisabledGateError(f"circuit {circuit.name!r}: {exc.message}") from None
 
     def _why(self, name: str, qargs: tuple[int, ...]) -> str:
         target = self.target
@@ -283,7 +292,8 @@ def to_qiskit(
 ) -> NoiseVaultSimulator:
     """A noisy AerSimulator for ``profile``. Transpile circuits for the simulator before ``run``.
 
-    The Target leaves out disabled qubits, gates and resets, the way Qiskit models faulty ones.
+    The Target leaves out disabled qubits, gates, measurements, resets and delays, the way Qiskit
+    models faulty ones.
     Qiskit's ``optimization_level=0`` still puts circuit qubit i on physical qubit i. Levels 1-3
     do not check that a chosen qubit has the 1-qubit gates that a circuit needs. On a profile with
     disabled parts, transpile with ``initial_layout=list(profile.suggest_layout(n).values())``.
@@ -550,34 +560,43 @@ def _target(
         props[p.qargs] = InstructionProperties(error=p.built.achieved, duration=duration)
     for gate, props in by_gate.values():
         target.add_instruction(gate, props)
-    measure = {(q,): _measure_properties(profile, q, readout) for q in enabled}
-    target.add_instruction(Measure(), measure)
+    measure = {
+        (q,): _measure_properties(profile, q, readout)
+        for q in _allowed_qubits(table, "measure", enabled)
+    }
+    if measure:
+        target.add_instruction(Measure(), measure)
     reset = _reset_properties(table, enabled)
     if reset:
         target.add_instruction(Reset(), reset)
-    target.add_instruction(Delay(Parameter("t")), {(q,): None for q in enabled})
+    delay = {(q,): None for q in _allowed_qubits(table, "delay", enabled)}
+    if delay:
+        target.add_instruction(Delay(Parameter("t")), delay)
     return target
 
 
 def _seconds(gate: GateNoise) -> float | None:
-    if gate.duration_ns is None:
-        return 0.0 if gate.state == "ideal" else None  # virtual gates take no time
-    return gate.duration_ns * 1e-9
+    if gate.duration_ns is not None:
+        return gate.duration_ns * 1e-9
+    virtual = gate.state == "ideal"
+    return 0.0 if virtual else None
 
 
 def _reset_properties(
     table: NoiseTable, enabled: Sequence[int]
 ) -> dict[tuple[int, ...], InstructionProperties | None]:
-    """Reset on every enabled qubit where the profile does not disable it, with its duration."""
     out: dict[tuple[int, ...], InstructionProperties | None] = {}
-    for q in enabled:
+    for q in _allowed_qubits(table, "reset", enabled):
         found = table.gate("reset", (q,))
-        if isinstance(found, Unavailable):
-            out[(q,)] = None
-        elif found.state != "disabled":
-            seconds = _seconds(found)
-            out[(q,)] = None if seconds is None else InstructionProperties(duration=seconds)
+        seconds = None if isinstance(found, Unavailable) else _seconds(found)
+        out[(q,)] = None if seconds is None else InstructionProperties(duration=seconds)
     return out
+
+
+def _allowed_qubits(table: NoiseTable, name: str, enabled: Sequence[int]) -> list[int]:
+    """The enabled qubits where the profile does not disable ``name``."""
+    found = {q: table.gate(name, (q,)) for q in enabled}
+    return [q for q, f in found.items() if isinstance(f, Unavailable) or f.state != "disabled"]
 
 
 def _qubit_properties(table: NoiseTable, q: int) -> QubitProperties:

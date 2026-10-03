@@ -439,12 +439,16 @@ def pull_and_save(
     profile = module.pull(device, at=when)
     if output is not None:
         return Pulled(profile, profile.save(output), written=True)
+    path = _earlier_path(profile) or vault_path(profile)
+    return Pulled(profile, path, _save_in_vault(profile, path))
+
+
+def _earlier_path(profile: Profile) -> Path | None:
     same_id = [i for i in vault_profiles() if i.id == profile.id]
     held = next((i for i in same_id if i.fingerprint == profile.fingerprint), None)
     old = next((i for i in same_id if i.calibrated_at == profile.device.calibrated_at), None)
-    known = held or old
-    path = vault_path(profile) if known is None else Path(str(known.path))
-    return Pulled(profile, path, _save_in_vault(profile, path))
+    earlier = held or old
+    return None if earlier is None else Path(str(earlier.path))
 
 
 def _save_in_vault(profile: Profile, path: Path) -> bool:
@@ -452,38 +456,14 @@ def _save_in_vault(profile: Profile, path: Path) -> bool:
     moved: list[Held] = []
     replaced: list[str] = []
     try:
-        while True:
-            there = _same_calibration_at(path, profile)
-            if there is None:
-                if write_new(path, data):
-                    written = True
-                    break
-                continue
-            raw, fingerprint = there
-            if fingerprint == profile.fingerprint:
-                written = False
-                break
-            taken = take(path)
-            if taken is None:
-                continue
-            moved.append(taken)
-            if taken.data == raw:
-                replaced.append(fingerprint)
-            elif _put_back(taken, path):
-                moved.pop()
-            else:
-                raise _FileInTheWay(f"{path} changed during the pull")
+        written: bool | None = None
+        while written is None:
+            written = _try_to_save(profile, path, data, moved, replaced)
     except BaseException as exc:
-        kept = [held.path.name for held in moved if not _put_back(held, path)]
-        if not kept or not isinstance(exc, Exception):
+        error = _roll_back(moved, path, exc)
+        if error is None:
             raise
-        names = ", ".join(kept)
-        reason = exc.message if isinstance(exc, NoiseVaultError) else str(exc)
-        kind = _FileInTheWay if isinstance(exc, FileExistsError) else _NotSaved
-        raise kind(
-            f"{reason}. The pull saved nothing and moved the file that was there to {names}",
-            hint=f"move {names} out of {path.parent}, then pull again",
-        ) from exc
+        raise error from exc
     for held in moved:
         drop(held)
     for fingerprint in replaced:
@@ -495,6 +475,41 @@ def _save_in_vault(profile: Profile, path: Path) -> bool:
             stacklevel=4,
         )
     return written
+
+
+def _try_to_save(
+    profile: Profile, path: Path, data: bytes, moved: list[Held], replaced: list[str]
+) -> bool | None:
+    there = _same_calibration_at(path, profile)
+    if there is None:
+        return True if write_new(path, data) else None
+    raw, fingerprint = there
+    if fingerprint == profile.fingerprint:
+        return False
+    taken = take(path)
+    if taken is None:
+        return None
+    moved.append(taken)
+    if taken.data == raw:
+        replaced.append(fingerprint)
+    elif _put_back(taken, path):
+        moved.pop()
+    else:
+        raise _FileInTheWay(f"{path} changed during the pull")
+    return None
+
+
+def _roll_back(moved: list[Held], path: Path, exc: BaseException) -> NoiseVaultError | None:
+    kept = [held.path.name for held in moved if not _put_back(held, path)]
+    if not kept or not isinstance(exc, Exception):
+        return None
+    names = ", ".join(kept)
+    reason = exc.message if isinstance(exc, NoiseVaultError) else str(exc)
+    kind = _FileInTheWay if isinstance(exc, FileExistsError) else _NotSaved
+    return kind(
+        f"{reason}. The pull saved nothing and moved the file that was there to {names}",
+        hint=f"move {names} out of {path.parent}, then pull again",
+    )
 
 
 class _NotSaved(NoiseVaultError, OSError): ...

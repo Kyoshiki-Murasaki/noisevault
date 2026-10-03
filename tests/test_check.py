@@ -735,3 +735,19 @@ def test_a_one_qubit_uniform_profile_runs_in_every_framework() -> None:
     assert [f.framework for f in result.frameworks] == ["qiskit", "cirq", "pennylane", "stim"]
     assert not result.skipped
     assert {c.num_qubits for c in result.circuits} == {1}
+
+
+def test_pennylane_checks_an_adjoint_native_with_its_own_noise() -> None:
+    require("pennylane")
+    data = toy(
+        connectivity="all_to_all",
+        gates={
+            "sx": {"avg_infidelity": 1e-3},
+            "sdg": {"avg_infidelity": 2e-2},
+            "rz": {"avg_infidelity": 5e-3},
+            "cz": {"avg_infidelity": 1e-2},
+        },
+    )
+    [pennylane] = check(Profile.model_validate(data), frameworks=["pennylane"]).frameworks
+    assert pennylane.passed
+    assert pennylane.not_run == ()

@@ -125,10 +125,6 @@ def joined(words: Sequence[str], conjunction: str = "and") -> str:
 
 
 def qubit_loci(*loci: Sequence[int], limit: int | None = 4) -> str:
-    """The loci as text. More than ``limit`` loci show as the first ``limit - 1`` and a count.
-
-    ``limit=None`` names every locus.
-    """
     labels = ["-".join(map(str, locus)) for locus in loci]
     if limit is not None and len(labels) > limit:
         labels = [*labels[: limit - 1], f"{len(labels) - limit + 1} more"]
@@ -140,13 +136,6 @@ _Loci = tuple[tuple[int, ...], ...]
 
 
 class LociText(str):
-    """Text that names qubit loci.
-
-    The text names every locus. ``short`` shows at most four loci, as qubit_loci does. A part is
-    text, a sequence of loci, or a LociText. Saved data keeps the text, so it names every qubit.
-    Printed output shows ``short``.
-    """
-
     parts: tuple[str | _Loci, ...]
 
     def __new__(cls, *parts: str | Iterable[Sequence[int]]) -> LociText:

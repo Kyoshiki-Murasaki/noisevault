@@ -339,50 +339,75 @@ def build_circuits(
         [op for op in _two_qubit_ops(profile, chain, i) if expressible(op)] for i in range(n - 1)
     ]
     entangles = n >= 2 and all(pairs)
-
-    def layer(k: int) -> list[Op]:
-        return [_op(mix, (q,)) for q in range(k)]  # type: ignore[arg-type]
-
-    def entangle(k: int) -> list[Op]:
-        return [pairs[i][0] for i in range(k - 1)]
-
     # Without a gate that makes a superposition, the entangling and mirror circuits act only
     # on |0...0>, where neither a 2-qubit gate's unitary nor coherent noise has any effect.
-    circuits = []
+    circuits: list[Circuit | None] = []
     if mix is not None and entangles:
-        circuits.append(Circuit("ghz_chain", n, (*layer(n), *entangle(n), *layer(n))))
-        one = _undone([*layer(1), *entangle(n)])
-        every = _undone([*layer(n), *entangle(n)])
-        if one is not None and every is not None:
-            circuits.append(Circuit("chain_mirror", n, (*one, *every)))
-    k = min(3, n)
-    forward = []
-    if mix is not None:
-        forward = [*layer(k), *(entangle(k) if entangles else [])]
-        forward += [_op(g, (q,)) for q in range(k) for g in ones]
-    inverses = {op: _inverse(op) for op in forward}
-    forward = [op for op in forward if inverses[op] is not None]
-    if forward and (entangles or n == 1 or not _unitary_natives(profile, 2)):
-        backward = [inv for op in reversed(forward) for inv in inverses[op]]  # type: ignore[union-attr]
-        circuits.append(Circuit("mirror", k, (*forward, *backward)))
+        circuits += [_ghz_chain(mix, pairs, n), _chain_mirror(mix, pairs, n)]
+    if mix is not None and (entangles or n == 1 or not _unitary_natives(profile, 2)):
+        k = min(3, n)
+        circuits.append(_mirror(mix, _entangle(pairs, k) if entangles else [], ones, k))
     if ones:
-        k = min(2, n)
-        sequence = [_op(g, (q,)) for q in range(k) for _ in range(2) for g in ones]
-        circuits.append(Circuit("single_qubit", k, tuple(sequence)))
+        circuits.append(_single_qubit(ones, min(2, n)))
     if mix is not None and n >= 2 and len(pairs[0]) > 1:
-        circuits.append(Circuit("two_qubit_natives", 2, (*layer(2), *pairs[0], *layer(2))))
-    phase = _fixed_phase(profile, chain[0])
+        circuits.append(_two_qubit_natives(mix, pairs[0]))
+    phase = _fixed_phase_gate(profile, chain[0])
     if mix is not None and phase is not None and expressible(phase):
-        # Undone like the mirror circuit, so the phase gate's Z errors show as |1>.
-        undone = _undone([*layer(1), phase])
-        if undone is not None:
-            circuits.append(Circuit("fixed_phase", 1, tuple(undone)))
-    if circuits:
-        circuits.append(Circuit("readout", n, ()))
-    return tuple(circuits)
+        circuits.append(_fixed_phase(mix, phase))
+    built = [c for c in circuits if c is not None]
+    if built:
+        built.append(Circuit("readout", n, ()))
+    return tuple(built)
 
 
-def _fixed_phase(profile: Profile, qubit: int) -> Op | None:
+def _ghz_chain(mix: str, pairs: list[list[Op]], n: int) -> Circuit:
+    return Circuit("ghz_chain", n, (*_layer(mix, n), *_entangle(pairs, n), *_layer(mix, n)))
+
+
+def _chain_mirror(mix: str, pairs: list[list[Op]], n: int) -> Circuit | None:
+    chain = _entangle(pairs, n)
+    qubit_0_superposed = _undone([*_layer(mix, 1), *chain])
+    every_qubit_superposed = _undone([*_layer(mix, n), *chain])
+    if qubit_0_superposed is None or every_qubit_superposed is None:
+        return None
+    return Circuit("chain_mirror", n, (*qubit_0_superposed, *every_qubit_superposed))
+
+
+def _mirror(mix: str, entangling: list[Op], ones: list[str], k: int) -> Circuit | None:
+    forward = [*_layer(mix, k), *entangling, *(_op(g, (q,)) for q in range(k) for g in ones)]
+    inverses = {op: ops for op in forward if (ops := _inverse(op)) is not None}
+    forward = [op for op in forward if op in inverses]
+    if not forward:
+        return None
+    backward = [inv for op in reversed(forward) for inv in inverses[op]]
+    return Circuit("mirror", k, (*forward, *backward))
+
+
+def _single_qubit(ones: list[str], k: int) -> Circuit:
+    return Circuit(
+        "single_qubit", k, tuple(_op(g, (q,)) for q in range(k) for _ in range(2) for g in ones)
+    )
+
+
+def _two_qubit_natives(mix: str, natives: list[Op]) -> Circuit:
+    return Circuit("two_qubit_natives", 2, (*_layer(mix, 2), *natives, *_layer(mix, 2)))
+
+
+def _fixed_phase(mix: str, phase: Op) -> Circuit | None:
+    # Undone like the mirror circuit, so the phase gate's Z errors show as |1>.
+    undone = _undone([*_layer(mix, 1), phase])
+    return None if undone is None else Circuit("fixed_phase", 1, tuple(undone))
+
+
+def _layer(mix: str, k: int) -> list[Op]:
+    return [_op(mix, (q,)) for q in range(k)]
+
+
+def _entangle(pairs: list[list[Op]], k: int) -> list[Op]:
+    return [pairs[i][0] for i in range(k - 1)]
+
+
+def _fixed_phase_gate(profile: Profile, qubit: int) -> Op | None:
     """A fixed z-family gate that the profile leaves to its ``p`` calibration.
 
     Every export must then charge the ``p`` noise for this gate, ahead of the ``rz`` noise.
@@ -448,10 +473,13 @@ def _inverse(op: Op) -> list[Op] | None:
 
 
 def _undone(forward: list[Op]) -> list[Op] | None:
-    undo = [_inverse(op) for op in reversed(forward)]
-    if any(ops is None for ops in undo):
-        return None
-    return [*forward, *(op for ops in undo for op in ops)]
+    undo: list[Op] = []
+    for op in reversed(forward):
+        ops = _inverse(op)
+        if ops is None:
+            return None
+        undo += ops
+    return [*forward, *undo]
 
 
 # expected probabilities ---------------------------------------------------------------------
@@ -633,8 +661,8 @@ def _merged(reports: Sequence[Report]) -> tuple[Report, ...]:
             into.mark_exact(what)
         for a in report.approximated:
             into.approximate(a.what, a.how, a.detail)
-        into.omitted[:] = _union(into.omitted, report.omitted)
-        into.unknown[:] = _union(into.unknown, report.unknown)
+        into.omitted[:] = _merge_loci(into.omitted, report.omitted)
+        into.unknown[:] = _merge_loci(into.unknown, report.unknown)
         into.clamped += [c for c in report.clamped if c not in into.clamped]
         for event, counts in report.events.items():
             for key, n in counts.items():
@@ -642,7 +670,7 @@ def _merged(reports: Sequence[Report]) -> tuple[Report, ...]:
     return tuple(merged)
 
 
-def _union(entries: Sequence[str], more: Sequence[str]) -> list[str]:
+def _merge_loci(entries: Sequence[str], more: Sequence[str]) -> list[str]:
     out = list(entries)
     for entry in more:
         new = LociText(entry)
@@ -848,7 +876,7 @@ class _PennyLane(_Runner):
                 self._cls(op)(*op.params, wires=list(op.qubits))
             return qml.probs(wires=range(n))
 
-        return np.asarray(qml.add_noise(run, self.model)(), dtype=float)
+        return np.asarray(qml.add_noise(run, self.model, level="top")(), dtype=float)
 
     def reports(self) -> list[Report]:
         return [self.model.report]

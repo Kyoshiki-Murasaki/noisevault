@@ -903,10 +903,66 @@ def test_a_reset_the_profile_disables_is_refused(qml, where) -> None:
 
         return np.asarray(qml.add_noise(circuit, model)())
 
-    with pytest.raises(DisabledGateError, match=r"^reset on \(2,\) is disabled in this profile$"):
+    with pytest.raises(DisabledGateError, match=r"^reset on qubit 2 is disabled in this profile$"):
         run(1)
     if where == "record":
         assert run(0) == pytest.approx([0.97, 0.03], abs=1e-12)
+
+
+def _measure_off(where: str | None) -> Profile:
+    readout = {"p1_given_0": 0.02, "p0_given_1": 0.1}
+    data = toy(gates={"x": {"avg_infidelity": 0.0}}, readout=readout)
+    if where == "record":
+        data["gates"]["measure"] = {}
+        data["calibrations"] = [{"gate": "measure", "qubits": [2], "disabled": True}]
+    elif where == "definition":
+        data["gates"]["measure"] = {"disabled": True}
+    return Profile.model_validate(data)
+
+
+_MEASUREMENTS = {
+    "mid-circuit": lambda qml, w: qml.probs(op=qml.measure(w)),
+    "mid-circuit with reset": lambda qml, w: qml.probs(op=qml.measure(w, reset=True)),
+    "probs": lambda qml, w: qml.probs(wires=[w]),
+    "probs of every wire": lambda qml, w: qml.probs(),
+    "expval": lambda qml, w: qml.expval(qml.PauliZ(w)),
+    "sample": lambda qml, w: qml.sample(wires=[w]),
+}
+
+
+def _measured(qml, model, kind: str, wire: int):
+    @qml.qnode(qml.device("default.mixed", wires=3))
+    def circuit():
+        qml.PauliX(wire)
+        return _MEASUREMENTS[kind](qml, wire)
+
+    noisy = qml.add_noise(circuit, model)
+    return np.asarray(qml.set_shots(noisy, shots=20)() if kind == "sample" else noisy())
+
+
+@pytest.mark.parametrize("readout", [True, False])
+@pytest.mark.parametrize("where", ["record", "definition"])
+@pytest.mark.parametrize("kind", list(_MEASUREMENTS))
+def test_a_measurement_the_profile_disables_is_refused(qml, kind, where, readout) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    model = to_pennylane(_measure_off(where), layout=[0, 2, 1], readout=readout)
+    message = r"^measure on qubit 2 is disabled in this profile$"
+    with pytest.raises(DisabledGateError, match=message):
+        _measured(qml, model, kind, 1)
+
+
+@pytest.mark.parametrize("kind", [k for k in _MEASUREMENTS if k != "sample"])
+def test_a_measurement_where_the_profile_allows_it_keeps_its_noise(qml, kind) -> None:
+    from noisevault.frameworks.pennylane import to_pennylane
+
+    noisy, plain = (
+        _measured(qml, to_pennylane(_measure_off(where), layout=[0, 2, 1]), kind, 0)
+        for where in ("record", None)
+    )
+    assert noisy == pytest.approx(plain, abs=1e-12)
+    if kind == "probs":
+        assert noisy == pytest.approx([0.1, 0.9], abs=1e-12)
 
 
 # unknown gates, report -----------------------------------------------------------------------
@@ -1365,8 +1421,16 @@ def test_every_buildable_registry_gate_has_the_registry_unitary(qml) -> None:
         theirs = _matrix(qml, make(*args, wires=list(range(row.arity))))
         overlap = np.trace(theirs.conj().T @ row.unitary(*args)) / 2**row.arity
         assert abs(abs(overlap) - 1) < 1e-12, row.name
-    # Adjoint(...) is no qml attribute.
-    assert missing == {"sdg", "sxdg", "tdg", "cxswap", "swapcx", "czswap"}
+    assert missing == {"cxswap", "swapcx", "czswap"}
+
+
+@pytest.mark.parametrize(("name", "base"), [("sdg", "S"), ("tdg", "T"), ("sxdg", "SX")])
+def test_an_adjoint_registry_gate_builds_the_adjoint_that_gets_its_noise(qml, name, base) -> None:
+    from noisevault.frameworks.pennylane import gate_name, operation_for
+
+    op = operation_for(name)(wires=0)
+    assert op.name == f"Adjoint({base})"
+    assert gate_name(op, {name}) == name
 
 
 def test_ms_builds_only_at_zero_phases_as_an_ising_xx_that_gets_the_ms_noise(qml) -> None:

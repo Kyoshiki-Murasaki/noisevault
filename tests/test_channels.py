@@ -205,7 +205,7 @@ def test_uncalibrated_gate_gets_relaxation_only() -> None:
 def test_ideal_and_disabled_gates() -> None:
     profile = _profile(calibrations=[{"gate": "cz", "qubits": [0, 1], "disabled": True}])
     assert _built(profile, "rz", (0,)).channels == ()
-    with pytest.raises(DisabledGateError, match="disabled"):
+    with pytest.raises(DisabledGateError, match=r"^cz on qubits 0-1 is disabled in this profile$"):
         _built(profile, "cz", (0, 1))
 
 
