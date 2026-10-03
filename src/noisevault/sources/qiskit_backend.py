@@ -19,7 +19,7 @@ import math
 import re
 import statistics
 import warnings
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -564,6 +564,7 @@ def _in_unit(
 
 
 def to_profile(cal: Calibration, provenance: Mapping[str, Any], *, origin: Origin) -> Profile:
+    _refuse_nonfinite(cal, origin)
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
     for inst in cal.instructions:
@@ -666,6 +667,34 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any], *, origin: Origi
 
 
 _COHERENCE = {"t1_us": "T1", "t2_us": "T2"}
+
+
+def _refuse_nonfinite(cal: Calibration, origin: Origin) -> None:
+    """``origin`` refuses a nonfinite value before a conversion rule can remove it.
+
+    For example, the dead-gate sentinel removes an error of ``inf``. The check leaves out T1 and
+    T2, because the conversion treats a nonfinite T1 or T2 as missing and adds a note.
+    """
+    for where, value in _values(cal):
+        if value is not None and not math.isfinite(value):
+            raise origin.refuse(f"{where}: Input should be a finite number, got {value!r}")
+
+
+def _values(cal: Calibration) -> Iterator[tuple[str, float | None]]:
+    """Each value of ``cal`` except T1 and T2, with the profile field that it gives."""
+    for inst in cal.instructions:
+        if inst.name == "measure":
+            owner = f"qubit {inst.qubits[0]}"
+            yield f"readout.error of {owner}", inst.error
+            yield f"readout.duration_ns of {owner}", inst.duration_ns
+        else:
+            owner = f"{inst.name} on {qubit_loci(inst.qubits)}"
+            yield f"avg_infidelity of {owner}", inst.error
+            yield f"duration_ns of {owner}", inst.duration_ns
+    for index, qubit in sorted(cal.qubits.items()):
+        yield f"readout.p1_given_0 of qubit {index}", qubit.p1_given_0
+        yield f"readout.p0_given_1 of qubit {index}", qubit.p0_given_1
+        yield f"prep.error of qubit {index}", qubit.prep_error
 
 
 def _without_invalid_coherence(

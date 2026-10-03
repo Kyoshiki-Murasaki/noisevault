@@ -648,3 +648,23 @@ def test_a_value_a_profile_cannot_hold_names_the_file_and_the_value(tmp_path: Pa
         " got 1.5",
         f"correct that value in {path.name}",
     )
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "gate"),
+    [
+        ('"0","0.00015","0.00015","1:0.0013"', '"0","inf","0.00015","1:0.0013"', "sx on qubit 0"),
+        ('"1:0.0013","1:68"', '"1:inf","1:68"', "cz on qubits 0-1"),
+    ],
+    ids=["sx", "cz"],
+)
+def test_an_infinite_gate_error_names_the_gate_and_its_qubits(
+    tmp_path: Path, old: str, new: str, gate: str
+) -> None:
+    path = _edited(tmp_path, HERON, old, new)
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert (info.value.message, info.value.hint) == (
+        f"{path.name}: avg_infidelity of {gate}: Input should be a finite number, got inf",
+        f"correct that value in {path.name}",
+    )

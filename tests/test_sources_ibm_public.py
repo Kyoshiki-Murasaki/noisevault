@@ -501,6 +501,47 @@ _OUT_OF_RANGE = {
         _cx_3_4("gate_length", -5),
         "cx on qubits 3-4: duration_ns must not be negative, got -5.0",
     ),
+    "an infinite gate error": (
+        _cx_3_4("gate_error", math.inf),
+        "avg_infidelity of cx on qubits 3-4: Input should be a finite number, got inf",
+    ),
+    "a gate error that is not a number on a gate that is not operational": (
+        lambda p: (
+            _gate(p, "cx", [3, 4]).append({"name": "operational", "value": 0, "unit": ""}),
+            _cx_3_4("gate_error", math.nan)(p),
+        ),
+        "avg_infidelity of cx on qubits 3-4: Input should be a finite number, got nan",
+    ),
+    "an infinite gate length of a dead gate": (
+        lambda p: (_cx_3_4("gate_error", 1)(p), _cx_3_4("gate_length", math.inf)(p)),
+        "duration_ns of cx on qubits 3-4: Input should be a finite number, got inf",
+    ),
+    "an infinite readout error that the asymmetric pair replaces": (
+        lambda p: _param(p["qubits"][0], "readout_error").update(value=math.inf),
+        "readout.error of qubit 0: Input should be a finite number, got inf",
+    ),
+    "an infinite asymmetric readout error without its pair": (
+        lambda p: (
+            p["qubits"][0].remove(_param(p["qubits"][0], "prob_meas0_prep1")),
+            _param(p["qubits"][0], "prob_meas1_prep0").update(value=math.inf),
+        ),
+        "readout.p1_given_0 of qubit 0: Input should be a finite number, got inf",
+    ),
+    "an infinite asymmetric readout error without its pair, the other way": (
+        lambda p: (
+            p["qubits"][0].remove(_param(p["qubits"][0], "prob_meas1_prep0")),
+            _param(p["qubits"][0], "prob_meas0_prep1").update(value=math.inf),
+        ),
+        "readout.p0_given_1 of qubit 0: Input should be a finite number, got inf",
+    ),
+    "an infinite readout length without a readout error": (
+        lambda p: (
+            p["qubits"][0].remove(_param(p["qubits"][0], "prob_meas0_prep1")),
+            p["qubits"][0].remove(_param(p["qubits"][0], "readout_error")),
+            _param(p["qubits"][0], "readout_length").update(value=math.inf),
+        ),
+        "readout.duration_ns of qubit 0: Input should be a finite number, got inf",
+    ),
 }
 
 

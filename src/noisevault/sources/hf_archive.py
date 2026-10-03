@@ -30,6 +30,7 @@ from . import OLDER_HINT, Origin
 from .qiskit_backend import (
     Calibration,
     _is_sentinel,
+    _without_invalid_coherence,
     as_utc,
     calibration_from_properties,
     to_profile,
@@ -61,6 +62,7 @@ _PROCESSORS = {
     "ibm_torino": "Heron r1",
 }
 _READOUT_PAIR = {"p1_given_0": "prob_meas1_prep0", "p0_given_1": "prob_meas0_prep1"}
+_COHERENCE_ROWS = {"t1_us": "T1", "t2_us": "T2"}
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _STALE_AFTER = timedelta(days=7)
 _QUBIT_VALUE_NAMES = {
@@ -422,9 +424,13 @@ def _unread(cal: Calibration) -> set[tuple[str, tuple[int, ...]]]:
 
     A qubit with both asymmetric readout errors uses them and not its readout_error. A qubit
     without both uses its readout_error, and its readout_length only with that error. A disabled
-    gate keeps only the error that disables it.
+    gate keeps only the error that disables it. The conversion treats a T1 or T2 that is not a
+    positive finite number as missing.
     """
-    unread: set[tuple[str, tuple[int, ...]]] = set()
+    _, invalid = _without_invalid_coherence(cal)
+    unread: set[tuple[str, tuple[int, ...]]] = {
+        (prop, (index,)) for key, prop in _COHERENCE_ROWS.items() for index, _ in invalid[key]
+    }
     readout = {i.qubits[0]: i.error for i in cal.instructions if i.name == "measure"}
     for index, qubit in cal.qubits.items():
         if qubit.p1_given_0 is not None and qubit.p0_given_1 is not None:
