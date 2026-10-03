@@ -41,6 +41,7 @@ CHI2_95 = 3.841458820694124
 GATE_NODES = 25
 FINE_POINTS = 193
 RESAMPLES = 400
+EXACT_OUTCOMES = 4096
 WINDOW_POINTS = 33
 END_TOL = 0.02
 IMPOSSIBLE = 1e-12
@@ -819,15 +820,21 @@ class _Fit:
             return True
         nuisance, _ = self.restricted(axis, held)
         point = _point(axis, held, np.array([nuisance]))
-        draws = self.draw(self.surface.probs_at(*point)[0], np.random.default_rng(self.seed))
+        probs = np.where(self.surface.supported, self.surface.probs_at(*point)[0], 0.0)
+        outcomes = _enumerated(probs, self.surface.slices, self.shots) or _Outcomes(
+            self.draw(probs, np.random.default_rng(self.seed)),
+            np.full(RESAMPLES, 1 / (1 + RESAMPLES)),
+            1 / (1 + RESAMPLES),
+        )
         windows = self.windows()
         center = tuple(float(x[0]) for x in point)
         if not any(_spans(window, *center) for window in windows):
             windows += (self._window_at(*center),)
-        top = self.draw_max(draws, windows)[0]
-        drawn = 2 * (top - self.draw_restricted(draws, axis, held, windows))
-        p = (1 + np.sum(drawn >= observed / self.dispersion - 1e-9)) / (1 + RESAMPLES)
-        return bool(p > 1 - LEVEL)
+        every = np.column_stack([self.observed, outcomes.counts])
+        top = self.draw_max(every, windows)[0]
+        stats = 2 * (top - self.draw_restricted(every, axis, held, windows))
+        extreme = stats[1:] >= stats[0] / self.dispersion - 1e-9
+        return bool(outcomes.unlisted + outcomes.weights[extreme].sum() > 1 - LEVEL)
 
     def draw(self, probs: ByCell, rng: np.random.Generator) -> ByCellByDraw:
         probs = np.where(self.surface.supported, probs, 0.0)
@@ -843,7 +850,7 @@ class _Fit:
     def draw_max(
         self, draws: ByCellByDraw, windows: Sequence[_Window] = ()
     ) -> tuple[ByColumn, ByColumn, ByColumn]:
-        found = [_window_max(window, draws) for window in windows or self.windows()]
+        found = [_window_max(window, draws) for window in _with_edges(windows or self.windows())]
         top, gate, readout = found[0]
         for other_top, other_gate, other_readout in found[1:]:
             better = other_top > top
@@ -856,7 +863,7 @@ class _Fit:
         self, draws: ByCellByDraw, axis: Axis, held: float, windows: Sequence[_Window] = ()
     ) -> ByColumn:
         tops = []
-        for window in windows or self.windows():
+        for window in _with_edges(windows or self.windows()):
             line = window.gate if axis == "readout" else window.readout
             values = self._line(axis, held, line, draws)
             k = np.argmax(values, axis=0)
@@ -884,11 +891,17 @@ class _Fit:
             lines[axis] = np.linspace(
                 max(center - 4 * half, _LO), min(center + 4 * half, _HI), WINDOW_POINTS
             )
-        return self._grid_window(lines["gate"], lines["readout"])
+        gate_line, readout_line = lines["gate"], lines["readout"]
+        gate_ends, readout_ends = _unreached(gate_line), _unreached(readout_line)
+        pairs = ((gate_ends, readout_line), (gate_line, readout_ends), (gate_ends, readout_ends))
+        edges = tuple(self._grid_window(*pair) for pair in pairs if all(map(len, pair)))
+        return self._grid_window(gate_line, readout_line, edges)
 
-    def _grid_window(self, gate: ByPoint, readout: ByPoint) -> _Window:
+    def _grid_window(
+        self, gate: ByPoint, readout: ByPoint, edges: tuple[_Window, ...] = ()
+    ) -> _Window:
         g, r = (a.ravel() for a in np.meshgrid(gate, readout, indexing="ij"))
-        return _Window(gate, readout, self.surface.probs_at(g, r))
+        return _Window(gate, readout, self.surface.probs_at(g, r), edges)
 
     def _line(
         self, axis: Axis, held: float, others: ByPoint, counts: ByCell | ByCellByDraw
@@ -901,6 +914,56 @@ class _Window:
     gate: ByPoint
     readout: ByPoint
     probs: ByPointByCell
+    edges: tuple[_Window, ...] = ()
+
+
+class _Outcomes(NamedTuple):
+    counts: ByCellByDraw
+    weights: ByColumn
+    unlisted: float
+
+
+def _enumerated(probs: ByCell, slices: Sequence[slice], shots: np.ndarray) -> _Outcomes | None:
+    blocks = []
+    for part, n in zip(slices, shots, strict=True):
+        block = _binomial(probs[part], int(n))
+        if block is None:
+            return None
+        blocks.append(block)
+    if math.prod(len(pmf) for _, pmf in blocks) > EXACT_OUTCOMES:
+        return None
+    pick = [a.ravel() for a in np.meshgrid(*(np.arange(len(p)) for _, p in blocks), indexing="ij")]
+    counts = np.concatenate([columns[:, k] for (columns, _), k in zip(blocks, pick, strict=True)])
+    weights = np.prod([pmf[k] for (_, pmf), k in zip(blocks, pick, strict=True)], axis=0)
+    return _Outcomes(counts, weights, max(0.0, 1 - float(weights.sum())))
+
+
+def _binomial(cell: ByCell, shots: int) -> tuple[ByCellByDraw, ByColumn] | None:
+    used = np.flatnonzero(cell > 0)
+    if not shots or len(used) == 1:
+        columns = np.zeros((len(cell), 1))
+        columns[used[:1]] = shots
+        return columns, np.ones(1)
+    if len(used) > 2:
+        return None
+    q = float(cell[used[1]] / cell[used].sum())
+    spread = 10 * math.sqrt(shots * q * (1 - q)) + 10
+    low, high = max(0, math.floor(shots * q - spread)), min(shots, math.ceil(shots * q + spread))
+    if high - low >= EXACT_OUTCOMES:
+        return None
+    k = np.arange(low, high + 1)
+    columns = np.zeros((len(cell), len(k)))
+    columns[used[0]], columns[used[1]] = shots - k, k
+    choose = [math.lgamma(shots + 1) - math.lgamma(x + 1) - math.lgamma(shots - x + 1) for x in k]
+    return columns, np.exp(np.array(choose) + k * math.log(q) + (shots - k) * math.log1p(-q))
+
+
+def _unreached(line: np.ndarray) -> np.ndarray:
+    return np.array([x for x in (_LO, _HI) if len(line) > 1 and not line[0] <= x <= line[-1]])
+
+
+def _with_edges(windows: Sequence[_Window]) -> list[_Window]:
+    return [part for window in windows for part in (window, *window.edges)]
 
 
 def _spans(window: _Window, gate: float, readout: float) -> bool:
@@ -1228,9 +1291,8 @@ def _settled(window: np.ndarray, a: int, b: int, g: np.ndarray, r: np.ndarray) -
         for i, j in ((a - 1, b), (a + 1, b), (a, b - 1), (a, b + 1))
         if 0 <= i < window.shape[0] and 0 <= j < window.shape[1]
     ]
-    tol = max(ASCENT_TOL, 1e-12 * abs(top))
-    flat = window.max() - window.min() <= tol
-    return (flat or _inside(window, a, b, g, r)) and top - max(near, default=top) <= tol
+    flat = window.max() - window.min() <= ASCENT_TOL
+    return (flat or _inside(window, a, b, g, r)) and top - min(near, default=top) <= ASCENT_TOL
 
 
 def _zoom(f: Callable[[ByPoint], ByPoint], x: float) -> tuple[float, float]:

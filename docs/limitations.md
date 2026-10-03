@@ -142,8 +142,11 @@ axis and finds every peak of the likelihood on that grid. Around each peak, the 
 step 8 times smaller until the next step changes the log-likelihood by less than 0.001. With 5
 billion shots in a circuit, the step therefore becomes much smaller than the grid spacing. Thus
 the deviance does not grow with the shots because of the search. Steps on both axes at once can
-stop before the top of a narrow, curved peak. For such a peak near the maximum, the search moves
-along the gate axis and finds the best readout factor at each gate factor. When the best point is
+stop before the top of a narrow, curved peak. The search keeps the result of these steps only when
+every neighboring grid point is less than 0.001 below it. When the counts do not constrain one
+factor, the neighbors on its axis are always that close. Thus one close neighbor does not show a
+maximum. When a peak near the maximum fails this check, the search moves along the gate axis. At
+each gate factor, it finds the best readout factor. When the best point is
 at the edge of the search window, the window becomes 2 times wider. Thus the search can reach a
 maximum far from the grid peak. Above about 10^12 shots in total, the rounding error of the
 log-likelihood can be more than 0.001. There, the search stops when the computer cannot represent
@@ -207,25 +210,43 @@ test allows, at any number of shots.
 The chi-square cutoff is a large-sample approximation. It covers too little when a factor depends
 on a few error shots. On one qubit with a readout error of 0.00055 and 4000 shots, about two shots
 read wrong. In that case, intervals from the chi-square cutoff alone contain the true factor with
-probability 0.86. NoiseVault therefore checks each end of an interval again by simulation. It
-draws 400 sets of counts from the model at that end, with the same shots per circuit, and
-computes the likelihood-ratio statistic on each. The end passes when at least 5% of the drawn
-statistics are as large as the observed one. The end moves outward while it passes, and
-NoiseVault locates the outermost passing end to within 2% of the chi-square half-width. A value
-inside the chi-square cutoff always passes, so this step can only widen an interval. In the
-one-qubit case, the probability rises to 0.975.
+probability 0.86. NoiseVault therefore tests each end of an interval again, with the distribution
+of the likelihood-ratio statistic at that end. This calibrated test passes the end when the
+probability of a statistic at least as large as the observed one is more than 5%. The end moves
+outward while it passes, and NoiseVault locates the outermost passing end to within 2% of the
+chi-square half-width. A value inside the chi-square cutoff always passes, so this step can only
+widen an interval.
+
+When the profile allows at most two outcomes in each circuit, as with one measured qubit, the
+counts of each circuit follow a binomial distribution. NoiseVault then lists every count within 10
+standard deviations plus 10 of the mean. If the circuits give at most 4096 combinations of these
+counts, the calibrated test uses the exact probability of each combination. The calibrated test
+treats the probability outside the listed counts as a larger statistic. Otherwise, NoiseVault draws
+400 sets of counts from the model at that end, with the same shots per circuit. With few error
+shots, one count can carry 5% of the probability. In that case, 400 draws can reject a factor that
+the exact probabilities accept, and the result depends on the seed of the draws.
+
+NoiseVault computes the statistic of the observed counts in the same way as the statistic of each
+listed or drawn set. Thus equal counts give equal statistics. In the 0.00055 case, the probability
+that an interval contains the true factor rises to 0.975. At true factors 0.5, 2 and 5, it is
+0.974, 0.973 and 0.968. On one qubit with a readout error of 0.00075 and one circuit of 4000 shots,
+the probability is 0.988 at true factor 1. At true factors 0.5, 2 and 5, it is 0.981, 0.963 and
+0.963.
 
 The likelihood can have more than one peak. For example, an `r` gate with unequal Pauli errors
 can give the same outcome probabilities at two separate gate factors. The 95% interval then runs
 from the lowest accepted factor to the highest. It can therefore contain factors between the
 peaks that the test rejects. The fit tests every peak with the same check as an interval end. This
-includes a peak narrower than the grid step and a peak that only the simulation check accepts.
+includes a peak narrower than the grid step and a peak that only the calibrated test accepts.
 The estimate is the highest peak. When two peaks differ by at most 0.02 in log-likelihood, the
 counts cannot order them, and the estimate is the peak nearest factor 1.
 
-The drawn counts have their maxima near the factor that made them. The fit finds those maxima on a
-small grid around the estimate and around each factor that it tests. The grid step is a quarter of
-the interval half-width. For a one-sided interval, the step is at least 0.0125 in log factor.
+Most listed and drawn sets have their maximum near the factor that made them. The fit finds those
+maxima on a small grid around the estimate and around each factor that it tests. The same grid
+gives the maximum of the observed counts. The grid step is a quarter of the interval half-width.
+For a one-sided interval, the step is at least 0.0125 in log factor. The grid also holds the two
+ends of the factor range. A set with no error shots has its maximum at the lower end, which a grid
+around a larger estimate does not reach.
 
 ### Outcomes the profile rules out
 
@@ -243,8 +264,9 @@ of the runs. The gate interval contains the true gate factor in 93 runs, and the
 interval contains the true readout factor in 95. To run the job locally, set
 `NOISEVAULT_SLOW=1`. Then run `pytest tests/test_compare.py -k each_interval_covers`.
 
-Four faster tests run with the rest of the suite. In the one-qubit case above, the probability
-must be at least 0.95. The second test uses one qubit with a readout error of 0.1 and a million
+Four faster tests run with the rest of the suite. In the two one-qubit cases above, the probability
+must be at least 0.95. The test checks true factor 1 in the 0.00055 case and true factors 0.5, 1, 2
+and 5 in the 0.00075 case. The second test uses one qubit with a readout error of 0.1 and a million
 shots. Its interval must contain the true factor in 180 to 199 of 200 runs. A third test uses the
 `r` gate with two peaks. Its interval must contain factor 1 in at least 93 of 100 runs, both at a
 million shots and at 20 million shots. It contains factor 1 in 99 and 100 runs. A fourth test

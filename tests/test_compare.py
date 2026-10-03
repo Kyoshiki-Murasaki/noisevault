@@ -373,8 +373,8 @@ def test_the_search_follows_a_ridge_to_a_maximum_far_from_the_grid_peak() -> Non
     assert "within shot noise on every circuit" in str(result)
 
 
-def test_a_held_factor_gets_the_other_factor_refitted_to_the_likelihood_tolerance() -> None:
-    profile = Profile.model_validate(
+def orthogonal() -> Profile:
+    return Profile.model_validate(
         {
             "noisevault": "1.0",
             "device": {"name": "orthogonal", "technology": "superconducting", "num_qubits": 2},
@@ -383,12 +383,23 @@ def test_a_held_factor_gets_the_other_factor_refitted_to_the_likelihood_toleranc
             "qubits": [{"index": 1, "readout": {"p1_given_0": 0.3, "p0_given_1": 0}}],
         }
     )
-    xx = ("xx", XX, {"0": 9_776_842_646, "1": 223_157_354})
-    empty = {"0": 1_673_342_748, "1": 8_326_657_252}
-    data = written(profile, [xx, ("empty1", (), empty), ("empty2", (), empty)]).to_dict()
+
+
+def orthogonal_counts(
+    circuits: Sequence[tuple[str, Sequence[Op], dict[str, int]]],
+) -> MeasuredCounts:
+    data = written(orthogonal(), circuits).to_dict()
     for entry in data["circuits"][1:]:
         entry["qubits"] = [1]
-    gates = compare(profile, MeasuredCounts.model_validate(data)).gates
+    return MeasuredCounts.model_validate(data)
+
+
+def test_a_held_factor_gets_the_other_factor_refitted_to_the_likelihood_tolerance() -> None:
+    profile = orthogonal()
+    xx = ("xx", XX, {"0": 9_776_842_646, "1": 223_157_354})
+    empty = {"0": 1_673_342_748, "1": 8_326_657_252}
+    counts = orthogonal_counts([xx, ("empty1", (), empty), ("empty2", (), empty)])
+    gates = compare(profile, counts).gates
     alone = compare(profile, written(profile, [xx])).gates
     half = math.log(alone.high / alone.low) / 2
     for end, expected in ((gates.low, alone.low), (gates.high, alone.high)):
@@ -431,6 +442,68 @@ def test_nodes_follow_the_shots_below_any_fixed_gap() -> None:
 
     assert 3.6 < lr(result.low) < 5 and 3.6 < lr(result.high) < 5, result
     assert lr(result.factor) < 0.04, result
+
+
+def test_a_flat_gate_axis_does_not_stop_the_readout_search() -> None:
+    zeros = 6_980_294_000
+    xx = ("xx", XX, {"0": 3911, "1": 89})
+    counts = orthogonal_counts([xx, ("empty", (), {"0": zeros, "1": MOST_SHOTS - zeros})])
+    result = compare(orthogonal(), counts)
+    exact = math.log(zeros / MOST_SHOTS) / math.log(0.7)
+    assert result.readout.factor == pytest.approx(exact, rel=1e-6), result.readout
+    assert result.deviance < 0.01, result.deviance
+
+
+SPARSE_SHOTS, SPARSE_ERROR = 4000, 0.00075
+
+
+def one_binomial(ones: int) -> tuple[Profile, MeasuredCounts]:
+    profile = one_qubit(
+        "sparse-binomial", {"x": {"avg_infidelity": 0.0}}, readout={"error": SPARSE_ERROR}
+    )
+    return profile, written(profile, [("readout", (), {"0": SPARSE_SHOTS - ones, "1": ones})])
+
+
+def misread(factor: float) -> float:
+    return scale_readout((SPARSE_ERROR, SPARSE_ERROR), factor)[0]
+
+
+def binomial(ones: int, p: float) -> float:
+    return math.comb(SPARSE_SHOTS, ones) * p**ones * (1 - p) ** (SPARSE_SHOTS - ones)
+
+
+@pytest.mark.parametrize("truth", [0.5, 1.0, 2.0, 5.0])
+def test_one_sparse_binomial_covers_the_true_factor_over_every_error_count(truth: float) -> None:
+    weights = {ones: binomial(ones, misread(truth)) for ones in range(60)}
+    coverage = sum(
+        weight * covers(compare(*one_binomial(ones)).readout, truth)
+        for ones, weight in weights.items()
+        if weight > 1e-12
+    )
+    assert coverage >= 0.95, coverage
+
+
+def test_a_sparse_interval_reaches_every_factor_the_exact_binomial_test_accepts() -> None:
+    def lr(ones: int, factor: float) -> float:
+        def loglik(p: float) -> float:
+            return ones * math.log(p) + (SPARSE_SHOTS - ones) * math.log1p(-p)
+
+        lowest, highest = (misread(f) for f in fit.FACTOR_RANGE)
+        return 2 * (
+            loglik(min(max(ones / SPARSE_SHOTS, lowest), highest)) - loglik(misread(factor))
+        )
+
+    def tail(factor: float) -> float:
+        observed = lr(8, factor)
+        return sum(
+            binomial(k, misread(factor)) for k in range(60) if lr(k, factor) >= observed - 1e-9
+        )
+
+    result = compare(*one_binomial(8)).readout
+    accepted = [f for f in np.geomspace(0.5, 8, 81) if tail(f) > 1 - fit.LEVEL]
+    slack = fit.END_TOL * math.log(result.high / result.low) / 2
+    assert math.log(result.low / min(accepted)) <= slack, (result, min(accepted))
+    assert math.log(max(accepted) / result.high) <= slack, (result, max(accepted))
 
 
 def test_two_runs_of_one_plan_build_the_surface_once(monkeypatch: pytest.MonkeyPatch) -> None:
