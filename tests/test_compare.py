@@ -295,6 +295,25 @@ def test_an_interval_holds_a_peak_that_only_the_calibrated_test_accepts() -> Non
     assert covers(result.gates, 0.404558) and covers(result.gates, 1.0), result.gates
 
 
+def test_a_flat_likelihood_below_the_relaxation_floor_stays_outside_the_interval() -> None:
+    profile = Profile.uniform(
+        "relaxed",
+        technology="superconducting",
+        num_qubits=1,
+        one_qubit_error=0.0014,
+        readout_error=0.025,
+        t1_us=80,
+        t2_us=150,
+        one_qubit_ns=40,
+    )
+    counts = simulate(
+        scaled(profile, 14, 1.5), plan(profile), shots=1_000_000, seed=2, run_at=LATER
+    )
+    result = compare(profile, counts)
+    assert isinstance(result.gates, ErrorFactor) and result.gates.bound is None, result.gates
+    assert 13.8 < result.gates.low < 14 < result.gates.high < 14.2, result.gates
+
+
 def test_a_gate_response_equal_at_both_ends_of_the_range_still_moves() -> None:
     profile, counts = two_peaks(0, last=EQUAL_ENDS, truth=5.0)
     assert dict(counts.circuits[0].counts) == {"0": 529106, "1": 470894}

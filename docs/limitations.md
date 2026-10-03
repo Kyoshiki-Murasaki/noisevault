@@ -141,7 +141,9 @@ The search for the maximum also follows the shots. It starts on a grid of 193 fa
 axis and finds every peak of the likelihood on that grid. Around each peak, the search makes its
 step 8 times smaller until the next step changes the log-likelihood by less than 0.001. With 5
 billion shots in a circuit, the step therefore becomes much smaller than the grid spacing. Thus
-the deviance does not grow with the shots because of the search.
+the deviance does not grow with the shots because of the search. Steps on both axes at once can
+stop before the top of a narrow, curved peak. For such a peak near the maximum, the search moves
+along the gate axis and finds the best readout factor at each gate factor.
 
 ### Which factors the counts identify
 
@@ -208,8 +210,8 @@ includes a peak narrower than the grid step and a peak that only the simulation 
 The estimate is the highest peak. When two peaks differ by at most 0.02 in log-likelihood, the
 counts cannot order them, and the estimate is the peak nearest factor 1.
 
-The drawn counts have their maxima near the factor that made them. The fit finds those maxima on
-a small grid around each accepted peak and around each tested end. The grid step is a quarter of
+The drawn counts have their maxima near the factor that made them. The fit finds those maxima on a
+small grid around the estimate and around each factor that it tests. The grid step is a quarter of
 the interval half-width. For a one-sided interval, the step is at least 0.0125 in log factor.
 
 ### Outcomes the profile rules out
