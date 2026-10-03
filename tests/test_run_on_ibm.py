@@ -7,6 +7,8 @@ import errno
 import functools
 import importlib.util
 import io
+import json
+import os
 import re
 import subprocess
 import sys
@@ -317,7 +319,8 @@ def test_the_usage_names_the_script_the_same_way_for_uv_and_a_clone() -> None:
         [sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True, check=True
     )
     assert result.stdout.startswith(
-        "usage: run_on_ibm.py [-h] [--shots N] -o FILE [--collect JOB_FILE] [--yes]\n"
+        "usage: run_on_ibm.py [-h] [--shots N] -o FILE [--collect JOB_FILE]\n"
+        "                     [--job-id JOB_ID] [--yes]\n"
         "                     DEVICE\n"
     )
 
@@ -626,11 +629,30 @@ def test_a_failed_pull_at_run_time_binds_the_counts_to_the_plan() -> None:
     )
 
 
-def _collecting_job_1(folder: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[], Any]:
-    profile = _fez_profile()
+def _save_job_file(submitted: Any, path: Path, *, with_id: bool = True) -> None:
+    data = {
+        "job_id": submitted.job_id,
+        "profile": submitted.profile.to_dict(),
+        "planned": [circuit.model_dump(mode="json") for circuit in submitted.planned],
+        "options": submitted.options,
+    }
+    if not with_id:
+        del data["job_id"]
+    path.write_text(json.dumps(data) + "\n")
+
+
+def _collecting_job_1(
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timing: dict[str, Any] | None = None,
+    profile: Profile | None = None,
+) -> Callable[[], Any]:
+    profile = profile or _fez_profile()
     submitted, ran = _submitted_and_ran(profile)
-    submitted.save(folder / "fez.job.json")
-    monkeypatch.setattr(script, "collect", lambda *args: ran)
+    _save_job_file(submitted, folder / "fez.job.json")
+    monkeypatch.setattr(
+        script, "collect", lambda *args: dataclasses.replace(ran, timing=timing or {})
+    )
 
     def plan_again(fractional: bool) -> Any:
         raise AssertionError("the script planned a new job instead of collecting job-1")
@@ -646,20 +668,51 @@ def _collecting_job_1(folder: Path, monkeypatch: pytest.MonkeyPatch) -> Callable
     )
 
 
+@dataclass
+class Disk:
+    folder: Path
+    bytes_left: int | None = None
+
+
+def _disk(monkeypatch: pytest.MonkeyPatch, folder: Path) -> Disk:
+    disk = Disk(folder)
+    real_open, real_write = os.open, os.write
+    on_disk: set[int] = set()
+
+    def open_(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        here = Path(path).parent == disk.folder
+        if here and disk.bytes_left is not None and flags & os.O_CREAT:
+            raise OSError(errno.ENOSPC, "No space left on device", str(path))
+        fd = real_open(path, flags, *args, **kwargs)
+        if here:
+            on_disk.add(fd)
+        return fd
+
+    def write(fd: int, data: Any) -> int:
+        if disk.bytes_left is None or fd not in on_disk:
+            return real_write(fd, data)
+        if disk.bytes_left == 0:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        written = real_write(fd, data[: disk.bytes_left])
+        disk.bytes_left -= written
+        return written
+
+    monkeypatch.setattr(os, "open", open_)
+    monkeypatch.setattr(os, "write", write)
+    return disk
+
+
 def test_a_disk_that_refuses_the_counts_leaves_the_job_to_collect_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run = _collecting_job_1(tmp_path, monkeypatch)
-
-    def full_disk(self: Any, path: Path) -> Path:
-        raise OSError(errno.ENOSPC, "No space left on device")
-
-    monkeypatch.setattr(script.MeasuredCounts, "save", full_disk)
+    _disk(monkeypatch, tmp_path).bytes_left = 0
     pending = tmp_path / "fez.job.json"
     with pytest.raises(NoiseVaultError) as info:
         run()
     assert info.value.message == (
-        "could not collect the counts of job job-1 ([Errno 28] No space left on device)"
+        "could not collect the counts of job job-1 ([Errno 28] No space left on device:"
+        f" '{tmp_path / 'fez.counts.json'}')"
     )
     assert info.value.hint == (
         f"run the same command again to collect them, or delete {pending} to submit a new job"
@@ -676,7 +729,7 @@ def test_a_file_that_appears_beside_the_counts_while_the_job_waits_is_kept(
     folder = tmp_path / "counts"
     folder.mkdir()
     pending, other = folder / "fez.job.json", folder / name
-    submitted.save(pending)
+    _save_job_file(submitted, pending)
 
     def another_experiment(*args: Any) -> Any:
         other.write_text("another experiment\n")
@@ -696,6 +749,60 @@ def test_a_file_that_appears_beside_the_counts_while_the_job_waits_is_kept(
     assert info.value.message == f"could not save the counts of job job-1, because {other} exists"
     assert sorted(folder.iterdir()) == sorted([other, pending])
     assert other.read_text() == "another experiment\n"
+
+
+def _when_the_script_creates(
+    monkeypatch: pytest.MonkeyPatch,
+    path: Path,
+    *,
+    before: Callable[[], None] | None = None,
+    after: Callable[[], None] | None = None,
+) -> None:
+    real_open = os.open
+
+    def open_(file: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if Path(file) != path or not flags & os.O_EXCL:
+            return real_open(file, flags, *args, **kwargs)
+        if before is not None:
+            before()
+        fd = real_open(file, flags, *args, **kwargs)
+        if after is not None:
+            after()
+        return fd
+
+    monkeypatch.setattr(os, "open", open_)
+
+
+def _put(path: Path, text: str) -> None:
+    other = path.with_name(".another-program.tmp")
+    other.write_text(text)
+    os.replace(other, path)
+
+
+@pytest.mark.parametrize(
+    ("created", "moment"), [("fez.counts.json", "after"), ("fez.timing.json", "before")]
+)
+def test_a_counts_file_that_another_program_puts_in_place_is_kept_with_the_job(
+    created: str, moment: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _collecting_job_1(tmp_path, monkeypatch, timing={"ghz_chain": {"start": 0}})
+    output, pending = tmp_path / "fez.counts.json", tmp_path / "fez.job.json"
+    record = pending.read_bytes()
+    others = sorted({output, tmp_path / created})
+
+    def another_program() -> None:
+        for path in others:
+            _put(path, "another experiment\n")
+
+    _when_the_script_creates(monkeypatch, tmp_path / created, **{moment: another_program})
+    with pytest.raises(NoiseVaultError) as info:
+        run()
+    assert info.value.message == (
+        f"could not save the counts of job job-1, because {tmp_path / created} exists"
+    )
+    assert sorted(tmp_path.iterdir()) == sorted([*others, pending])
+    assert [path.read_text() for path in others] == ["another experiment\n"] * len(others)
+    assert pending.read_bytes() == record
 
 
 def test_a_defect_after_the_job_ran_raises_instead_of_asking_to_collect_again(
@@ -727,6 +834,40 @@ def test_a_job_file_that_another_collect_removed_first_does_not_stop_this_one(
     assert measured is not None
     assert load_counts(tmp_path / "fez.counts.json").execution.job_ids == ("job-1",)
     assert not pending.exists()
+
+
+def test_a_job_file_that_a_new_run_saved_while_the_job_waited_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _collecting_job_1(tmp_path, monkeypatch)
+    pending = tmp_path / "fez.job.json"
+    job_2 = dataclasses.replace(_submitted_and_ran(_fez_profile())[0], job_id="job-2")
+    collect = script.collect
+
+    def the_other_collect_ends_and_a_new_run_submits(*args: Any) -> Any:
+        pending.unlink()
+        _save_job_file(job_2, pending)
+        return collect(*args)
+
+    monkeypatch.setattr(script, "collect", the_other_collect_ends_and_a_new_run_submits)
+    assert run() is not None
+    assert load_counts(tmp_path / "fez.counts.json").execution.job_ids == ("job-1",)
+    assert json.loads(pending.read_text())["job_id"] == "job-2"
+
+
+def test_the_saved_files_hold_the_bytes_that_save_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    timing = {"ghz_chain": {"start": 0}}
+    profile = _edited(_fez_profile(), _lower_sx_error)
+    measured = _collecting_job_1(folder, monkeypatch, timing, profile)()
+    assert {path.name: path.read_bytes() for path in folder.iterdir()} == {
+        "fez.counts.json": measured.save(tmp_path / "fez.counts.json").read_bytes(),
+        "fez.timing.json": (json.dumps(timing, indent=1) + "\n").encode(),
+        "fez.profile.json": profile.save(tmp_path / "fez.profile.json").read_bytes(),
+    }
 
 
 @dataclass
@@ -858,6 +999,112 @@ def test_a_file_that_appears_at_the_output_while_the_job_waits_is_kept_with_the_
     assert not pending.exists()
 
 
+def test_collect_submits_nothing_when_another_collect_removes_the_job_file_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    submissions = _recording_sampler(monkeypatch)
+    _account(monkeypatch, _fractional_fez(), submissions)
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    pending = folder / "fez.job.json"
+    _save_job_file(_submitted_and_ran(_fez_profile())[0], pending)
+    service = script._service
+
+    def the_other_collect_ends_while_the_account_opens() -> Any:
+        pending.unlink()
+        return service()
+
+    monkeypatch.setattr(script, "_service", the_other_collect_ends_while_the_account_opens)
+    output = folder / "fez-2.counts.json"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        code = script.main(["ibm_fez", "--yes", "-o", str(output), "--collect", str(pending)])
+    assert (code, submissions) == (1, [])
+    assert capsys.readouterr().err == (
+        f"error: no job file {pending}\n"
+        "hint: give --collect the .job.json file that the script saved beside the counts file\n"
+    )
+    assert list(folder.iterdir()) == []
+
+
+def test_a_disk_that_fills_when_the_job_is_submitted_keeps_the_job_for_the_next_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    submissions = _recording_sampler(monkeypatch)
+    _account(monkeypatch, _fractional_fez(), submissions)
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    output, pending = folder / "fez.counts.json", folder / "fez.job.json"
+    disk = _disk(monkeypatch, folder)
+    submit = script.submit
+
+    def submit_and_fill_the_disk(*args: Any) -> Any:
+        job = submit(*args)
+        disk.bytes_left = 5
+        return job
+
+    monkeypatch.setattr(script, "submit", submit_and_fill_the_disk)
+    command = ["ibm_fez", "--yes", "-o", str(output)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert script.main(command) == 1
+        (submission,) = submissions
+        job_id = submission.job.job_id()
+        assert capsys.readouterr().err == (
+            f"error: could not save job {job_id} to {pending} ([Errno 28] No space left on"
+            " device)\n"
+            f"hint: run the same command with --job-id {job_id} to collect the job\n"
+        )
+        assert sorted(folder.iterdir()) == [pending]
+        disk.bytes_left = None
+        assert script.main([*command, "--job-id", job_id]) == 0
+    assert len(submissions) == 1
+    assert load_counts(output).execution.job_ids == (job_id,)
+    assert not pending.exists()
+
+
+@pytest.mark.parametrize(
+    ("with_id", "args", "message", "hint"),
+    [
+        (
+            False,
+            [],
+            "{pending} has no job id",
+            "give --job-id the job id that the script printed or that your IBM Quantum account"
+            " shows. If IBM has no new job, delete {pending} to submit a new job",
+        ),
+        (
+            True,
+            ["--job-id", "job-2"],
+            "{pending} records job job-1, not job job-2",
+            "run the same command without --job-id to collect job job-1",
+        ),
+    ],
+    ids=["no job id", "another job id"],
+)
+def test_a_job_file_without_the_given_job_id_stops_before_the_job_opens(
+    with_id: bool,
+    args: list[str],
+    message: str,
+    hint: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    submissions = _recording_sampler(monkeypatch)
+    _account(monkeypatch, _fractional_fez(), submissions)
+    output, pending = tmp_path / "fez.counts.json", tmp_path / "fez.job.json"
+    _save_job_file(_submitted_and_ran(_fez_profile())[0], pending, with_id=with_id)
+    record = pending.read_bytes()
+    assert script.main(["ibm_fez", "--yes", "-o", str(output), *args]) == 1
+    assert capsys.readouterr().err == (
+        f"error: {message.format(pending=pending)}\nhint: {hint.format(pending=pending)}\n"
+    )
+    assert submissions == []
+    assert sorted(tmp_path.iterdir()) == [pending]
+    assert pending.read_bytes() == record
+
+
 def test_a_backend_without_the_planned_fractional_gate_refuses_the_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -974,6 +1221,12 @@ NEW_NAME = "give -o a new file name. The script never replaces a file"
         (
             "fez.counts.json",
             ["-o", "fez-2.counts.json", "--collect", "fez-2.job.json"],
+            "no job file fez-2.job.json",
+            "give --collect the .job.json file that the script saved beside the counts file",
+        ),
+        (
+            "fez.counts.json",
+            ["-o", "fez-2.counts.json", "--job-id", "job-1"],
             "no job file fez-2.job.json",
             "give --collect the .job.json file that the script saved beside the counts file",
         ),

@@ -25,6 +25,8 @@ The script needs an IBM Quantum account. Save the account with
 from __future__ import annotations
 
 import argparse
+import contextlib
+import errno
 import json
 import os
 import shlex
@@ -52,7 +54,13 @@ from noisevault.counts import (  # noqa: E402
     plan,
 )
 from noisevault.errors import CountsError, NoiseVaultError, install_hint, qubit_loci  # noqa: E402
-from noisevault.profile import Profile, exact_ref, ref_on_day, write_atomically  # noqa: E402
+from noisevault.profile import (  # noqa: E402
+    Profile,
+    _readable_json,
+    exact_ref,
+    file_bytes,
+    ref_on_day,
+)
 from noisevault.sources import ibm_account  # noqa: E402
 
 DEFAULT_SHOTS = 4000
@@ -64,6 +72,7 @@ ACCOUNT_SETUP = (
 )
 LABEL = 16
 SUB_JOB_OVERHEAD_S = 2.0
+BINARY = getattr(os, "O_BINARY", 0)
 
 Calibration = Callable[[datetime | None], Profile]
 
@@ -91,25 +100,6 @@ class Submitted:
     profile: Profile
     planned: tuple[PlannedCircuit, ...]
     options: dict[str, Any]
-
-    def save(self, path: Path) -> None:
-        data = {
-            "job_id": self.job_id,
-            "profile": self.profile.to_dict(),
-            "planned": [circuit.model_dump(mode="json") for circuit in self.planned],
-            "options": self.options,
-        }
-        write_atomically(path, (json.dumps(data) + "\n").encode("utf-8"))
-
-    @classmethod
-    def load(cls, path: Path) -> Submitted:
-        data = json.loads(path.read_bytes())
-        return cls(
-            job_id=data["job_id"],
-            profile=Profile.model_validate(data["profile"]),
-            planned=tuple(PlannedCircuit.model_validate(c) for c in data["planned"]),
-            options=data["options"],
-        )
 
 
 @dataclass(frozen=True)
@@ -402,9 +392,11 @@ def run(
     open_backend: Callable[[bool], Any],
     open_job: Callable[[str], Any],
     confirm: Callable[[str], bool] | None,
+    collect_only: bool = False,
+    job_id: str | None = None,
 ) -> MeasuredCounts | None:
-    if pending.exists():
-        submitted, job = _resume(pending, open_job)
+    if collect_only or pending.exists():
+        record, submitted, job = _resume(pending, job_id, open_job)
         print(f"collecting job {submitted.job_id}, submitted earlier for {output}")
     else:
         backend, batch = prepare(calibration, open_backend, shots)
@@ -414,20 +406,42 @@ def run(
         if confirm is not None and not confirm(f"Submit the job to {device}? [y/N] "):
             print("nothing submitted")
             return None
+        plan = _line(
+            {
+                "profile": batch.profile.to_dict(),
+                "planned": [circuit.model_dump(mode="json") for circuit in batch.planned],
+                "options": batch.options,
+            }
+        )
         try:
-            _claim(pending)
+            record = _create({pending: plan})[pending]
         except FileExistsError:
             raise NoiseVaultError(
                 f"{pending} exists, so the script did not submit a job",
                 hint=_new_name_hint(pending),
             ) from None
+        except OSError as exc:
+            raise NoiseVaultError(
+                f"could not save {pending} ({_reason(exc)})",
+                hint="run the same command again. The script did not submit a job",
+            ) from None
         try:
             job = submit(backend, batch)
-            submitted = Submitted(job.job_id(), batch.profile, batch.planned, batch.options)
-            submitted.save(pending)
         except BaseException:
-            pending.unlink()
+            _drop(pending, record)
             raise
+        submitted = Submitted(job.job_id(), batch.profile, batch.planned, batch.options)
+        try:
+            _write(record, _line({"job_id": submitted.job_id}))
+        except BaseException as exc:
+            with contextlib.suppress(OSError):
+                os.ftruncate(record, len(plan))
+            with contextlib.suppress(OSError):
+                os.close(record)
+            raise NoiseVaultError(
+                f"could not save job {submitted.job_id} to {pending} ({_reason(exc)})",
+                hint=f"run the same command with --job-id {submitted.job_id} to collect the job",
+            ) from None
         print(f"submitted job {submitted.job_id} to {device}")
     print("waiting for it to run")
     print("Ctrl-C stops waiting. Run the same command again to collect the job")
@@ -442,17 +456,16 @@ def run(
         bound = binding.profile
         measured = counts_file(bound, submitted, ran)
         _, timing, profile_file = _files(output)
-        files: dict[Path, Callable[[Path], object]] = {output: measured.save}
+        files = {output: (_readable_json(measured.to_dict()) + "\n").encode("utf-8")}
         if ran.timing:
-            files[timing] = lambda path: path.write_text(
-                json.dumps(ran.timing, indent=1) + "\n", encoding="utf-8"
-            )
+            files[timing] = (json.dumps(ran.timing, indent=1) + "\n").encode("utf-8")
         ref = catalog_ref(bound)
         if ref is None:
             ref = str(profile_file)
-            files[profile_file] = bound.save
+            files[profile_file] = file_bytes(bound, profile_file)
         try:
-            _create(files)
+            for fd in _create(files).values():
+                os.close(fd)
         except FileExistsError as exc:
             raise NoiseVaultError(
                 f"could not save the counts of job {submitted.job_id}, because {exc.filename}"
@@ -461,11 +474,15 @@ def run(
             ) from None
         except OSError as exc:
             raise NoiseVaultError(f"{uncollected} ({_reason(exc)})", hint=again) from None
-    except KeyboardInterrupt:
-        raise NoiseVaultError(
-            f"stopped before the script saved the counts of job {submitted.job_id}", hint=again
-        ) from None
-    pending.unlink(missing_ok=True)
+    except BaseException as exc:
+        with contextlib.suppress(OSError):
+            os.close(record)
+        if isinstance(exc, KeyboardInterrupt):
+            raise NoiseVaultError(
+                f"stopped before the script saved the counts of job {submitted.job_id}", hint=again
+            ) from None
+        raise
+    _drop(pending, record)
     if binding.warning:
         print(f"warning: {binding.warning}", file=sys.stderr)
         if binding.hint:
@@ -491,20 +508,53 @@ def run(
     return measured
 
 
-def _resume(pending: Path, open_job: Callable[[str], Any]) -> tuple[Submitted, Any]:
+def _resume(
+    pending: Path, job_id: str | None, open_job: Callable[[str], Any]
+) -> tuple[int, Submitted, Any]:
     try:
-        submitted = Submitted.load(pending)
+        record = os.open(pending, os.O_RDONLY | BINARY)
+    except FileNotFoundError:
+        raise _no_job_file(pending) from None
+    try:
+        submitted = _submitted(pending, record, job_id)
+        try:
+            return record, submitted, open_job(submitted.job_id)
+        except Exception as exc:
+            raise NoiseVaultError(
+                f"could not open job {submitted.job_id} ({_reason(exc)})",
+                hint=f"delete {pending} to submit a new job",
+            ) from None
+    except BaseException:
+        os.close(record)
+        raise
+
+
+def _submitted(pending: Path, record: int, job_id: str | None) -> Submitted:
+    try:
+        data: dict[str, Any] = {}
+        with open(record, "rb", closefd=False) as handle:
+            for line in handle:
+                data.update(json.loads(line))
+        profile = Profile.model_validate(data["profile"])
+        planned = tuple(PlannedCircuit.model_validate(c) for c in data["planned"])
+        options = data["options"]
     except Exception as exc:
         raise NoiseVaultError(
             f"{pending} is damaged ({_reason(exc)})", hint="delete it to submit a new job"
         ) from None
-    try:
-        return submitted, open_job(submitted.job_id)
-    except Exception as exc:
+    recorded = data.get("job_id")
+    if recorded is None and job_id is None:
         raise NoiseVaultError(
-            f"could not open job {submitted.job_id} ({_reason(exc)})",
-            hint=f"delete {pending} to submit a new job",
-        ) from None
+            f"{pending} has no job id",
+            hint="give --job-id the job id that the script printed or that your IBM Quantum account"
+            f" shows. If IBM has no new job, delete {pending} to submit a new job",
+        )
+    if recorded is not None and job_id is not None and recorded != job_id:
+        raise NoiseVaultError(
+            f"{pending} records job {recorded}, not job {job_id}",
+            hint=f"run the same command without --job-id to collect job {recorded}",
+        )
+    return Submitted(recorded or job_id, profile, planned, options)
 
 
 def summary(batch: Batch, output: Path) -> str:
@@ -547,8 +597,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         import qiskit_ibm_runtime  # noqa: F401
     except ImportError:
         return _fail("run_on_ibm.py needs qiskit-ibm-runtime", install_hint("ibm"))
+    collect_only = args.collect is not None or args.job_id is not None
+    pending = args.collect or _beside(args.output, ".job.json")
     try:
-        pending = _pending(args.output, args.collect)
+        if collect_only and not pending.exists():
+            raise _no_job_file(pending)
         _writable(args.output, pending)
         service = _service()
         measured = run(
@@ -561,6 +614,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             open_job=service.job,
             confirm=None if args.yes else _ask,
+            collect_only=collect_only,
+            job_id=args.job_id,
         )
     except NoiseVaultError as exc:
         return _fail(exc.message, exc.hint)
@@ -597,6 +652,11 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="collect the job that JOB_FILE records instead of submitting a new job",
     )
+    parser.add_argument(
+        "--job-id",
+        metavar="JOB_ID",
+        help="collect job JOB_ID when the job file has no job id",
+    )
     parser.add_argument("--yes", action="store_true", help="submit without asking")
     return parser
 
@@ -611,15 +671,11 @@ def _positive(text: str) -> int:
     return value
 
 
-def _pending(output: Path, collect: Path | None) -> Path:
-    if collect is None:
-        return _beside(output, ".job.json")
-    if not collect.exists():
-        raise NoiseVaultError(
-            f"no job file {collect}",
-            hint="give --collect the .job.json file that the script saved beside the counts file",
-        )
-    return collect
+def _no_job_file(pending: Path) -> NoiseVaultError:
+    return NoiseVaultError(
+        f"no job file {pending}",
+        hint="give --collect the .job.json file that the script saved beside the counts file",
+    )
 
 
 def _writable(output: Path, pending: Path) -> None:
@@ -695,26 +751,52 @@ def _files(output: Path) -> tuple[Path, Path, Path]:
     return output, _beside(output, ".timing.json"), _beside(output, ".profile.json")
 
 
-def _claim(path: Path) -> None:
-    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666))
+def _create(files: dict[Path, bytes]) -> dict[Path, int]:
+    """Create every file or none, and return the open descriptor of each file.
 
-
-def _create(files: dict[Path, Callable[[Path], object]]) -> None:
-    """Save every file or none. For a path that exists, keep that file and raise FileExistsError.
-
-    ``os.open`` with ``O_EXCL`` creates each file empty, and the save replaces only that empty file.
-    ``os.link`` needs no empty file, but exFAT does not support hard links.
+    Raise FileExistsError for a path that exists or that another program replaced, and keep that
+    program's file. ``os.link`` would make each full file appear at once, but exFAT does not
+    support hard links.
     """
-    created: list[Path] = []
+    created: dict[Path, int] = {}
     try:
-        for path, save in files.items():
-            _claim(path)
-            created.append(path)
-            save(path)
+        for path in files:
+            created[path] = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | BINARY, 0o666)
+        for path, data in files.items():
+            _write(created[path], data)
+        for path, fd in created.items():
+            if not _ours(path, fd):
+                raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(path))
     except BaseException:
-        for path in created:
-            path.unlink(missing_ok=True)
+        for path, fd in created.items():
+            with contextlib.suppress(OSError):
+                _drop(path, fd)
         raise
+    return created
+
+
+def _write(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
+def _ours(path: Path, fd: int) -> bool:
+    try:
+        return os.path.samestat(os.stat(path), os.fstat(fd))
+    except OSError:
+        return False
+
+
+def _drop(path: Path, fd: int) -> None:
+    ours = _ours(path, fd)
+    os.close(fd)
+    if ours:
+        path.unlink(missing_ok=True)
+
+
+def _line(data: dict[str, Any]) -> bytes:
+    return (json.dumps(data) + "\n").encode("utf-8")
 
 
 def _beside(output: Path, suffix: str) -> Path:

@@ -209,18 +209,38 @@ to the `.timing.json`, `.profile.json` and `.job.json` files beside it.
 
 - Before the script opens your account, it checks the counts, timing and profile files. If one of
   them exists, the script stops. Give `-o` a new file name.
-- Before the script submits the job, it creates the job file. If the job file exists at that
-  time, the script stops and submits nothing. A second run of the same command can create the job
-  file while the first run waits for your answer.
+- Before the script submits the job, it creates the job file and writes the planned circuits
+  into it. If the job file exists at that time, the script stops and submits nothing. A second
+  run of the same command can create the job file while the first run waits for your answer.
+- After IBM accepts the job, the script adds the job id to the job file.
 - After the job runs, the script writes the counts, timing and profile files together. If
-  another program created one of them while the job waited, the script writes none of them. It
-  keeps the other program's file and the job file.
+  another program created or replaced one of them before the script finished, the script keeps
+  none of its own files. It keeps the other program's file and the job file.
+- The script deletes a job file only if that file is still the job file that it read or created.
+  If another run saved a new job file at the same path, the script keeps the new job file.
 
 To collect a job to a new counts file, give `--collect` the job file. Then give `-o` a new file
 name. For example, run the same command with
 `--collect kingston-0416.job.json -o kingston-0416b.counts.json`. The script collects that job and
 does not submit another. You can also move the other program's file to a different path. Then run
 the same command again.
+
+With `--collect` or `--job-id`, the script never submits a job. If the job file is gone when the
+script reads it, the script stops with an error.
+
+### If the script cannot save the job id
+
+IBM gives the job id after the script submits the job. If the script cannot add the job id to the
+job file, the script stops. The error names the job id, and the hint gives the command that
+collects the job:
+
+```text
+error: could not save job d1h9q8k5x4w0008r7t2g to kingston-0416.job.json ([Errno 28] No space left on device)
+hint: run the same command with --job-id d1h9q8k5x4w0008r7t2g to collect the job
+```
+
+The job file keeps the planned circuits. Make space on the disk, then run the command in the
+hint. The script collects that job and does not submit another.
 
 ### Errors from IBM
 
