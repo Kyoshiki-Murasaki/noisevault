@@ -35,6 +35,7 @@ _INCLUDES = {
         "readout and preparation noise, where applied, add their own error on top",
     ),
 }
+_MODELS = {"reference": ("the reference simulator", "leave the effect out")}
 _EVENTS = {  # event -> how summary() states one key's count
     "typical_noise_used": "{key} took the typical native gate's noise {times}",
     "reversed_record_used": (
@@ -146,14 +147,18 @@ class Report:
             self.approximate(what, "read under an importer assumption", spec.assumption)
 
     def record_effects(self, effects: Iterable[Effect]) -> None:
-        """Omit or refuse each effect, because no export models effects in this release."""
+        """Omit or refuse each effect, because no export and no reference simulator models
+        effects in this release."""
+        model, fix = _MODELS.get(
+            self.framework, (f"{self.framework} export", "export without the effect")
+        )
         for effect in effects:
             target = effect.gate or effect.on
             if effect.allow != "omit":
                 raise UnsupportedEffect(
                     f"effect {effect.type} on {target} asks for allow={effect.allow!r}, but"
-                    f" {self.framework} export does not model effects yet",
-                    hint="set allow to 'omit' to export without the effect",
+                    f" {model} does not model effects yet",
+                    hint=f"set allow to 'omit' to {fix}",
                 )
             self.omit(f"effect {effect.type} on {target}")
 

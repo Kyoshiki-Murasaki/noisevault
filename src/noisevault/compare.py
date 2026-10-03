@@ -931,9 +931,14 @@ def _enumerated(probs: ByCell, slices: Sequence[slice], shots: np.ndarray) -> _O
         if block is None:
             return None
         blocks.append(block)
-    if math.prod(len(pmf) for _, pmf in blocks) > EXACT_OUTCOMES:
+    sizes = [len(pmf) for _, pmf in blocks]
+    stride = math.prod(sizes)
+    if stride > EXACT_OUTCOMES:
         return None
-    pick = [a.ravel() for a in np.meshgrid(*(np.arange(len(p)) for _, p in blocks), indexing="ij")]
+    flat, pick = np.arange(stride), []
+    for size in sizes:
+        stride //= size
+        pick.append(flat // stride % size)
     counts = np.concatenate([columns[:, k] for (columns, _), k in zip(blocks, pick, strict=True)])
     weights = np.prod([pmf[k] for (_, pmf), k in zip(blocks, pick, strict=True)], axis=0)
     return _Outcomes(counts, weights, max(0.0, 1 - float(weights.sum())))
@@ -1184,6 +1189,13 @@ def _notes(base: Profile, circuits: Sequence[PlannedCircuit]) -> tuple[str, ...]
     if idle:
         on = [(q,) for q in idle]
         notes.append(LociText("delays on ", on, " add no idle error (no T1 or T2 stated)"))
+    report = Report.start(base, "reference", None)
+    report.record_effects(base.effects)
+    if report.omitted:
+        notes.append(
+            f"the reference simulator leaves out {joined(report.omitted)}, because the profile"
+            " sets allow to 'omit'"
+        )
     return tuple(notes)
 
 

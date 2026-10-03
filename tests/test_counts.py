@@ -15,7 +15,7 @@ from conftest import deeper_than_the_parser_takes, require, toy
 from pydantic import ValidationError
 
 import noisevault as nv
-from noisevault import CountsError, LayoutError, NoiseVaultError
+from noisevault import CountsError, LayoutError, NoiseVaultError, UnsupportedEffect
 from noisevault.counts import (
     SAMPLER_V2_OPTIONS,
     MeasuredCircuit,
@@ -608,6 +608,20 @@ def test_plan_refuses_a_profile_with_no_calibrated_native_on_the_chain() -> None
         plan(profile, layout=[1])
     assert info.value.message.endswith("on qubit 1, so there is nothing to run")
     assert info.value.hint == "pass layout= with other qubits"
+
+
+@pytest.mark.parametrize("allow", ["exact", "approximate"])
+def test_simulate_refuses_an_effect_that_the_profile_does_not_let_it_leave_out(allow: str) -> None:
+    effect = {"type": "atom_loss", "on": "readout", "prob": 1e-3, "allow": allow}
+    profile = Profile.model_validate(toy(effects=[effect]))
+    circuit = PlannedCircuit(name="sx", qubits=(0,), ops=(Op("sx", (0,)),))
+    with pytest.raises(UnsupportedEffect) as caught:
+        simulate(profile, [circuit], shots=100, seed=0, run_at=RUN_AT)
+    assert caught.value.message == (
+        f"effect atom_loss on readout asks for allow='{allow}', but the reference simulator"
+        " does not model effects yet"
+    )
+    assert caught.value.hint == "set allow to 'omit' to leave the effect out"
 
 
 def test_plan_measures_no_qubit_whose_measurement_the_profile_disables() -> None:

@@ -19,7 +19,7 @@ import noisevault as nv
 from noisevault import compare as fit
 from noisevault.compare import CircuitScore, Comparison, NoEstimate, compare
 from noisevault.counts import MeasuredCounts, PlannedCircuit, load_counts, plan, simulate
-from noisevault.errors import CountsError, NoiseVaultError
+from noisevault.errors import CountsError, NoiseVaultError, UnsupportedEffect
 from noisevault.metrics import scale_readout
 from noisevault.profile import ErrorFactor, Profile
 from noisevault.reference import Op
@@ -1031,6 +1031,82 @@ def test_a_fit_that_misses_the_frequencies_is_tested_with_no_degrees_of_freedom(
     assert isinstance(inside.gates, ErrorFactor) and inside.gates.bound is None
     assert (inside.dof, inside.p_value) == (0, pytest.approx(1 / (1 + fit.RESAMPLES)))
     assert fit_lines(inside) == ["beyond shot noise (p = 0.0025)", "on r4", UNREACHED]
+
+
+def one_sparse_qubit_beside(trivial: int) -> tuple[Profile, MeasuredCounts]:
+    profile = Profile.model_validate(
+        {
+            "noisevault": "1.0",
+            "device": {"name": "sparse-pair", "technology": "superconducting", "num_qubits": 2},
+            "connectivity": "all_to_all",
+            "gates": {"x": {"avg_infidelity": 0.0}},
+            "qubits": [{"index": 1, "readout": {"error": 0.00075}}],
+        }
+    )
+    sparse = [("sparse", (), {"0": 3992, "1": 8})]
+    data = written(profile, sparse + [(f"exact{i}", (), {"0": 4000}) for i in range(trivial)])
+    data = data.to_dict()
+    data["circuits"][0]["qubits"] = [1]
+    return profile, MeasuredCounts.model_validate(data)
+
+
+def test_circuits_with_one_possible_count_leave_the_exact_interval_unchanged() -> None:
+    alone = compare(*one_sparse_qubit_beside(0))
+    beside = compare(*one_sparse_qubit_beside(64))
+    assert isinstance(alone.readout, ErrorFactor) and alone.readout.bound is None
+    assert beside.readout == alone.readout
+
+
+def test_exact_enumeration_lists_each_combination_of_counts_once_with_its_probability() -> None:
+    probs = np.array([0.9, 0.1, 1.0, 0.0, 0.7, 0.3])
+    slices = (slice(0, 2), slice(2, 4), slice(4, 6))
+    outcomes = fit._enumerated(probs, slices, np.array([3, 5, 3]))
+    assert outcomes is not None
+    listed = dict(zip(map(tuple, outcomes.counts.T.astype(int)), outcomes.weights, strict=True))
+
+    def binomial(k: int, q: float) -> float:
+        return math.comb(3, k) * q**k * (1 - q) ** (3 - k)
+
+    expected = {
+        (3 - a, a, 5, 0, 3 - b, b): binomial(a, 0.1) * binomial(b, 0.3)
+        for a in range(4)
+        for b in range(4)
+    }
+    assert len(listed) == outcomes.counts.shape[1] == len(expected)
+    assert listed == pytest.approx(expected, rel=1e-12)
+
+
+def with_effect(allow: str) -> Profile:
+    effect = {"type": "coherent_overrotation", "gate": "x", "angle_rad": 0.4, "allow": allow}
+    return one_qubit(
+        "effect", {"x": {"avg_infidelity": 0.01}}, readout={"error": 0.01}, effects=[effect]
+    )
+
+
+@pytest.mark.parametrize("allow", ["exact", "approximate"])
+def test_an_effect_the_reference_cannot_leave_out_refuses_the_comparison(allow: str) -> None:
+    profile = with_effect(allow)
+    counts = written(profile, [("x", (Op("x", (0,)),), {"0": 20, "1": 980})])
+    with pytest.raises(UnsupportedEffect) as caught:
+        compare(profile, counts)
+    assert str(caught.value) == (
+        f"effect coherent_overrotation on x asks for allow='{allow}', but the reference"
+        " simulator does not model effects yet; set allow to 'omit' to leave the effect out"
+    )
+
+
+def test_an_omitted_effect_is_named_in_the_notes_and_the_summary() -> None:
+    profile = with_effect("omit")
+    result = compare(profile, written(profile, [("x", (Op("x", (0,)),), {"0": 20, "1": 980})]))
+    note = (
+        "the reference simulator leaves out effect coherent_overrotation on x, because the"
+        " profile sets allow to 'omit'"
+    )
+    assert result.notes == (note,)
+    assert result.to_dict()["notes"] == [note]
+    lines = layout(result)
+    start = next(i for i, line in enumerate(lines) if line.startswith("note "))
+    assert " ".join(line[16:] for line in lines[start : start + 2]) == note
 
 
 if __name__ == "__main__":

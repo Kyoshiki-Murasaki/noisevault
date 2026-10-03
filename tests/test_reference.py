@@ -5,7 +5,7 @@ import pytest
 from conftest import require, toy
 
 import noisevault as nv
-from noisevault.errors import MissingCalibrationError
+from noisevault.errors import MissingCalibrationError, UnsupportedEffect
 from noisevault.reference import Op, _apply, probabilities
 from noisevault.report import Report
 
@@ -362,3 +362,23 @@ def test_a_delay_matches_the_qiskit_export_through_aer(coherence) -> None:
     circuit.save_probabilities([0])
     aer = np.asarray(sim.run(circuit).result().data()["probabilities"])
     assert probabilities(profile, _REVIEW_CIRCUIT, 1) == pytest.approx(aer, abs=1e-12)
+
+
+def _with_effect(allow: str) -> nv.Profile:
+    effect = {"type": "atom_loss", "on": "readout", "prob": 1e-3, "allow": allow}
+    return nv.Profile.model_validate(toy(effects=[effect]))
+
+
+def test_the_reference_leaves_out_an_omitted_effect_and_reports_it() -> None:
+    profile = _with_effect("omit")
+    report = Report.start(profile, "reference", None)
+    got = probabilities(profile, [Op("sx", (0,))], 1, report=report)
+    plain = probabilities(nv.Profile.model_validate(toy()), [Op("sx", (0,))], 1)
+    assert np.array_equal(got, plain)
+    assert report.omitted == ["effect atom_loss on readout"]
+
+
+@pytest.mark.parametrize("allow", ["exact", "approximate"])
+def test_the_reference_refuses_an_effect_that_it_cannot_leave_out(allow: str) -> None:
+    with pytest.raises(UnsupportedEffect, match="the reference simulator does not model effects"):
+        probabilities(_with_effect(allow), [Op("sx", (0,))], 1)

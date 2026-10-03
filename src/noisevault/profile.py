@@ -370,9 +370,11 @@ class QubitRecord(Idle, _QubitKey):
 
 
 class Effect(_Model):
-    """Physics that the format records but no export implements yet.
+    """Physics that the format records but no export and no reference simulator models yet.
 
-    The report always lists an effect as omitted.
+    With ``allow="omit"``, the exports and the reference simulator leave the effect out. Each
+    report lists the effect as omitted, and ``compare`` names it in a note. With any other
+    ``allow`` value, the exports, ``simulate`` and ``compare`` refuse the profile.
     """
 
     type: EffectType

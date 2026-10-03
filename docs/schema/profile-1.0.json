@@ -402,7 +402,7 @@
     },
     "Effect": {
       "additionalProperties": false,
-      "description": "Physics that the format records but no export implements yet.\n\nThe report always lists an effect as omitted.",
+      "description": "Physics that the format records but no export and no reference simulator models yet.\n\nWith ``allow=\"omit\"``, the exports and the reference simulator leave the effect out. Each\nreport lists the effect as omitted, and ``compare`` names it in a note. With any other\n``allow`` value, the exports, ``simulate`` and ``compare`` refuse the profile.",
       "properties": {
         "type": {
           "enum": [

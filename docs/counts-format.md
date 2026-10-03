@@ -179,7 +179,8 @@ print(load_counts("kingston.counts.json") == counts)
 `simulate` draws the counts from the reference simulator, with the profile's unmodeled-error
 factors applied. It binds the counts to the profile's calibration fingerprint and sets `source` to
 `simulated`. `run_at` defaults to the current UTC time. The same `seed` and `run_at` give the same
-file.
+file. The reference simulator does not model effects. It leaves out an effect with `allow` set to
+`omit`, and it refuses a profile with an effect that sets any other `allow` value.
 
 ## Counts from an IBM device
 

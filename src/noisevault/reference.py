@@ -47,6 +47,7 @@ def probabilities(
     physical = normalize_layout(range(num_qubits), layout, profile)
     circuit_of = {p: c for c, p in physical.items()}
     report = report or Report.start(profile, "reference", None, unknown_gates=unknown_gates)
+    report.record_effects(profile.effects)
     table = profile.table
 
     rho = np.zeros((2,) * (2 * num_qubits), dtype=complex)

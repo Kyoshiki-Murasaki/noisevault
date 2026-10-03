@@ -30,7 +30,10 @@ neighboring operations, the time since the last calibration) are not in the numb
   over-rotations add up coherently. In the noise model, they do not add up coherently. The
   profile records Google's fSim coherent errors, but no export applies them.
 - **Effects.** Profiles can record `leakage`, `atom_loss`, `erasure`, crosstalk and coherent
-  over-rotation. No export models them in this release. Every report lists them as omitted.
+  over-rotation. Neither the exports nor the reference simulator model them in this release. When
+  an effect sets `allow` to `omit`, the exports and the reference simulator leave it out. Every
+  report lists it as omitted, and `nv compare` names it in a note. For any other `allow` value,
+  each export, `simulate` and `compare` refuse the profile with an error.
 - **Initial-state preparation error.** Circuits start in an ideal |0...0>. Preparation error
   applies only after explicit resets, and only when the profile has it. The bundled IBM
   profiles have no preparation error.
