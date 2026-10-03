@@ -365,6 +365,20 @@ def test_a_qubit_that_is_not_operational_stays_out_of_the_device_medians(
     assert (profile.idle.t1_us, profile.idle.t2_us) == pytest.approx((median("T1"), median("T2")))
 
 
+@pytest.mark.parametrize("flag", [1, 1.0, 0, 0.0])
+def test_an_operational_flag_of_0_or_1_disables_or_keeps_the_qubit(
+    served: list[str], monkeypatch: pytest.MonkeyPatch, flag: float
+) -> None:
+    raw = _properties(
+        lambda p: p["qubits"][3].append({"name": "operational", "value": flag, "unit": ""})
+    )
+    serve = ibm_public.fetch
+    monkeypatch.setattr(ibm_public, "fetch", lambda url: raw if "properties" in url else serve(url))
+    profile = ibm_public.pull("ibm_manila")
+    assert profile.table.qubit(3).disabled is (flag == 0)
+    assert (profile.fingerprint == nv.load("ibm_manila").fingerprint) is (flag == 1)
+
+
 def test_invalid_coherence_in_the_response_takes_the_median(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -499,7 +513,41 @@ _OUT_OF_RANGE = {
     ),
     "a negative gate length": (
         _cx_3_4("gate_length", -5),
-        "cx on qubits 3-4: duration_ns must not be negative, got -5.0",
+        "duration_ns of cx on qubits 3-4: Input should be greater than or equal to 0, got -5.0",
+    ),
+    "a negative gate length of a dead gate": (
+        lambda p: (_cx_3_4("gate_error", 1)(p), _cx_3_4("gate_length", -5)(p)),
+        "duration_ns of cx on qubits 3-4: Input should be greater than or equal to 0, got -5.0",
+    ),
+    "a gate error above 1": (
+        _cx_3_4("gate_error", 1.5),
+        "avg_infidelity of cx on qubits 3-4: Input should be less than or equal to 1, got 1.5",
+    ),
+    "a negative gate error on a gate that is not operational": (
+        lambda p: (
+            _gate(p, "cx", [3, 4]).append({"name": "operational", "value": 0, "unit": ""}),
+            _cx_3_4("gate_error", -0.5)(p),
+        ),
+        "avg_infidelity of cx on qubits 3-4: Input should be greater than or equal to 0, got -0.5",
+    ),
+    "a readout error above 1 without its pair": (
+        lambda p: (
+            p["qubits"][0].remove(_param(p["qubits"][0], "prob_meas0_prep1")),
+            _param(p["qubits"][0], "prob_meas1_prep0").update(value=1.5),
+        ),
+        "readout.p1_given_0 of qubit 0: Input should be less than or equal to 1, got 1.5",
+    ),
+    "an operational flag that is not a number": (
+        lambda p: p["qubits"][0].append({"name": "operational", "value": math.nan, "unit": ""}),
+        "operational of qubit 0 is nan, not 0 or 1",
+    ),
+    "an operational flag of null on a gate": (
+        lambda p: _gate(p, "cx", [3, 4]).append({"name": "operational", "value": None}),
+        "operational of cx on qubits 3-4 is None, not 0 or 1",
+    ),
+    "an operational flag of 2": (
+        lambda p: p["qubits"][4].append({"name": "operational", "value": 2, "unit": ""}),
+        "operational of qubit 4 is 2, not 0 or 1",
     ),
     "an infinite gate error": (
         _cx_3_4("gate_error", math.inf),

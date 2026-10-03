@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -92,7 +94,11 @@ class ArchiveSpan(NamedTuple):
 def calibration_archive_devices(path: str | Path) -> dict[str, ArchiveSpan]:
     """Each device in a local copy of the dataset's parquet file, with its ``at`` range."""
     path = Path(path)
-    table = _read(path, ("backend", "property", "observed_time", "calibrated_time"))
+    return _devices(path, _load(path))
+
+
+def _devices(path: Path, data: bytes) -> dict[str, ArchiveSpan]:
+    table = _read(path, data, ("backend", "property", "observed_time", "calibrated_time"))
     unnamed = table["backend"].null_count
     if unnamed:
         raise SourceDataError(f"{path.name} has {plural(unnamed, 'row')} with no backend")
@@ -121,9 +127,10 @@ def from_calibration_archive(
     """
     path = Path(path)
     name = device.strip().lower()
-    rows = _read(path, tuple(_COLUMN_TYPES), name)
+    data = _load(path)
+    rows = _read(path, data, tuple(_COLUMN_TYPES), name)
     if rows.num_rows == 0:
-        held = sorted(calibration_archive_devices(path))
+        held = sorted(_devices(path, data))
         raise SourceDataError(
             f"{path.name} has no rows for {name}. The file has rows for {', '.join(held)}",
             hint=did_you_mean(name, held).strip() or None,
@@ -187,8 +194,7 @@ def from_calibration_archive(
                 f"Qubit {index} is disabled: its readout calibration gives {stuck[0]} = 1."
             )
     cal = replace(cal, processor=_PROCESSORS.get(name), qubits={**cal.qubits, **dead})
-    with path.open("rb") as f:
-        digest = hashlib.file_digest(f, "sha256").hexdigest()
+    digest = hashlib.sha256(data).hexdigest()
     revision = _revision(path.absolute())
     source = f"Hugging Face dataset {DATASET} (CC-BY-4.0)"
     source_url, extra = DATASET_URL, {}
@@ -232,13 +238,21 @@ def _pyarrow() -> ModuleType:
     return pyarrow
 
 
-def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa.Table:
-    """The ``columns`` of ``path``, with each timestamp in UTC. The dataset stores UTC, so a
-    timestamp with no time zone is UTC.
+def _load(path: Path) -> bytes:
+    """The bytes of ``path``. One read gives both the rows and ``source_hash``, so the hash
+    identifies the file that gave the rows, even when another writer replaces the file.
+    """
+    with _readable(path):
+        return path.read_bytes()
+
+
+def _read(path: Path, data: bytes, columns: tuple[str, ...], device: str | None = None) -> pa.Table:
+    """The ``columns`` of ``data``, the bytes of ``path``, with each timestamp in UTC. The dataset
+    stores UTC, so a timestamp with no time zone is UTC.
     """
     arrow = _pyarrow()
-    try:
-        schema = arrow.parquet.read_schema(path)
+    with _readable(path):
+        schema = arrow.parquet.read_schema(arrow.BufferReader(data))
         missing = [c for c in _COLUMN_TYPES if c not in schema.names]
         if missing:
             raise SourceDataError(
@@ -252,7 +266,9 @@ def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa
                     f"{path.name}: column {column} holds {kind}, expected a {expected}"
                 )
         filters = None if device is None else [("backend", "=", device)]
-        table = arrow.parquet.read_table(path, columns=list(columns), filters=filters)
+        table = arrow.parquet.read_table(
+            arrow.BufferReader(data), columns=list(columns), filters=filters
+        )
         in_utc = [
             arrow.field(f.name, arrow.timestamp(f.type.unit, "UTC"))
             if arrow.types.is_timestamp(f.type)
@@ -260,6 +276,13 @@ def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa
             for f in table.schema
         ]
         return table.cast(arrow.schema(in_utc))
+
+
+@contextmanager
+def _readable(path: Path) -> Iterator[None]:
+    arrow = _pyarrow()
+    try:
+        yield
     except FileNotFoundError:
         raise
     except (arrow.ArrowException, OSError) as exc:
@@ -271,9 +294,6 @@ def _read(path: Path, columns: tuple[str, ...], device: str | None = None) -> pa
 
 
 def _usable(rows: pa.Table) -> pa.ChunkedArray:
-    """For each row, its calibrated_time, or null when the row has no property, so a profile
-    cannot use it.
-    """
     pc = _pyarrow().compute
     return pc.if_else(pc.is_valid(rows["property"]), rows["calibrated_time"], None)
 
@@ -281,12 +301,6 @@ def _usable(rows: pa.Table) -> pa.ChunkedArray:
 def _first_usable(
     path: Path, device: str, recorded: datetime | None, calibrated: datetime | None
 ) -> datetime:
-    """The earliest ``at`` that gives ``device`` a profile, in UTC. It is the later of
-    ``recorded``, the earliest observed_time, and ``calibrated``, the earliest calibrated_time of
-    a usable row.
-
-    A SourceDataError names the column when no row of ``device`` has a value in it.
-    """
     if recorded is None:
         raise SourceDataError(f"{path.name} has no {device} row with an observed_time")
     if calibrated is None:
@@ -379,10 +393,6 @@ def _gate_parameter(name: str) -> tuple[str, str] | None:
 
 
 def _stale_note(rows: list[dict[str, Any]], at: datetime | None, cal: Calibration) -> str | None:
-    """The note on the rows that IBM calibrated more than 7 days before ``at``.
-
-    Only rows that give the profile a value count.
-    """
     before = at or max(row["calibrated_time"] for row in rows)
     unread = _unread(cal)
     oldest: dict[str, datetime] = {}
@@ -420,13 +430,6 @@ def _stale_note(rows: list[dict[str, Any]], at: datetime | None, cal: Calibratio
 
 
 def _unread(cal: Calibration) -> set[tuple[str, tuple[int, ...]]]:
-    """The property and qubits of each row that gives the profile no value.
-
-    A qubit with both asymmetric readout errors uses them and not its readout_error. A qubit
-    without both uses its readout_error, and its readout_length only with that error. A disabled
-    gate keeps only the error that disables it. The conversion treats a T1 or T2 that is not a
-    positive finite number as missing.
-    """
     _, invalid = _without_invalid_coherence(cal)
     unread: set[tuple[str, tuple[int, ...]]] = {
         (prop, (index,)) for key, prop in _COHERENCE_ROWS.items() for index, _ in invalid[key]

@@ -23,7 +23,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NewType
 
 from .. import __version__, gates, metrics, units
 from ..errors import SourceDataError, plural, qubit_loci
@@ -422,8 +422,8 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
     The readout error and length on each qubit become its ``measure`` instruction. The
     ``measure`` entries of the gate list repeat those numbers, so this function skips them. A
     time in an unknown unit raises a SourceDataError from ``origin``. A value that is not a number
-    also raises one. A gate on the wrong number of qubits, or on a qubit that ``qubits`` does not
-    list, also raises one.
+    also raises one, and so does an ``operational`` flag that is not 0 or 1. A gate on the wrong
+    number of qubits, or on a qubit that ``qubits`` does not list, also raises one.
     """
     qubits: dict[int, QubitCalibration] = {}
     instructions: list[Instruction] = []
@@ -436,7 +436,7 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
             p1_given_0=_value(values.get("prob_meas1_prep0")),
             p0_given_1=_value(values.get("prob_meas0_prep1")),
             prep_error=_value(values.get("init_error")),
-            operational=_value(values.get("operational")) != 0,
+            operational=_operational(values, origin, owner),
         )
         error, length = values.get("readout_error"), values.get("readout_length")
         if error is not None or length is not None:
@@ -465,7 +465,7 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
                 locus,
                 error=_value(values.get("gate_error")),
                 duration_ns=_in_unit(values.get("gate_length"), "ns", origin, owner),
-                operational=_value(values.get("operational")) != 0,
+                operational=_operational(values, origin, owner),
             )
         )
     stamp = props.get("last_update_date")
@@ -482,9 +482,6 @@ def calibration_from_properties(props: Mapping[str, Any], *, origin: Origin) -> 
 def _parameters(
     params: Iterable[Mapping[str, Any]], origin: Origin, owner: str
 ) -> dict[str, Mapping[str, Any]]:
-    """The parameters by name. ``origin`` refuses a value that is not a number and a unit that is
-    not a string. It also refuses a name that comes again with a different value or unit.
-    """
     values: dict[str, Mapping[str, Any]] = {}
     for param in params:
         name, value, unit = param["name"], param.get("value"), param.get("unit")
@@ -541,6 +538,19 @@ def _value(param: Mapping[str, Any] | None) -> float | None:
     return None if param is None else param.get("value")
 
 
+def _operational(values: Mapping[str, Mapping[str, Any]], origin: Origin, owner: str) -> bool:
+    """qiskit-ibm-runtime's ``BackendProperties`` reads a flag of ``nan`` as operational and a
+    flag of ``null`` as not operational, so ``origin`` refuses a flag that is not 0 or 1.
+    """
+    param = values.get("operational")
+    if param is None:
+        return True
+    value = param.get("value")
+    if value not in (0, 1):
+        raise origin.refuse(f"operational of {owner} is {value!r}, not 0 or 1")
+    return value == 1
+
+
 _UNIT_ALIASES = {"µs": "us", "μs": "us", "sec": "s"}
 
 
@@ -563,8 +573,14 @@ def _in_unit(
 # Calibration -> Profile ------------------------------------------------------------------------
 
 
+_Checked = NewType("_Checked", Calibration)
+
+
 def to_profile(cal: Calibration, provenance: Mapping[str, Any], *, origin: Origin) -> Profile:
-    _refuse_nonfinite(cal, origin)
+    return origin.profile(_profile_data(_checked(cal, origin), provenance))
+
+
+def _profile_data(cal: _Checked, provenance: Mapping[str, Any]) -> dict[str, Any]:
     ibm = cal.vendor == "ibm"
     by_name: dict[str, list[Instruction]] = {}
     for inst in cal.instructions:
@@ -663,38 +679,40 @@ def to_profile(cal: Calibration, provenance: Mapping[str, Any], *, origin: Origi
         "calibrations": records,
         "provenance": {"tool": f"noisevault {__version__}", **provenance, "notes": notes},
     }
-    return origin.profile(data)
+    return data
 
 
 _COHERENCE = {"t1_us": "T1", "t2_us": "T2"}
 
 
-def _refuse_nonfinite(cal: Calibration, origin: Origin) -> None:
-    """``origin`` refuses a nonfinite value before a conversion rule can remove it.
+def _checked(cal: Calibration, origin: Origin) -> _Checked:
+    for where, value, most in _values_except_coherence(cal):
+        if value is None or (math.isfinite(value) and 0 <= value <= most):
+            continue
+        if not math.isfinite(value):
+            problem = "a finite number"
+        elif value < 0:
+            problem = "greater than or equal to 0"
+        else:
+            problem = f"less than or equal to {most:g}"
+        raise origin.refuse(f"{where}: Input should be {problem}, got {value!r}")
+    return _Checked(cal)
 
-    For example, the dead-gate sentinel removes an error of ``inf``. The check leaves out T1 and
-    T2, because the conversion treats a nonfinite T1 or T2 as missing and adds a note.
-    """
-    for where, value in _values(cal):
-        if value is not None and not math.isfinite(value):
-            raise origin.refuse(f"{where}: Input should be a finite number, got {value!r}")
 
-
-def _values(cal: Calibration) -> Iterator[tuple[str, float | None]]:
-    """Each value of ``cal`` except T1 and T2, with the profile field that it gives."""
+def _values_except_coherence(cal: Calibration) -> Iterator[tuple[str, float | None, float]]:
     for inst in cal.instructions:
         if inst.name == "measure":
             owner = f"qubit {inst.qubits[0]}"
-            yield f"readout.error of {owner}", inst.error
-            yield f"readout.duration_ns of {owner}", inst.duration_ns
+            yield f"readout.error of {owner}", inst.error, 1
+            yield f"readout.duration_ns of {owner}", inst.duration_ns, math.inf
         else:
             owner = f"{inst.name} on {qubit_loci(inst.qubits)}"
-            yield f"avg_infidelity of {owner}", inst.error
-            yield f"duration_ns of {owner}", inst.duration_ns
+            yield f"avg_infidelity of {owner}", inst.error, 1
+            yield f"duration_ns of {owner}", inst.duration_ns, math.inf
     for index, qubit in sorted(cal.qubits.items()):
-        yield f"readout.p1_given_0 of qubit {index}", qubit.p1_given_0
-        yield f"readout.p0_given_1 of qubit {index}", qubit.p0_given_1
-        yield f"prep.error of qubit {index}", qubit.prep_error
+        yield f"readout.p1_given_0 of qubit {index}", qubit.p1_given_0, 1
+        yield f"readout.p0_given_1 of qubit {index}", qubit.p0_given_1, 1
+        yield f"prep.error of qubit {index}", qubit.prep_error, 1
 
 
 def _without_invalid_coherence(

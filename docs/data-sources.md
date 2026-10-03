@@ -221,7 +221,11 @@ Each importer turns its source's conventions into explicit fields, so no export 
   `from_qiskit_backend` disables a gate on every qubit or pair that the backend's `Target` does
   not list for that gate. In a CSV or a pull, a qubit or pair with no published error for a gate
   takes that gate's median. `provenance.notes` names the qubit or pair. Two-qubit errors carry
-  `"includes": ["1q_dressing"]`.
+  `"includes": ["1q_dressing"]`. The importer checks each value before it applies these rules. An
+  error or a probability must be a finite number from 0 to 1. A duration must be a finite number
+  0 or more. In BackendProperties data, an `operational` flag must be 0 or 1. The importer
+  refuses any other value. A T1 or T2 that is not a positive finite number counts as missing, and
+  `provenance.notes` names it.
 - **Quantinuum.** The importer repeats the analysis code in Quantinuum's repository
   (`qtm_spec`). The importer pools the randomized-benchmarking decays over gate zones and
   converts them to the average infidelity per native gate. The importer adds leakage to that

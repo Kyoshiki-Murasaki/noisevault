@@ -668,3 +668,14 @@ def test_an_infinite_gate_error_names_the_gate_and_its_qubits(
         f"{path.name}: avg_infidelity of {gate}: Input should be a finite number, got inf",
         f"correct that value in {path.name}",
     )
+
+
+def test_a_negative_length_of_a_dead_gate_names_the_gate_and_its_qubits(tmp_path: Path) -> None:
+    path = _edited(tmp_path, HERON, '"2:1","2:68"', '"2:1","2:-5"')
+    with pytest.raises(nv.SourceDataError) as info:
+        nv.from_ibm_csv(path, device="ibm_x", calibrated_at="2026-01-06")
+    assert (info.value.message, info.value.hint) == (
+        f"{path.name}: duration_ns of cz on qubits 3-2: Input should be greater than or equal to"
+        " 0, got -5.0",
+        f"correct that value in {path.name}",
+    )

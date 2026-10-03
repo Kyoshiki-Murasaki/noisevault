@@ -325,6 +325,81 @@ def test_provenance_credits_the_dataset_and_ibm_and_hashes_the_file() -> None:
     assert prov.extra == {}
 
 
+def _replace_after(
+    monkeypatch: pytest.MonkeyPatch, step: str, path: Path, replacement: pa.Table
+) -> None:
+    real = getattr(pq, step)
+
+    def step_then_replace(*args, **kwargs):
+        result = real(*args, **kwargs)
+        monkeypatch.setattr(pq, step, real)
+        written = path.with_name("replacement.parquet")
+        pq.write_table(replacement, written)
+        written.replace(path)
+        return result
+
+    monkeypatch.setattr(pq, step, step_then_replace)
+
+
+def test_the_hash_names_the_file_that_gave_the_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    table = pq.read_table(FIXTURE)
+    fez_t1 = pc.and_(pc.equal(table["backend"], "ibm_fez"), pc.equal(table["property"], "T1"))
+    qubit_0 = pc.and_(fez_t1, pc.equal(table["qubit_a"], 0))
+    newest = pc.equal(
+        table["calibrated_time"], pc.max(pc.filter(table["calibrated_time"], qubit_0))
+    )
+    values = pc.if_else(pc.and_(qubit_0, newest), 999.0, table["value"])
+    replacement = table.set_column(table.schema.get_field_index("value"), "value", values)
+    path = tmp_path / FIXTURE.name
+    pq.write_table(replacement, path)
+    replaced = _fez(path=path)
+    shutil.copy(FIXTURE, path)
+    original = _fez(path=path)
+    assert (_qubit(original, 0).t1_us, _qubit(replaced, 0).t1_us) == (120.0, 999.0)
+    _replace_after(monkeypatch, "read_table", path, replacement)
+    profile = _fez(path=path)
+    assert (_qubit(profile, 0).t1_us, profile.provenance.source_hash) in {
+        (120.0, original.provenance.source_hash),
+        (999.0, replaced.provenance.source_hash),
+    }
+
+
+def test_the_column_check_covers_the_file_that_gave_the_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    table = pq.read_table(FIXTURE)
+    times = table["calibrated_time"].cast(pa.string())
+    replacement = table.set_column(
+        table.schema.get_field_index("calibrated_time"), "calibrated_time", times
+    )
+    path = tmp_path / FIXTURE.name
+    shutil.copy(FIXTURE, path)
+    _replace_after(monkeypatch, "read_schema", path, replacement)
+    try:
+        result = _fez(path=path).fingerprint
+    except nv.SourceDataError as caught:
+        result = caught.message
+    assert result in {
+        _fez().fingerprint,
+        f"{path.name}: column calibrated_time holds string, expected a timestamp",
+    }
+
+
+def test_an_unknown_device_names_the_devices_of_the_file_it_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    table = pq.read_table(FIXTURE)
+    path = tmp_path / FIXTURE.name
+    shutil.copy(FIXTURE, path)
+    torino = table.filter(pc.equal(table["backend"], "ibm_torino"))
+    _replace_after(monkeypatch, "read_table", path, torino)
+    with pytest.raises(nv.SourceDataError) as caught:
+        nv.from_calibration_archive(path, "ibm_fes")
+    assert caught.value.message.endswith("The file has rows for ibm_fez, ibm_torino")
+
+
 def test_a_hub_snapshot_path_pins_the_revision(tmp_path: Path) -> None:
     data = tmp_path / "snapshots" / REVISION / "data"
     data.mkdir(parents=True)

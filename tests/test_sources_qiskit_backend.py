@@ -5,6 +5,7 @@ from itertools import permutations
 from pathlib import Path
 
 import numpy as np
+import pytest
 from conftest import require
 
 import noisevault as nv
@@ -95,6 +96,24 @@ def test_a_one_qubit_gate_on_some_qubits_is_disabled_on_the_others() -> None:
     require("qiskit_aer")
     exported = profile.to_qiskit().target
     assert set(exported["sx"]) == {(0,)}
+
+
+def test_a_target_error_above_1_is_refused_and_an_error_of_1_disables_the_gate() -> None:
+    def profile(error: float) -> nv.Profile:
+        target = _target(
+            2,
+            (XGate(), {(q,): _props(0.002, 35e-9) for q in range(2)}),
+            (CZGate(), {(0, 1): _props(error, 60e-9)}),
+        )
+        return nv.from_qiskit_backend(_Backend(target))
+
+    assert profile(1).table.gate("cz", (0, 1)).state == "disabled"
+    with pytest.raises(nv.SourceDataError) as info:
+        profile(1.5)
+    assert info.value.message == (
+        "backend toy: avg_infidelity of cz on qubits 0-1: Input should be less than or equal to 1,"
+        " got 1.5"
+    )
 
 
 def test_properties_do_not_enable_a_gate_on_qubits_the_target_leaves_out() -> None:
