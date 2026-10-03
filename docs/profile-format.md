@@ -128,7 +128,7 @@ error, not a Unix timestamp.
 The profile id is `name` when `name` already starts with `vendor_`, else `vendor_name`.
 NoiseVault lowercases the id and writes spaces as `-`. Example ids are `ibm_fez`, `google_weber`
 and `quantinuum_h1-1`. With no vendor, the id is the name. An id may use only `a-z`, `0-9`, `_`,
-`.` and `-`.
+`.` and `-`. An id may not end in `.json` or `.gz`, because a ref with that suffix names a file.
 
 `nv.load` and every CLI command take a ref:
 

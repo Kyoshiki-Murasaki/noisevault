@@ -38,11 +38,13 @@ from .profile import (
     Ref,
     canonical_json,
     exact_ref,
+    file_bytes,
     iso_z,
     load_bytes,
     load_file,
     parse_ref,
     write_atomically,
+    write_new,
 )
 from .sources.qiskit_backend import as_utc
 
@@ -414,7 +416,8 @@ def pull(
 
     Pulling a calibration that the vault already holds (same id and fingerprint) writes nothing,
     so repeated pulls leave one file per calibration. A pull that imports the same calibration
-    differently (for example, after a NoiseVault upgrade) replaces the older file and warns.
+    differently (for example, after a NoiseVault upgrade) replaces the older file and warns. A
+    pull never replaces a file of another calibration.
     """
     return pull_and_save(device, at=at, source=source, output=output).profile
 
@@ -426,7 +429,11 @@ def pull_and_save(
     source: str | None = None,
     output: str | Path | None = None,
 ) -> Pulled:
-    """:func:`pull`, also saying where the profile is and whether this call wrote it."""
+    """:func:`pull`, also saying where the profile is and whether this call wrote it.
+
+    The pull writes a new vault file only at a path where no file is. If another process saves a
+    file at that path during the pull, the pull applies the same rules to that file.
+    """
     source = source.strip().lower() if source else _default_source(device)
     if source not in _PULL_SOURCES:
         raise _unknown_source(source)
@@ -441,31 +448,40 @@ def pull_and_save(
     if held is not None:
         return Pulled(profile, Path(str(held.path)), written=False)
     old = next((i for i in same_id if i.calibrated_at == profile.device.calibrated_at), None)
-    if old is not None:
-        path = Path(str(old.path))  # can have an older naming scheme, so replace that file
-        warnings.warn(
-            f"replaced {path.name} (nv:{old.fingerprint[:12]}) with this pull"
-            f" ({profile.short_fingerprint}), which imports the same calibration differently."
-            " Update any expect= pins",
-            NoiseVaultWarning,
-            stacklevel=3,
-        )
-    else:
+    if old is None:
         path = vault_path(profile)
-        if path.exists():
-            occupant = next((i.ref for i in listed if i.path == path), None)
-            if occupant is None:  # skipped by the listing, with a warning saying why
-                raise _FileInTheWay(
-                    f"{path} exists but is not readable",
-                    hint=f"make the file readable or move the file out of {path.parent},"
-                    " then pull again",
-                )
-            raise _FileInTheWay(
-                f"{path} already holds {occupant}, another calibration",
-                hint=f"move that file out of {path.parent} and pull again",
-            )
-    profile.save(path)
-    return Pulled(profile, path, written=True)
+        if write_new(path, file_bytes(profile, path)):
+            return Pulled(profile, path, written=True)
+        old = _same_calibration_at(path, profile)
+        if old.fingerprint == profile.fingerprint:
+            return Pulled(profile, path, written=False)
+    path = Path(str(old.path))  # can have an older naming scheme, so replace that file
+    warnings.warn(
+        f"replaced {path.name} (nv:{old.fingerprint[:12]}) with this pull"
+        f" ({profile.short_fingerprint}), which imports the same calibration differently."
+        " Update any expect= pins",
+        NoiseVaultWarning,
+        stacklevel=3,
+    )
+    return Pulled(profile, profile.save(path), written=True)
+
+
+def _same_calibration_at(path: Path, profile: Profile) -> ProfileInfo:
+    """The vault file at ``path``. Raises _FileInTheWay unless it holds the calibration of
+    ``profile``."""
+    try:
+        _, there = _vault_entry(path, None)
+    except Exception:
+        raise _FileInTheWay(
+            f"{path} exists but is not readable",
+            hint=f"make the file readable or move the file out of {path.parent}, then pull again",
+        ) from None
+    if (there.id, there.calibrated_at) != (profile.id, profile.device.calibrated_at):
+        raise _FileInTheWay(
+            f"{path} already holds {there.ref}, another calibration",
+            hint=f"move that file out of {path.parent} and pull again",
+        )
+    return there
 
 
 _DEFAULT_SOURCES = {"ibm_": "ibm", "ionq": "ionq"}  # id prefix -> source that pulls it

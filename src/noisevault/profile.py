@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hashlib
 import json
@@ -756,12 +757,7 @@ class Profile(_Model):
     def save(self, path: str | Path) -> Path:
         """Write canonical JSON and replace ``path``. A ``.gz`` suffix writes reproducible gzip."""
         path = Path(path)
-        if path.suffix == ".gz":
-            text = json.dumps(self.to_dict(), separators=(",", ":"), ensure_ascii=False)
-            data = gzip_reproducibly(text.encode("utf-8"))
-        else:
-            data = (self.to_json() + "\n").encode("utf-8")
-        write_atomically(path, data)
+        write_atomically(path, file_bytes(self, path))
         return path
 
     @classmethod
@@ -1097,6 +1093,13 @@ def _profile_issues(profile: Profile) -> list[str]:
             f"device: the profile id {profile.id!r} (from vendor and name) can use only letters,"
             " digits and _ . - so that refs can name it"
         )
+    elif profile.id.endswith(_FILE_SUFFIXES):
+        stem, _, suffix = profile.id.rpartition(".")
+        issues.append(
+            f"device: the profile id {profile.id!r} (from vendor and name) ends in .{suffix},"
+            " so nv.load and the nv commands read the id as a file path. Give the device another"
+            f" name, such as {stem}_{suffix}"
+        )
     arity: dict[str, int] = {}
     for name, spec in profile.gates.items():
         info = gates.lookup(name)
@@ -1246,17 +1249,55 @@ def gzip_reproducibly(data: bytes) -> bytes:
 _NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
 
 
+def file_bytes(profile: Profile, path: Path) -> bytes:
+    """The bytes that :meth:`Profile.save` writes to ``path``."""
+    if path.suffix == ".gz":
+        text = json.dumps(profile.to_dict(), separators=(",", ":"), ensure_ascii=False)
+        return gzip_reproducibly(text.encode("utf-8"))
+    return (profile.to_json() + "\n").encode("utf-8")
+
+
 def write_atomically(path: Path, data: bytes) -> None:
     """Replace ``path`` with ``data``: a failed write leaves the old file whole.
 
     Python can read the umask only by setting it, and all threads share one umask, so this
     function never touches the umask.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
     try:
         mode = stat.S_IMODE(os.stat(path).st_mode)
     except FileNotFoundError:
         mode = 0o666
+    hidden_tmp = _hidden_copy(path, data, mode)
+    try:
+        if path.exists():
+            shutil.copymode(path, hidden_tmp)
+        os.replace(hidden_tmp, path)
+    except BaseException:
+        hidden_tmp.unlink(missing_ok=True)
+        raise
+
+
+def write_new(path: Path, data: bytes) -> bool:
+    """Write ``data`` to ``path`` only if no file is there. False means that a file is there.
+
+    A hard link to a full hidden copy makes the whole file appear at once. exFAT and FAT have no
+    hard links, so there the data goes into a file that ``O_EXCL`` creates at ``path``.
+    """
+    hidden_tmp = _hidden_copy(path, data, 0o666)
+    try:
+        os.link(hidden_tmp, path)
+    except FileExistsError:
+        return False
+    except OSError:
+        return _write_created(path, data)
+    finally:
+        hidden_tmp.unlink(missing_ok=True)
+    return True
+
+
+def _hidden_copy(path: Path, data: bytes, mode: int) -> Path:
+    """A new hidden file next to ``path`` that holds ``data``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     while True:
         hidden_tmp = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
         try:
@@ -1267,12 +1308,32 @@ def write_atomically(path: Path, data: bytes) -> None:
     try:
         with open(fd, "wb") as handle:
             handle.write(data)
-        if path.exists():
-            shutil.copymode(path, hidden_tmp)
-        os.replace(hidden_tmp, path)
     except BaseException:
         hidden_tmp.unlink(missing_ok=True)
         raise
+    return hidden_tmp
+
+
+def _write_created(path: Path, data: bytes) -> bool:
+    """Write ``data`` into a file that ``O_EXCL`` creates at ``path``. False if a file is there.
+
+    A failed write removes the file only while ``path`` still names the file that this call
+    created.
+    """
+    try:
+        fd = os.open(path, _NEW_FILE, 0o666)
+    except FileExistsError:
+        return False
+    created = os.fstat(fd)
+    try:
+        with open(fd, "wb") as handle:
+            handle.write(data)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            if os.path.samestat(os.stat(path), created):
+                path.unlink()
+        raise
+    return True
 
 
 def load_file(path: str | Path) -> Profile:
@@ -1322,6 +1383,7 @@ class Ref:
 
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9_.\-]*$")
+_FILE_SUFFIXES = (".json", ".gz")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -1330,7 +1392,7 @@ def parse_ref(ref: str | Path) -> Path | Ref:
     if isinstance(ref, Path):
         return ref
     text = ref.strip()
-    if "/" in text or "\\" in text or text.endswith((".json", ".gz")) or Path(text).exists():
+    if "/" in text or "\\" in text or text.endswith(_FILE_SUFFIXES) or Path(text).exists():
         return Path(text)
     ident, sep, at = text.lower().partition("@")
     if not _ID.match(ident):

@@ -12,9 +12,11 @@ import threading
 import time
 import warnings
 import zlib
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import MANILA_V01, deeper_than_the_parser_takes, migrated, require, toy
@@ -1097,37 +1099,156 @@ def test_vault_files_have_one_gzip_header_on_every_python(
     assert nv.load("test_toy") == profile
 
 
-def test_concurrent_pulls_of_one_calibration_both_succeed(
+def test_concurrent_pulls_of_one_calibration_both_succeed_and_one_writes(
     monkeypatch: pytest.MonkeyPatch, vault: Path
 ) -> None:
     profile = _dated("2025-01-01T00:00:00Z")
     _serve(monkeypatch, profile)
     vault.mkdir(parents=True)
-    both_staged = threading.Barrier(2, timeout=10)
-    real_replace = os.replace
-
-    def replace_once_both_are_staged(src: str | Path, dst: str | Path) -> None:
-        if Path(dst) == vault_path(profile):
-            both_staged.wait()
-        real_replace(src, dst)
-
-    monkeypatch.setattr(os, "replace", replace_once_both_are_staged)
+    both_listed = threading.Barrier(2, timeout=10)
+    real_listing = catalog.vault_profiles
     failures: list[BaseException] = []
+    written: list[bool] = []
 
     def pull() -> None:
         try:
-            catalog.pull_and_save("ibm_toy", source="ibm")
+            written.append(catalog.pull_and_save("ibm_toy", source="ibm").written)
         except BaseException as exc:
             failures.append(exc)
 
     threads = [threading.Thread(target=pull) for _ in range(2)]
+    listing = set(threads)
+
+    def list_then_wait_for_the_other_pull(*, reread: bool = False) -> list[catalog.ProfileInfo]:
+        listed = real_listing(reread=reread)
+        if threading.current_thread() in listing:
+            listing.discard(threading.current_thread())
+            both_listed.wait()
+        return listed
+
+    monkeypatch.setattr(catalog, "vault_profiles", list_then_wait_for_the_other_pull)
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
     assert failures == []
-    assert [p.name for p in vault.iterdir()] == [vault_path(profile).name]
+    assert sorted(written) == [False, True]
+    assert [p.name for p in vault.iterdir() if p.name != ".index.json"] == [
+        vault_path(profile).name
+    ]
     assert nv.load("test_toy") == profile
+
+
+@pytest.fixture(params=["hard links", "no hard links"])
+def links(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The vault file system with hard links, or without them as on exFAT."""
+    if request.param == "no hard links":
+
+        def no_link(*args: object, **kwargs: object) -> None:
+            raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP))
+
+        monkeypatch.setattr(os, "link", no_link)
+
+
+def _saved_while_pulling(monkeypatch: pytest.MonkeyPatch, save: Callable[[Path], object]) -> Path:
+    """Serve Manila and call ``save(path)`` after the pull lists the vault, when the pull starts
+    to write its vault file ``path``."""
+    manila = nv.load("ibm_manila")
+    _serve(monkeypatch, manila)
+    path = vault_path(manila)
+    real_open = os.open
+    pending = [save]
+
+    def open_after_the_other_writer(file: str | Path, *args: Any, **kwargs: Any) -> int:
+        if pending and Path(file).name.startswith(f".{path.name}."):
+            pending.pop()(path)
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_after_the_other_writer)
+    return path
+
+
+@pytest.mark.usefixtures("links")
+def test_a_pull_never_replaces_a_calibration_saved_while_it_writes(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    later = _later_manila()
+    path = _saved_while_pulling(monkeypatch, later.save)
+    with pytest.raises(FileExistsError) as info:
+        catalog.pull_and_save("ibm_manila", source="ibm")
+    assert isinstance(info.value, nv.NoiseVaultError)
+    assert (info.value.message, info.value.hint) == (
+        f"{path} already holds ibm_manila@2024-06-03T10:00:00Z, another calibration",
+        f"move that file out of {vault} and pull again",
+    )
+    assert nv.load(path) == later
+    assert [p.name for p in vault.iterdir() if p.name != ".index.json"] == [path.name]
+
+
+@pytest.mark.usefixtures("links")
+def test_a_pull_writes_nothing_when_the_same_calibration_is_saved_while_it_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manila = nv.load("ibm_manila")
+    path = _saved_while_pulling(monkeypatch, manila.save)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert catalog.pull_and_save("ibm_manila", source="ibm") == (manila, path, False)
+    assert nv.load(path) == manila
+
+
+@pytest.mark.usefixtures("links")
+def test_a_pull_replaces_an_other_import_of_its_calibration_saved_while_it_writes_and_warns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manila, other = nv.load("ibm_manila"), _changed_manila(5e-4)
+    path = _saved_while_pulling(monkeypatch, other.save)
+    replaced = rf"replaced {re.escape(path.name)} \({other.short_fingerprint}\) with this pull"
+    with pytest.warns(nv.NoiseVaultWarning, match=replaced):
+        assert catalog.pull_and_save("ibm_manila", source="ibm") == (manila, path, True)
+    assert nv.load(path) == manila
+
+
+@pytest.mark.usefixtures("links")
+def test_a_pull_refuses_an_unreadable_file_saved_while_it_writes(
+    monkeypatch: pytest.MonkeyPatch, vault: Path
+) -> None:
+    path = _saved_while_pulling(monkeypatch, lambda path: path.write_bytes(b"not a profile"))
+    with pytest.raises(FileExistsError) as info:
+        catalog.pull_and_save("ibm_manila", source="ibm")
+    assert (info.value.message, info.value.hint) == (
+        f"{path} exists but is not readable",
+        f"make the file readable or move the file out of {vault}, then pull again",
+    )
+    assert path.read_bytes() == b"not a profile"
+
+
+@pytest.mark.parametrize(
+    ("links", "hidden"),
+    [("hard links", True), ("no hard links", False)],
+    ids=["hidden copy", "vault file"],
+    indirect=["links"],
+)
+def test_a_failed_vault_write_leaves_no_file_and_the_next_pull_saves(
+    monkeypatch: pytest.MonkeyPatch, vault: Path, links: None, hidden: bool
+) -> None:
+    manila = nv.load("ibm_manila")
+    _serve(monkeypatch, manila)
+    path = vault_path(manila)
+    failing = f".{path.name}." if hidden else path.name
+    real_open = os.open
+
+    def unwritable(file: str | Path, flags: int, *args: Any, **kwargs: Any) -> int:
+        if Path(file).name.startswith(failing):
+            flags &= ~os.O_WRONLY
+        return real_open(file, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", unwritable)
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        catalog.pull_and_save("ibm_manila", source="ibm")
+    assert [p.name for p in vault.iterdir() if p.name != ".index.json"] == []
+    monkeypatch.setattr(os, "open", real_open)
+    assert catalog.pull_and_save("ibm_manila", source="ibm") == (manila, path, True)
 
 
 @pytest.mark.parametrize("source", ["ibm", "ionq"])

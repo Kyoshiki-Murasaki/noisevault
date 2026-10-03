@@ -20,7 +20,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import noisevault as nv
 from noisevault import profile as profile_module
-from noisevault.catalog import bundled_profiles
+from noisevault.catalog import bundled_profiles, vault_path
 from noisevault.profile import (
     ErrorFactor,
     Profile,
@@ -897,6 +897,42 @@ def test_profile_id_must_be_loadable_as_a_ref(name: str) -> None:
             one_qubit_error=1e-3,
             two_qubit_error=1e-2,
         )
+
+
+def _named(vendor: str | None, name: str) -> Profile:
+    return Profile.model_validate(
+        toy(device={"vendor": vendor, "name": name, "technology": "other", "num_qubits": 3})
+    )
+
+
+@pytest.mark.parametrize(
+    ("vendor", "name", "ident", "suffix", "rename"),
+    [
+        (None, "noise.json", "noise.json", ".json", "noise_json"),
+        (None, "Noise.JSON.GZ", "noise.json.gz", ".gz", "noise.json_gz"),
+        ("acme", "chip.gz", "acme_chip.gz", ".gz", "acme_chip_gz"),
+    ],
+)
+def test_a_profile_id_that_a_ref_reads_as_a_file_is_refused_with_a_name_that_loads(
+    vendor: str | None, name: str, ident: str, suffix: str, rename: str
+) -> None:
+    with pytest.raises(ValidationError) as info:
+        _named(vendor, name)
+    assert (
+        f"device: the profile id {ident!r} (from vendor and name) ends in {suffix}, so nv.load"
+        " and the nv commands read the id as a file path. Give the device another name, such as"
+        f" {rename}"
+    ) in str(info.value)
+    renamed = _named(vendor, rename)
+    renamed.save(vault_path(renamed))
+    assert nv.load(renamed.id) == renamed
+
+
+@pytest.mark.parametrize("name", ["noise.jsonl", "noise.json.v2", "gz", "noise_gz"])
+def test_a_profile_id_with_json_or_gz_inside_loads_by_its_ref(name: str) -> None:
+    profile = _named(None, name)
+    profile.save(vault_path(profile))
+    assert nv.load(profile.id) == profile
 
 
 def test_parse_ref(tmp_path: Path) -> None:
