@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
+import errno
 import functools
 import importlib.util
 import io
@@ -115,7 +117,10 @@ class Submission:
 
 
 def _recording_sampler(
-    monkeypatch: pytest.MonkeyPatch, *, lose_the_first_wait: bool = False
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    lose_the_first_wait: bool = False,
+    during_the_first_wait: Callable[[], None] | None = None,
 ) -> list[Submission]:
     runtime = require("qiskit_ibm_runtime")
     submissions: list[Submission] = []
@@ -129,6 +134,14 @@ def _recording_sampler(
                     raise ConnectionError("network is unreachable")
 
                 job.result = lost
+            if during_the_first_wait is not None and not submissions:
+                result = job.result
+
+                def wait(*args: Any, **kwargs: Any) -> Any:
+                    during_the_first_wait()
+                    return result(*args, **kwargs)
+
+                job.result = wait
             submissions.append(Submission(self, list(pubs), job))
             return job
 
@@ -179,6 +192,7 @@ def local_run(tmp_path_factory: pytest.TempPathFactory) -> LocalRun:
             script.run(
                 shots=SHOTS,
                 output=output,
+                pending=folder / "fez.job.json",
                 calibration=calibration,
                 open_backend=open_backend,
                 open_job=_no_job,
@@ -303,7 +317,8 @@ def test_the_usage_names_the_script_the_same_way_for_uv_and_a_clone() -> None:
         [sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True, check=True
     )
     assert result.stdout.startswith(
-        "usage: run_on_ibm.py [-h] [--shots N] -o FILE [--yes] DEVICE\n"
+        "usage: run_on_ibm.py [-h] [--shots N] -o FILE [--collect JOB_FILE] [--yes]\n"
+        "                     DEVICE\n"
     )
 
 
@@ -355,6 +370,7 @@ def test_the_summary_shows_the_circuits_and_the_usage_and_a_no_submits_nothing(
     measured = script.run(
         shots=SHOTS,
         output=Path("fez.counts.json"),
+        pending=Path("fez.job.json"),
         calibration=lambda at: profile,
         open_backend=lambda fractional: fake,
         open_job=_no_job,
@@ -364,6 +380,53 @@ def test_the_summary_shows_the_circuits_and_the_usage_and_a_no_submits_nothing(
     assert capsys.readouterr().out == FEZ_PLAN + "\nnothing submitted\n"
     assert prompts == ["Submit the job to ibm_fez? [y/N] "]
     assert submissions == []
+    assert list(tmp_path.iterdir()) == []
+
+
+def _submitting(folder: Path, confirm: Callable[[str], bool]) -> Callable[[], Any]:
+    profile, fake = _fez_profile(), _fez()
+    return lambda: script.run(
+        shots=SHOTS,
+        output=folder / "fez.counts.json",
+        pending=folder / "fez.job.json",
+        calibration=lambda at: profile,
+        open_backend=lambda fractional: fake,
+        open_job=_no_job,
+        confirm=confirm,
+    )
+
+
+def test_a_job_file_that_appears_before_the_script_submits_is_kept_and_nothing_is_submitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    submissions = _recording_sampler(monkeypatch)
+    pending = tmp_path / "fez.job.json"
+
+    def another_run_submits_first(prompt: str) -> bool:
+        pending.write_text("another run\n")
+        return True
+
+    with pytest.raises(NoiseVaultError) as info:
+        _submitting(tmp_path, another_run_submits_first)()
+    assert (info.value.message, info.value.hint) == (
+        f"{pending} exists, so the script did not submit a job",
+        f"run the same command with --collect {pending} and a new -o file name. The script never"
+        " replaces a file",
+    )
+    assert submissions == []
+    assert sorted(tmp_path.iterdir()) == [pending]
+    assert pending.read_text() == "another run\n"
+
+
+def test_a_failed_submission_leaves_no_job_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refused(backend: Any, batch: Any) -> Any:
+        raise NoiseVaultError("submitting the job failed (403 Forbidden)")
+
+    monkeypatch.setattr(script, "submit", refused)
+    with pytest.raises(NoiseVaultError, match=re.escape("(403 Forbidden)")):
+        _submitting(tmp_path, lambda prompt: True)()
     assert list(tmp_path.iterdir()) == []
 
 
@@ -575,6 +638,7 @@ def _collecting_job_1(folder: Path, monkeypatch: pytest.MonkeyPatch) -> Callable
     return lambda: script.run(
         shots=SHOTS,
         output=folder / "fez.counts.json",
+        pending=folder / "fez.job.json",
         calibration=lambda at: profile,
         open_backend=plan_again,
         open_job=lambda job_id: job_id,
@@ -586,15 +650,52 @@ def test_a_disk_that_refuses_the_counts_leaves_the_job_to_collect_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run = _collecting_job_1(tmp_path, monkeypatch)
-    (tmp_path / "fez.counts.json").mkdir()
+
+    def full_disk(self: Any, path: Path) -> Path:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(script.MeasuredCounts, "save", full_disk)
     pending = tmp_path / "fez.job.json"
     with pytest.raises(NoiseVaultError) as info:
         run()
-    assert info.value.message.startswith("could not collect the counts of job job-1 (")
+    assert info.value.message == (
+        "could not collect the counts of job job-1 ([Errno 28] No space left on device)"
+    )
     assert info.value.hint == (
         f"run the same command again to collect them, or delete {pending} to submit a new job"
     )
-    assert pending.exists()
+    assert sorted(tmp_path.iterdir()) == [pending]
+
+
+@pytest.mark.parametrize("name", ["fez.timing.json", "fez.profile.json"])
+def test_a_file_that_appears_beside_the_counts_while_the_job_waits_is_kept(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _edited(_fez_profile(), _lower_sx_error)
+    submitted, ran = _submitted_and_ran(profile)
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    pending, other = folder / "fez.job.json", folder / name
+    submitted.save(pending)
+
+    def another_experiment(*args: Any) -> Any:
+        other.write_text("another experiment\n")
+        return dataclasses.replace(ran, timing={"ghz_chain": {"start": 0}})
+
+    monkeypatch.setattr(script, "collect", another_experiment)
+    with pytest.raises(NoiseVaultError) as info:
+        script.run(
+            shots=SHOTS,
+            output=folder / "fez.counts.json",
+            pending=pending,
+            calibration=lambda at: profile,
+            open_backend=lambda fractional: None,
+            open_job=lambda job_id: job_id,
+            confirm=None,
+        )
+    assert info.value.message == f"could not save the counts of job job-1, because {other} exists"
+    assert sorted(folder.iterdir()) == sorted([other, pending])
+    assert other.read_text() == "another experiment\n"
 
 
 def test_a_defect_after_the_job_ran_raises_instead_of_asking_to_collect_again(
@@ -694,6 +795,51 @@ def test_running_the_same_command_again_collects_a_job_whose_wait_failed(
     assert printed.startswith(f"collecting job {job_id}, submitted earlier for {output}\n{WAITING}")
 
 
+@pytest.mark.parametrize("collect_to", ["another file", "the same file after a move"])
+def test_a_file_that_appears_at_the_output_while_the_job_waits_is_kept_with_the_job(
+    collect_to: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    output, pending = folder / "fez.counts.json", folder / "fez.job.json"
+    submissions = _recording_sampler(
+        monkeypatch, during_the_first_wait=lambda: output.write_text("another experiment\n")
+    )
+    _account(monkeypatch, _fractional_fez(), submissions)
+    command = ["ibm_fez", "--yes", "-o", str(output)]
+    hint = (
+        f"hint: run the same command with --collect {pending} and a new -o file name. The script"
+        " never replaces a file\n"
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert script.main(command) == 1
+        (submission,) = submissions
+        job_id = submission.job.job_id()
+        assert capsys.readouterr().err == (
+            f"error: could not save the counts of job {job_id}, because {output} exists\n{hint}"
+        )
+        assert sorted(folder.iterdir()) == [output, pending]
+        assert output.read_text() == "another experiment\n"
+        assert script.main(command) == 1
+        assert capsys.readouterr().err == f"error: {output} exists\n{hint}"
+        del submission.job.result
+        if collect_to == "another file":
+            saved = folder / "fez-2.counts.json"
+            assert script.main([*command[:-1], str(saved), "--collect", str(pending)]) == 0
+            assert output.read_text() == "another experiment\n"
+        else:
+            output.rename(folder / "other.counts.json")
+            saved = output
+            assert script.main(command) == 0
+    assert len(submissions) == 1
+    assert load_counts(saved).execution.job_ids == (job_id,)
+    assert not pending.exists()
+
+
 def test_a_backend_without_the_planned_fractional_gate_refuses_the_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -703,6 +849,48 @@ def test_a_backend_without_the_planned_fractional_gate_refuses_the_plan(
     assert capsys.readouterr().err == (
         "error: circuit ghz_chain: the backend does not support rx on qubit 136\n"
     )
+
+
+@pytest.mark.parametrize(
+    ("failing", "reason"),
+    [("target", "'network is unreachable'"), ("backend", "'No backend matches the criteria.'")],
+)
+def test_an_ibm_failure_while_the_script_opens_the_backend_asks_to_run_again(
+    failing: str,
+    reason: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    api = require("qiskit_ibm_runtime.api.exceptions")
+    providers = require("qiskit.providers.exceptions")
+    submissions = _recording_sampler(monkeypatch)
+    _account(monkeypatch, _fractional_fez())
+    service = require("qiskit_ibm_runtime").QiskitRuntimeService
+    calibrated = service.backend
+
+    class Offline:
+        @property
+        def target(self) -> Any:
+            raise api.RequestsApiError("network is unreachable")
+
+    def backend(self: Any, name: str, **options: Any) -> Any:
+        if "use_fractional_gates" not in options:
+            return calibrated(self, name, **options)
+        if failing == "target":
+            return Offline()
+        raise providers.QiskitBackendNotFoundError("No backend matches the criteria.")
+
+    monkeypatch.setattr(service, "backend", backend)
+    folder = tmp_path / "counts"
+    folder.mkdir()
+    assert script.main(["ibm_fez", "--yes", "-o", str(folder / "fez.counts.json")]) == 1
+    assert capsys.readouterr().err == (
+        f"error: could not open ibm_fez through your IBM Quantum account ({reason})\n"
+        "hint: run the same command again. The script did not submit a job\n"
+    )
+    assert submissions == []
+    assert list(folder.iterdir()) == []
 
 
 def test_without_a_terminal_the_script_asks_for_yes(
@@ -750,19 +938,32 @@ def test_a_missing_account_gives_the_setup_step(
     assert list(tmp_path.iterdir()) == []
 
 
+NEW_NAME = "give -o a new file name. The script never replaces a file"
+
+
 @pytest.mark.parametrize(
-    ("name", "message", "hint"),
+    ("existing", "args", "message", "hint"),
     [
+        ("fez.counts.json", ["-o", "fez.counts.json"], "fez.counts.json exists", NEW_NAME),
+        ("fez.timing.json", ["-o", "fez.counts.json"], "fez.timing.json exists", NEW_NAME),
+        ("fez.profile.json", ["-o", "fez.counts.json"], "fez.profile.json exists", NEW_NAME),
         (
             "fez.counts.json",
-            "{output} exists",
-            "give -o a new file name. The script never replaces a counts file",
+            ["-o", "nowhere/fez.counts.json"],
+            "no folder nowhere",
+            "create it, or give -o another path",
         ),
-        ("nowhere/fez.counts.json", "no folder {folder}", "create it, or give -o another path"),
+        (
+            "fez.counts.json",
+            ["-o", "fez-2.counts.json", "--collect", "fez-2.job.json"],
+            "no job file fez-2.job.json",
+            "give --collect the .job.json file that the script saved beside the counts file",
+        ),
     ],
 )
 def test_an_output_the_run_could_not_write_is_refused_before_the_account_opens(
-    name: str,
+    existing: str,
+    args: list[str],
     message: str,
     hint: str,
     tmp_path: Path,
@@ -775,9 +976,9 @@ def test_an_output_the_run_could_not_write_is_refused_before_the_account_opens(
         raise AssertionError("the script opened the IBM account")
 
     monkeypatch.setattr(runtime, "QiskitRuntimeService", account)
-    (tmp_path / "fez.counts.json").write_text("paid for\n")
-    output = tmp_path / name
-    assert script.main(["ibm_fez", "-o", str(output)]) == 1
-    error = message.format(output=output, folder=output.parent)
-    assert capsys.readouterr() == ("", f"error: {error}\nhint: {hint}\n")
-    assert (tmp_path / "fez.counts.json").read_text() == "paid for\n"
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / existing).write_text("paid for\n")
+    assert script.main(["ibm_fez", *args]) == 1
+    assert capsys.readouterr() == ("", f"error: {message}\nhint: {hint}\n")
+    assert sorted(tmp_path.iterdir()) == [tmp_path / existing]
+    assert (tmp_path / existing).read_text() == "paid for\n"

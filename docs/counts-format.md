@@ -191,13 +191,46 @@ also does the following:
   asks IBM to return how it scheduled each circuit.
 - When IBM returns a schedule, the script writes the schedule to `<stem>.timing.json` beside the
   counts file. The timing file has an entry for each circuit that IBM returned a schedule for.
+- If your catalog does not have the calibration that the counts bind to, the script saves that
+  calibration to `<stem>.profile.json` beside the counts file. The `nv compare` command that the
+  script prints then names this file.
 - It saves the submitted job to `<stem>.job.json` beside the counts file. The script deletes the
-  job file after it saves the counts. If the wait for the job is interrupted, run the same
-  command again.
+  job file after it saves the counts. If the wait for the job stops, run the same command
+  again.
   The script then collects that job instead of submitting another.
 
 `<stem>` is the counts file name without `.counts.json`. For `kingston-0416.counts.json`, the
-files are `kingston-0416.timing.json` and `kingston-0416.job.json`.
+files are `kingston-0416.timing.json`, `kingston-0416.profile.json` and `kingston-0416.job.json`.
+
+### The script never replaces a file
+
+The script never replaces a file that it did not write. This rule applies to the counts file and
+to the `.timing.json`, `.profile.json` and `.job.json` files beside it.
+
+- Before the script opens your account, it checks the counts, timing and profile files. If one of
+  them exists, the script stops. Give `-o` a new file name.
+- Before the script submits the job, it creates the job file. If the job file exists at that
+  time, the script stops and submits nothing. A second run of the same command can create the job
+  file while the first run waits for your answer.
+- After the job runs, the script writes the counts, timing and profile files together. If
+  another program created one of them while the job waited, the script writes none of them. It
+  keeps the other program's file and the job file.
+
+To collect a job to a new counts file, give `--collect` the job file. Then give `-o` a new file
+name. For example, run the same command with
+`--collect kingston-0416.job.json -o kingston-0416b.counts.json`. The script collects that job and
+does not submit another. You can also move the other program's file to a different path. Then run
+the same command again.
+
+### Errors from IBM
+
+If a request to IBM fails while the script opens the device, the script stops before it submits
+a job. The error names the device and the reason:
+
+```text
+error: could not open ibm_kingston through your IBM Quantum account ('network is unreachable')
+hint: run the same command again. The script did not submit a job
+```
 
 ## SHA-256 and canonical form
 
