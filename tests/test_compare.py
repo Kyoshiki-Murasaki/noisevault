@@ -915,6 +915,51 @@ def test_factors_the_counts_do_not_identify_print_no_note() -> None:
     ]
 
 
+def test_a_saved_interval_keeps_the_digits_that_tell_its_values_apart() -> None:
+    profile = one_qubit("precise", {"x": {"avg_infidelity": 0.2}})
+    x = (Op("x", (0,)),)
+    counts = written(
+        profile, [(f"x{i}", x, {"0": 2012082172, "1": 7987917828}) for i in range(300)]
+    )
+    result = compare(profile, counts)
+    assert isinstance(result.gates, ErrorFactor)
+    full = (result.gates.factor, result.gates.low, result.gates.high)
+    saved = result.fitted_profile().unmodeled_error.gates
+    assert (saved.factor, saved.low, saved.high) == tuple(float(f"{v:.7g}") for v in full)
+    assert saved.low < saved.factor < saved.high
+    apart = ErrorFactor(factor=1.84123456, low=1.54123456, high=2.12123456)
+    saved = replace(result, gates=apart).fitted_profile().unmodeled_error.gates
+    assert (saved.factor, saved.low, saved.high) == (1.84123, 1.54123, 2.12123)
+
+
+def fit_lines(result: Comparison) -> list[str]:
+    lines = layout(result)
+    start = next(i for i, line in enumerate(lines) if line.startswith("fit "))
+    return [line[16:] for line in lines[start : lines.index("", start)]]
+
+
+UNREACHED = "no factors from 0.05 to 20 give the measured frequencies"
+
+
+def test_a_fit_that_misses_the_frequencies_is_tested_with_no_degrees_of_freedom() -> None:
+    profile = toy()
+    held = compare(profile, written(profile, [("readout", (), {"0": 3200, "1": 800})]))
+    assert isinstance(held.readout, ErrorFactor) and held.readout.bound == "upper"
+    assert (held.dof, held.p_value) == (0, pytest.approx(1 / (1 + fit.RESAMPLES)))
+    assert fit_lines(held) == ["beyond shot noise (p = 0.0025)", "on readout", UNREACHED]
+    near = compare(profile, written(profile, [("readout", (), {"0": 3999, "1": 1})]))
+    assert isinstance(near.readout, ErrorFactor) and near.readout.bound == "lower"
+    assert near.dof == 0 and near.deviance < fit.CHI2_95 and near.p_value is not None
+    p = f"p = {near.p_value:.2g}"
+    assert fit_lines(near) == [f"within shot noise on every circuit ({p})", UNREACHED]
+    peaks, counts = two_peaks(0, last=EQUAL_ENDS)
+    beyond = {"0": 542129, "1": 457871}
+    inside = compare(peaks, written(peaks, [("r4", counts.circuits[0].ops, beyond)]))
+    assert isinstance(inside.gates, ErrorFactor) and inside.gates.bound is None
+    assert (inside.dof, inside.p_value) == (0, pytest.approx(1 / (1 + fit.RESAMPLES)))
+    assert fit_lines(inside) == ["beyond shot noise (p = 0.0025)", "on r4", UNREACHED]
+
+
 if __name__ == "__main__":
     example_counts().save(EXAMPLE)
     print(f"wrote {EXAMPLE.relative_to(ROOT)}")

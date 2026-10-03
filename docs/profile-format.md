@@ -410,7 +410,8 @@ An interval has one of three shapes:
 | Open above | `low`, and `bound` set to `"upper"` | `x20 (95% interval, at least 11.2)` |
 
 Each value prints with three significant digits, or with more when three would print two
-different values alike, as in `x1.008 (95% interval 1.001 to 1.015)`.
+different values alike, as in `x1.008 (95% interval 1.001 to 1.015)`. `nv compare -o` saves each
+value with six significant digits, or with more when six would save two different values alike.
 
 The factor lies inside its interval. Every factor in a block with `fit` has an interval, and a
 factor in a block without `fit` has none.
@@ -447,7 +448,7 @@ stated error does (see [Channel construction](conventions.md#channel-constructio
 | `qubits` | The measured qubits, in the order the circuits first use them. |
 | `run_at` | When the device started the first circuit, an ISO 8601 time with a timezone. NoiseVault stores the time in UTC. |
 | `calibration` | The fingerprint of this profile without `unmodeled_error`, as 64 hex digits. |
-| `p_value` | The p-value of the goodness-of-fit test, from 0 to 1. Below 0.01, every printout calls the fit poor. `null` when the fit left no degrees of freedom for the test. |
+| `p_value` | The p-value of the goodness-of-fit test, from 0 to 1. Below 0.01, every printout calls the fit poor. `null` when the fit is not testable (see [The goodness-of-fit test](limitations.md#the-goodness-of-fit-test)). |
 | `impossible_shots` | Shots on outcomes the profile gives probability 0. When `impossible_shots` is above 0, `p_value` is 0. |
 
 The fit record requires every field, `p_value` included. The qubits are distinct and inside the

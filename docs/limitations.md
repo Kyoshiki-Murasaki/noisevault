@@ -180,7 +180,10 @@ The p-value ranks the deviance among the deviances of 400 sets of counts drawn f
 model. The smallest possible p is therefore 1/401, about 0.0025. Below 0.01, `nv compare` reports
 the fit as beyond shot noise. That result means that no one pair of factors fits every circuit.
 With no degrees of freedom left, `nv compare` reports the fit as not testable and gives no
-p-value.
+p-value. But the fit can miss the measured frequencies when a factor stops at an end of the
+search range. The fit also misses them when the deviance is more than the chi-square value 3.84.
+In these two cases, `nv compare` runs the same test and gives a p-value. The verdict then says
+that no factors from 0.05 to 20 give the measured frequencies.
 
 The `noise TVD 95%` column comes from the same draws. The column value is the 95th percentile of
 the TVD between each drawn set and the model refitted to that set. `nv compare` flags each circuit

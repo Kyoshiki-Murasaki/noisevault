@@ -67,6 +67,9 @@ _LO, _HI = math.log(FACTOR_RANGE[0]), math.log(FACTOR_RANGE[1])
 _STEP = (_HI - _LO) / (FINE_POINTS - 1)
 _MIN_WINDOW = 0.05
 _SAME_WAY = "gate error and readout error move these counts the same way"
+_UNREACHED = (
+    f"no factors from {FACTOR_RANGE[0]:g} to {FACTOR_RANGE[1]:g} give the measured frequencies"
+)
 _LABEL = 16
 _WIDTH = 80
 _DROPPABLE = ("shots", "profile TVD")
@@ -130,7 +133,7 @@ class Comparison:
 
     @property
     def dispersion(self) -> float:
-        """How far the deviance exceeds its degrees of freedom, or 1 if the fit is not testable."""
+        """How far the deviance exceeds its degrees of freedom, or 1 with no degrees of freedom."""
         return _dispersion(self.deviance, self.dof)
 
     @property
@@ -327,11 +330,13 @@ class Comparison:
         if self.p_value is None:
             return ["not testable (no degrees of freedom left after fitting)"]
         p = f"p = {self.p_value:.2g}"
+        unreached = [_UNREACHED] if self.dof <= 0 else []
         if self.p_value < POOR_FIT_P_VALUE:
             where = [f"on {joined(flagged)}"] if flagged else []
-            return [f"beyond shot noise ({p})", *where, "no one pair of factors fits every circuit"]
+            why = unreached or ["no one pair of factors fits every circuit"]
+            return [f"beyond shot noise ({p})", *where, *why]
         scope = "overall" if flagged else "on every circuit"
-        return [f"within shot noise {scope} ({p})"]
+        return [f"within shot noise {scope} ({p})", *unreached]
 
 
 def _wrap(text: str, width: int, indent: str = "") -> list[str]:
@@ -391,7 +396,7 @@ def compare(profile: Profile, counts: MeasuredCounts) -> Comparison:
     impossible = measured - observed
     if impossible.sum():
         p_value: float | None = 0.0
-    elif dof <= 0:
+    elif dof <= 0 and deviance <= CHI2_95 and _LO < log_gate < _HI and _LO < log_readout < _HI:
         p_value = None
     else:
         exceed = np.sum(surface_deviance[1:] >= surface_deviance[0])
@@ -1365,8 +1370,13 @@ def _tvd(p: np.ndarray, q: np.ndarray) -> float:
 
 
 def _saved(estimate: ErrorFactor) -> dict[str, Any]:
+    values = [v for v in (estimate.factor, estimate.low, estimate.high) if v is not None]
+    digits = 6
+    while len({f"{v:.{digits}g}" for v in values}) < len(set(values)):
+        digits += 1
+
     def rounded(value: float | None) -> float | None:
-        return None if value is None else float(f"{value:.6g}")
+        return None if value is None else float(f"{value:.{digits}g}")
 
     return {
         "factor": rounded(estimate.factor),
