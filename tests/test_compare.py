@@ -231,12 +231,21 @@ def test_nodes_that_one_comparison_adds_leave_the_next_unchanged() -> None:
     assert compare(*long_circuit(0)).to_dict() == first
 
 
-def two_peaks(seed: int) -> tuple[Profile, MeasuredCounts]:
+def two_peaks(
+    seed: int,
+    shots: int = 1_000_000,
+    last: tuple[float, float] = (7 * math.pi / 4, 0.0),
+    truth: float = 1.0,
+) -> tuple[Profile, MeasuredCounts]:
     profile = one_qubit("peaks", {"r": {"pauli": [0.04875, 0.00375, 0.00125]}})
     angles = [(math.pi / 2, math.pi / 2), (math.pi / 4, math.pi / 2)]
-    angles += [(3 * math.pi / 4, math.pi / 2), (7 * math.pi / 4, 0.0)]
+    angles += [(3 * math.pi / 4, math.pi / 2), last]
     circuit = PlannedCircuit(name="r4", qubits=(0,), ops=tuple(Op("r", (0,), a) for a in angles))
-    return profile, simulate(profile, [circuit], shots=1_000_000, seed=seed, run_at=LATER)
+    simulated = scaled(profile, truth) if truth != 1 else profile
+    return profile, simulate(simulated, [circuit], shots=shots, seed=seed, run_at=LATER)
+
+
+EQUAL_ENDS = (3.1401960091961363, math.pi / 4)
 
 
 def test_an_interval_spans_every_range_the_test_accepts() -> None:
@@ -250,9 +259,84 @@ def test_of_two_equal_peaks_the_estimate_is_the_one_nearest_factor_1() -> None:
     assert 0.9 < result.gates.factor < 1.1, result.gates
 
 
-def test_intervals_with_two_peaks_cover_the_true_factor() -> None:
-    hits = sum(covers(compare(*two_peaks(seed)).gates, 1.0) for seed in range(100))
+@pytest.mark.parametrize("shots", [1_000_000, 20_000_000])
+def test_intervals_with_two_peaks_cover_the_true_factor(shots: int) -> None:
+    hits = sum(covers(compare(*two_peaks(seed, shots)).gates, 1.0) for seed in range(100))
     assert hits >= 93, hits
+
+
+def test_an_interval_holds_a_peak_narrower_than_the_grid() -> None:
+    result = compare(*two_peaks(10, 20_000_000))
+    assert covers(result.gates, 8.470897) and covers(result.gates, 1.0), result.gates
+
+
+def zero_error_loops(seed: int) -> tuple[Profile, MeasuredCounts]:
+    profile = one_qubit("zloop2", {"r": {"pauli": [0, 0, 0.1]}})
+    steps = [(0.01, [1] * 10 + [-1] * 10), (0.015, [1] * 5 + [-1] * 5)]
+    circuits = [
+        PlannedCircuit(
+            name=f"r{len(signs)}",
+            qubits=(0,),
+            ops=tuple(Op("r", (0,), (angle * sign, math.pi / 2)) for sign in signs),
+        )
+        for angle, signs in steps
+    ]
+    run_at = datetime(2026, 10, 1, tzinfo=UTC)
+    return profile, simulate(profile, circuits, shots=10_000, seed=seed, run_at=run_at)
+
+
+def test_an_interval_holds_a_peak_that_only_the_calibrated_test_accepts() -> None:
+    profile, counts = zero_error_loops(389)
+    assert {c.name: dict(c.counts) for c in counts.circuits} == {
+        "r20": {"0": 9990, "1": 10},
+        "r10": {"0": 9990, "1": 10},
+    }
+    result = compare(profile, counts)
+    assert covers(result.gates, 0.404558) and covers(result.gates, 1.0), result.gates
+
+
+def test_a_gate_response_equal_at_both_ends_of_the_range_still_moves() -> None:
+    profile, counts = two_peaks(0, last=EQUAL_ENDS, truth=5.0)
+    assert dict(counts.circuits[0].counts) == {"0": 529106, "1": 470894}
+    result = compare(profile, counts)
+    assert covers(result.gates, 5.0), result.gates
+    assert result.p_value is None and result.deviance < 1e-3
+
+
+def test_intervals_cover_a_gate_response_equal_at_both_ends() -> None:
+    hits = sum(
+        covers(compare(*two_peaks(seed, last=EQUAL_ENDS, truth=5.0)).gates, 5.0)
+        for seed in range(100)
+    )
+    assert hits >= 93, hits
+
+
+def dense_pair() -> Profile:
+    return one_qubit(
+        "dense-pair", {"x": {"avg_infidelity": 0.0}}, readout={"p1_given_0": 0.3, "p0_given_1": 0}
+    )
+
+
+def test_the_maximum_follows_the_shots_to_the_exact_factor() -> None:
+    profile = dense_pair()
+    counts = {"0": 3490151819, "1": 1509848181}
+    result = compare(
+        profile, written(profile, [("readout1", (), counts), ("readout2", (), counts)])
+    )
+    assert abs(result.readout.factor - 1.0079) < 1e-5, result.readout
+    assert result.deviance < 0.01 and result.dof == 1 and result.p_value >= 0.01
+    assert "within shot noise on every circuit" in str(result)
+
+
+def test_p_values_on_dense_counts_spread_over_the_whole_range() -> None:
+    profile, rng, shots = dense_pair(), np.random.default_rng(7), 5_000_000_000
+    p_values = []
+    for _ in range(40):
+        ones = [int(n) for n in rng.binomial(shots, 0.3, size=2)]
+        circuits = [(f"readout{i}", (), {"0": shots - n, "1": n}) for i, n in enumerate(ones)]
+        p_values.append(compare(profile, written(profile, circuits)).p_value)
+    low, high = np.percentile(p_values, [25, 75])
+    assert high - low > 0.3, (low, high)
 
 
 def test_two_runs_of_one_plan_build_the_surface_once(monkeypatch: pytest.MonkeyPatch) -> None:

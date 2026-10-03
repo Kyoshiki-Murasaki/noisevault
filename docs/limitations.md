@@ -137,6 +137,12 @@ check repeats on each half. This limit keeps the shift of the estimate below 0.2
 The new runs depend only on the profile and the counts, so earlier comparisons never change a
 result.
 
+The search for the maximum also follows the shots. It starts on a grid of 193 factors on each
+axis and finds every peak of the likelihood on that grid. Around each peak, the search makes its
+step 8 times smaller until the next step changes the log-likelihood by less than 0.001. With 5
+billion shots in a circuit, the step therefore becomes much smaller than the grid spacing. Thus
+the deviance does not grow with the shots because of the search.
+
 ### Which factors the counts identify
 
 Gate error and readout error can move counts the same way. The `readout` circuit from `plan()` has
@@ -144,7 +150,9 @@ no gates, so only readout error moves it, and that circuit separates the two fac
 
 `nv compare` reports a factor as not identified in these cases:
 
-- No circuit moves with the factor.
+- No circuit moves with the factor. The fit compares the outcome probabilities at every exact run
+  of the reference. A response can be equal at the two ends of the range and different between
+  them.
 - Fewer than 100 shots fall in circuits that move with the factor.
 - The interval of the factor reaches both ends of the search range.
 
@@ -195,8 +203,14 @@ one-qubit case, the probability rises to 0.975.
 The likelihood can have more than one peak. For example, an `r` gate with unequal Pauli errors
 can give the same outcome probabilities at two separate gate factors. The 95% interval then runs
 from the lowest accepted factor to the highest. It can therefore contain factors between the
-peaks that the test rejects. The estimate is the highest peak. When two peaks differ by at most 0.02 in
-log-likelihood, the counts cannot order them, and the estimate is the peak nearest factor 1.
+peaks that the test rejects. The fit tests every peak with the same check as an interval end. This
+includes a peak narrower than the grid step and a peak that only the simulation check accepts.
+The estimate is the highest peak. When two peaks differ by at most 0.02 in log-likelihood, the
+counts cannot order them, and the estimate is the peak nearest factor 1.
+
+The drawn counts have their maxima near the factor that made them. The fit finds those maxima on
+a small grid around each accepted peak and around each tested end. The grid step is a quarter of
+the interval half-width. For a one-sided interval, the step is at least 0.0125 in log factor.
 
 ### Outcomes the profile rules out
 
@@ -214,12 +228,15 @@ of the runs. The gate interval contains the true gate factor in 93 runs, and the
 interval contains the true readout factor in 95. To run the job locally, set
 `NOISEVAULT_SLOW=1`. Then run `pytest tests/test_compare.py -k each_interval_covers`.
 
-Three faster tests run with the rest of the suite. In the one-qubit case above, the probability
+Four faster tests run with the rest of the suite. In the one-qubit case above, the probability
 must be at least 0.95. The second test uses one qubit with a readout error of 0.1 and a million
 shots. Its interval must contain the true factor in 180 to 199 of 200 runs. A third test uses the
-`r` gate with two peaks. Its interval must contain factor 1 in at least 93 of 100 runs, and it
-contains factor 1 in 99. The CI job also runs the 1000-gate case above. That interval must contain
-the true factor in at least 93 of 100 runs, and it contains the true factor in 96.
+`r` gate with two peaks. Its interval must contain factor 1 in at least 93 of 100 runs, both at a
+million shots and at 20 million shots. It contains factor 1 in 99 and 100 runs. A fourth test
+uses an `r` gate response that is equal at both ends of the range, with a true factor of 5. Its
+interval contains 5 in 99 of 100 runs. The CI job also runs the 1000-gate case above. That
+interval must contain the true factor in at least 93 of 100 runs, and it contains the true factor
+in 96.
 
 Each of these tests draws its counts from the model it fits, and the two-factor test covers one
 device at one pair of true factors. The tests show that the intervals cover factors the model can
